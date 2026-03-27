@@ -168,9 +168,9 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 680-784 (`term_redraw_into`)
 
-- [ ] Define ANSI color constants:
+- [x] Define ANSI color constants:
   - `GREEN "\033[32m"`, `YELLOW "\033[33m"`, `CYAN "\033[36m"`, `GRAY "\033[90m"`, `LIGHT_BLUE "\033[94m"`, `RESET "\033[0m"`, `BOLD "\033[1m"`, `BACK_CYAN "\033[46m"`
-- [ ] Implement `term_redraw_highlighted()` — replaces plain `td_term_redraw()`:
+- [x] Implement `term_redraw_highlighted()` — replaces plain `td_term_redraw()`:
   - Walk `buf` char by char
   - Brackets `()[]{}` → Gray
   - `:` at word boundary → Gray (dict key)
@@ -181,10 +181,10 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 680-784 (`term_red
   - Operator chars (`+ - * / % < > = ! & |`) standing alone → Light Blue
   - Numbers → Default (no color)
   - All other → Default
-- [ ] Emit into a temporary buffer, then single `write()` to stdout (avoid flicker)
-- [ ] Call from `td_term_redraw()` instead of plain rewrite
-- [ ] Smoke test: type `(select {from: t where: (> salary 50000)})` — parens gray, `select` green, string would be yellow, `'sym` cyan
-- [ ] Commit: `feat(repl): syntax highlighting with ANSI colors`
+- [x] Emit into a temporary buffer, then single `write()` to stdout (avoid flicker)
+- [x] Call from `td_term_redraw()` instead of plain rewrite
+- [x] Smoke test: type `(select {from: t where: (> salary 50000)})` — parens gray, `select` green, string would be yellow, `'sym` cyan
+- [x] Commit: `feat(repl): syntax highlighting with ANSI colors`
 
 ---
 

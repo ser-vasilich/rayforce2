@@ -416,6 +416,177 @@ static int32_t find_next_utf8(const char* buf, int32_t pos, int32_t len) {
     return pos;
 }
 
+/* ===== ANSI color constants ===== */
+
+#define CLR_GREEN      "\033[32m"
+#define CLR_YELLOW     "\033[33m"
+#define CLR_CYAN       "\033[36m"
+#define CLR_GRAY       "\033[90m"
+#define CLR_LIGHT_BLUE "\033[94m"
+#define CLR_RESET      "\033[0m"
+#define CLR_BOLD       "\033[1m"
+#define CLR_BACK_CYAN  "\033[46m"
+
+/* ===== Syntax highlighting helpers ===== */
+
+static int is_alphanum(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '?' || c == '!';
+}
+
+static int is_op_char(char c) {
+    return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+           c == '<' || c == '>' || c == '=' || c == '!' || c == '&' || c == '|';
+}
+
+static const char* s_builtins[] = {
+    "abs", "acos", "add", "and", "asin", "atan",
+    "avg", "by", "ceil", "cols", "concat", "cos", "count",
+    "def", "delete", "desc", "distinct", "div", "do",
+    "drop", "each", "enlist", "eq", "eval", "false", "fill",
+    "filter", "first", "flip", "floor", "fn", "from",
+    "get", "group", "gt", "gte",
+    "head", "iasc", "idesc", "if", "in", "insert", "join",
+    "key", "keys", "last", "left", "len", "let", "list", "log", "lower",
+    "lt", "lte", "max", "meta", "min", "mod", "mul", "neg", "neq",
+    "not", "null", "or",
+    "parse", "pow", "print", "println",
+    "raise", "range", "read-csv", "rename", "replace", "reverse", "right",
+    "round", "save", "scan", "select", "set", "show", "sin", "sort", "sqrt",
+    "string", "sub", "substr", "sum",
+    "table", "tail", "take", "tan", "til", "time", "trim", "true", "try", "type",
+    "update", "upper", "upsert",
+    "val", "vals", "var", "where", "while", "xbar",
+    NULL
+};
+
+static int is_builtin(const char* word, int32_t wlen) {
+    for (const char** p = s_builtins; *p; p++) {
+        int32_t blen = (int32_t)strlen(*p);
+        if (blen == wlen && memcmp(*p, word, (size_t)wlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Write highlighted buffer content into dst. Returns bytes written. */
+static int32_t term_highlight_into(char* dst, int32_t dst_cap,
+                                   const char* buf, int32_t buf_len) {
+    int32_t n = 0;
+
+#define HL_APPEND(s, slen) do { \
+    if (n + (slen) < dst_cap) { memcpy(dst + n, (s), (size_t)(slen)); n += (slen); } \
+} while (0)
+#define HL_LIT(s) HL_APPEND((s), (int32_t)strlen(s))
+
+    for (int32_t i = 0; i < buf_len; i++) {
+        char c = buf[i];
+        int colored = 0;
+
+        switch (c) {
+        case '(': case ')': case '[': case ']': case '{': case '}':
+            HL_LIT(CLR_GRAY);
+            HL_APPEND(&c, 1);
+            HL_LIT(CLR_RESET);
+            colored = 1;
+            break;
+
+        case ':':
+            /* Dict key colon */
+            HL_LIT(CLR_GRAY);
+            HL_APPEND(&c, 1);
+            HL_LIT(CLR_RESET);
+            colored = 1;
+            break;
+
+        case '"': {
+            /* String literal */
+            int32_t j = i + 1;
+            while (j < buf_len) {
+                if (buf[j] == '"' && (j == i + 1 || buf[j - 1] != '\\')) {
+                    j++;
+                    break;
+                }
+                j++;
+            }
+            HL_LIT(CLR_YELLOW);
+            HL_APPEND(buf + i, j - i);
+            HL_LIT(CLR_RESET);
+            i = j - 1;
+            colored = 1;
+            break;
+        }
+
+        case '\'': {
+            /* Quoted symbol: 'name */
+            int32_t j = i + 1;
+            while (j < buf_len && is_alphanum(buf[j])) j++;
+            if (j > i + 1) {
+                HL_LIT(CLR_CYAN);
+                HL_APPEND(buf + i, j - i);
+                HL_LIT(CLR_RESET);
+                i = j - 1;
+                colored = 1;
+            }
+            break;
+        }
+
+        case ';': {
+            /* Comment to end of line */
+            int32_t j = i;
+            while (j < buf_len && buf[j] != '\n') j++;
+            HL_LIT(CLR_GRAY);
+            HL_APPEND(buf + i, j - i);
+            HL_LIT(CLR_RESET);
+            i = j - 1;
+            colored = 1;
+            break;
+        }
+
+        default:
+            /* Check for word at word boundary */
+            if ((i == 0 || !is_alphanum(buf[i - 1])) && is_alphanum(c)) {
+                int32_t j = i + 1;
+                while (j < buf_len && is_alphanum(buf[j])) j++;
+                int32_t wlen = j - i;
+
+                if (is_builtin(buf + i, wlen)) {
+                    HL_LIT(CLR_GREEN);
+                    HL_APPEND(buf + i, wlen);
+                    HL_LIT(CLR_RESET);
+                    i = j - 1;
+                    colored = 1;
+                } else {
+                    /* Not a builtin — emit plain */
+                    HL_APPEND(buf + i, wlen);
+                    i = j - 1;
+                    colored = 1;
+                }
+            } else if (is_op_char(c)) {
+                /* Check operator is standing alone (not part of a word) */
+                int prev_alnum = (i > 0 && is_alphanum(buf[i - 1]));
+                int next_alnum = (i + 1 < buf_len && is_alphanum(buf[i + 1]));
+                if (!prev_alnum && !next_alnum) {
+                    HL_LIT(CLR_LIGHT_BLUE);
+                    HL_APPEND(&c, 1);
+                    HL_LIT(CLR_RESET);
+                    colored = 1;
+                }
+            }
+            break;
+        }
+
+        if (!colored) {
+            HL_APPEND(&c, 1);
+        }
+    }
+
+#undef HL_LIT
+#undef HL_APPEND
+
+    return n;
+}
+
 /* ===== Prompt ===== */
 
 #define PROMPT_STR "teide> "
@@ -446,10 +617,20 @@ void td_term_redraw(td_term_t* term) {
     /* Clear from cursor to end of screen */
     printf("\033[J");
 
-    /* Write prompt + buffer */
-    write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
-    if (term->buf_len > 0)
-        write(STDOUT_FILENO, term->buf, (size_t)term->buf_len);
+    /* Write prompt + highlighted buffer into temp buf, then single write */
+    {
+        /* 8K should be enough for 4K buf + ANSI escapes */
+        char hlbuf[8192];
+        int32_t hlen = 0;
+        memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
+        hlen = PROMPT_LEN;
+        if (term->buf_len > 0) {
+            hlen += term_highlight_into(hlbuf + hlen,
+                                        (int32_t)sizeof(hlbuf) - hlen,
+                                        term->buf, term->buf_len);
+        }
+        write(STDOUT_FILENO, hlbuf, (size_t)hlen);
+    }
 
     /* Track rows used */
     total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
