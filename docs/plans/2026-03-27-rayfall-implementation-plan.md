@@ -258,16 +258,16 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_try` — `(try (/ 10 0) (fn [e] 0))` → i64 0
   - `test_eval_raise` — `(try (raise "boom") (fn [e] 42))` → i64 42
-- [ ] Implement `OP_TRAP` / `OP_TRAP_END` in VM:
+- [x] Implement `OP_TRAP` / `OP_TRAP_END` in VM:
   - `OP_TRAP`: push sentinel frame + handler IP to return stack
   - On error: unwind return stack looking for trap sentinel, jump to handler
   - Push error value for handler to read
-- [ ] Implement `ray_raise` (`TD_UNARY`) and `ray_try` (`TD_BINARY, FN_SPECIAL_FORM`)
-- [ ] Run tests: pass
-- [ ] Commit: `feat(lang): try/raise error handling with trap frames`
+- [x] Implement `ray_raise` (`TD_UNARY`) and `ray_try` (`TD_BINARY, FN_SPECIAL_FORM`)
+- [x] Run tests: pass
+- [x] Commit: `feat(lang): try/raise error handling with trap frames`
 
 ---
 

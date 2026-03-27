@@ -129,6 +129,58 @@ static td_t* ray_neg(td_t* x) {
 }
 
 /* ══════════════════════════════════════════
+ * Error handling: try / raise
+ * ══════════════════════════════════════════ */
+
+static _Thread_local td_t *__raise_val = NULL;
+
+/* (raise value) — raise an error with the given value */
+static td_t* ray_raise(td_t* val) {
+    if (__raise_val) td_release(__raise_val);
+    td_retain(val);
+    __raise_val = val;
+    return TD_ERR_PTR(TD_ERR_DOMAIN);
+}
+
+/* Forward declaration for call_lambda (used by ray_try) */
+static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc);
+
+/* (try expr handler) — evaluate expr, if error call handler with error value.
+ * Special form: receives unevaluated args. */
+static td_t* ray_try(td_t* expr, td_t* handler_expr) {
+    td_t* result = td_eval(expr);
+    if (!TD_IS_ERR(result)) return result;
+
+    /* Get error value (set by raise, or default for runtime errors) */
+    td_t* err_val = __raise_val;
+    __raise_val = NULL;
+    if (!err_val) err_val = make_i64(0);
+
+    /* Evaluate handler expression */
+    td_t* handler = td_eval(handler_expr);
+    if (TD_IS_ERR(handler)) {
+        td_release(err_val);
+        return handler;
+    }
+
+    /* Call handler with error value */
+    td_t* handler_result;
+    if (handler->type == TD_ATOM_LAMBDA) {
+        td_t* args[1] = { err_val };
+        handler_result = call_lambda(handler, args, 1);
+    } else if (handler->type == TD_ATOM_UNARY) {
+        td_unary_fn fn = (td_unary_fn)(uintptr_t)handler->i64;
+        handler_result = fn(err_val);
+    } else {
+        handler_result = TD_ERR_PTR(TD_ERR_TYPE);
+    }
+
+    td_release(err_val);
+    td_release(handler);
+    return handler_result;
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -302,6 +354,8 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
         [OP_CALLD]      = &&op_calld,
         [OP_DUP]        = &&op_dup,
         [OP_LOADCONST_W] = &&op_loadconst_w,
+        [OP_TRAP]       = &&op_trap,
+        [OP_TRAP_END]   = &&op_trap_end,
     };
 
     td_vm_t vm;
@@ -659,14 +713,68 @@ op_ret: {
     DISPATCH();
 }
 
+op_trap: {
+    int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
+    ip += 2;
+    vm.ts[vm.tp++] = (vm_trap_t){
+        .rp = vm.rp, .sp = vm.sp, .handler_ip = ip + offset,
+        .fn = vm.fn, .fp = vm.fp, .n_locals = n_locals
+    };
+    td_retain(vm.fn);
+    DISPATCH();
+}
+
+op_trap_end: {
+    if (vm.tp > 0) {
+        vm.tp--;
+        td_release(vm.ts[vm.tp].fn);
+    }
+    DISPATCH();
+}
+
 vm_error: {
-    /* Release everything on program stack */
+    /* Check for trap frame */
+    if (vm.tp > 0) {
+        vm.tp--;
+        vm_trap_t trap = vm.ts[vm.tp];
+
+        /* Clean up return frames above trap point */
+        while (vm.rp > trap.rp) {
+            vm.rp--;
+            if (vm.rs[vm.rp].fn) td_release(vm.rs[vm.rp].fn);
+        }
+
+        /* Clean up stack above trap point */
+        while (vm.sp > trap.sp) {
+            td_t *v = vm.ps[--vm.sp];
+            if (v) td_release(v);
+        }
+
+        /* Get error value */
+        td_t *err_val = __raise_val;
+        __raise_val = NULL;
+        if (!err_val) err_val = make_i64(0);
+
+        /* Restore context and push error value */
+        td_release(vm.fn);
+        vm.fn = trap.fn;  /* takes ownership from trap frame */
+        vm.fp = trap.fp;
+        n_locals = trap.n_locals;
+        code = (uint8_t *)td_data(LAMBDA_BC(vm.fn));
+        cpool = (td_t **)td_data(LAMBDA_CONSTS(vm.fn));
+        ip = trap.handler_ip;
+        PUSH(err_val);
+        DISPATCH();
+    }
+
+    /* No trap frame — regular error cleanup */
     for (int32_t i = 0; i < vm.sp; i++)
         if (vm.ps[i]) td_release(vm.ps[i]);
-    /* Release fn references */
     td_release(vm.fn);
     for (int32_t i = 0; i < vm.rp; i++)
         td_release(vm.rs[i].fn);
+    for (int32_t i = 0; i < vm.tp; i++)
+        td_release(vm.ts[i].fn);
     __VM = NULL;
     return TD_ERR_PTR(TD_ERR_DOMAIN);
 }
@@ -726,6 +834,10 @@ static void td_register_builtins(void) {
     register_vary("if",    TD_FN_SPECIAL_FORM, ray_cond);
     register_vary("do",    TD_FN_SPECIAL_FORM, ray_do);
     register_vary("fn",    TD_FN_SPECIAL_FORM, ray_fn);
+
+    /* Error handling */
+    register_unary("raise", TD_FN_NONE, ray_raise);
+    register_binary("try",  TD_FN_SPECIAL_FORM, ray_try);
 }
 
 /* ══════════════════════════════════════════

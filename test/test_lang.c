@@ -388,6 +388,30 @@ static MunitResult test_vm_loop(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: try catches division by zero ---- */
+static MunitResult test_eval_try(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(try (/ 10 0) (fn [e] 0))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 0);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: try catches explicit raise ---- */
+static MunitResult test_eval_raise(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(try (raise \"boom\") (fn [e] 42))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 42);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -420,6 +444,8 @@ static MunitTest lang_tests[] = {
     { "/compile/closure",   test_compile_closure,   lang_setup, lang_teardown, 0, NULL },
     { "/vm/fib",            test_vm_fib,            lang_setup, lang_teardown, 0, NULL },
     { "/vm/loop",           test_vm_loop,           lang_setup, lang_teardown, 0, NULL },
+    { "/eval/try",          test_eval_try,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/raise",        test_eval_raise,        lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

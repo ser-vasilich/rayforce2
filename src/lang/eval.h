@@ -22,6 +22,8 @@ enum {
     OP_CALLD,         /* dynamic dispatch: fallback to td_eval() */
     OP_DUP,           /* duplicate top of stack */
     OP_LOADCONST_W,   /* push constant pool[operand] (2-byte index) */
+    OP_TRAP,          /* push trap frame, 2-byte handler offset */
+    OP_TRAP_END,      /* pop trap frame (success path) */
     OP__COUNT
 };
 
@@ -58,14 +60,27 @@ typedef struct {
 } vm_ctx_t;
 
 typedef struct {
+    int32_t  rp;        /* return stack depth at trap point */
+    int32_t  sp;        /* stack depth at trap point */
+    int32_t  handler_ip;/* IP of handler code */
+    td_t    *fn;        /* function containing handler code */
+    int32_t  fp;        /* frame pointer at trap point */
+    int32_t  n_locals;  /* n_locals at trap point */
+} vm_trap_t;
+
+#define VM_TRAP_SIZE 16
+
+typedef struct {
     int32_t  sp;                    /* stack pointer */
     int32_t  fp;                    /* frame pointer */
     int32_t  rp;                    /* return stack pointer */
     int32_t  id;                    /* VM identifier */
     td_t    *fn;                    /* current lambda */
     void    *heap;                  /* heap pointer (future use) */
+    int32_t  tp;                    /* trap stack pointer */
     td_t    *ps[VM_STACK_SIZE];     /* program stack */
     vm_ctx_t rs[VM_STACK_SIZE];     /* return stack */
+    vm_trap_t ts[VM_TRAP_SIZE];     /* trap frames */
 } td_vm_t;
 
 /* ===== Public API ===== */
