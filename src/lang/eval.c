@@ -196,8 +196,9 @@ static td_t* ray_fn(td_t** args, int64_t n) {
     /* args[0] = param vector (list of name symbols), args[1..n-1] = body exprs */
     td_t* params_list = args[0];
 
-    /* Create lambda object with space for params + body pointers */
-    td_t* lambda = td_alloc(2 * sizeof(td_t*));
+    /* Create lambda object with space for 5 slots:
+     * [0] params, [1] body, [2] bytecode, [3] constants, [4] n_locals */
+    td_t* lambda = td_alloc(5 * sizeof(td_t*));
     if (!lambda) return TD_ERR_PTR(TD_ERR_OOM);
     lambda->type = TD_ATOM_LAMBDA;
     lambda->attrs = 0;
@@ -205,7 +206,7 @@ static td_t* ray_fn(td_t** args, int64_t n) {
 
     /* Store params list */
     td_retain(params_list);
-    ((td_t**)td_data(lambda))[0] = params_list;
+    LAMBDA_PARAMS(lambda) = params_list;
 
     /* Build body list: wrap body expressions in a TD_LIST */
     int64_t body_count = n - 1;
@@ -222,27 +223,44 @@ static td_t* ray_fn(td_t** args, int64_t n) {
         td_retain(args[i + 1]);
         body_elems[i] = args[i + 1];
     }
-    ((td_t**)td_data(lambda))[1] = body;
+    LAMBDA_BODY(lambda) = body;
+
+    /* Clear compiled slots */
+    LAMBDA_BC(lambda) = NULL;
+    LAMBDA_CONSTS(lambda) = NULL;
+    LAMBDA_NLOCALS(lambda) = 0;
 
     return lambda;
 }
 
-/* Call a lambda: bind args, eval body, return last result. */
+/* Execute compiled bytecode for a lambda. */
+static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc);
+
+/* Call a lambda: compile on first call, then execute bytecode. */
 static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
-    td_t* params_list = ((td_t**)td_data(lambda))[0];
-    td_t* body = ((td_t**)td_data(lambda))[1];
+    /* Lazy compilation on first call */
+    if (!LAMBDA_IS_COMPILED(lambda)) {
+        td_compile(lambda);
+    }
+
+    /* If compilation succeeded, run bytecode; otherwise fall back to tree-walk */
+    if (LAMBDA_IS_COMPILED(lambda)) {
+        return vm_exec(lambda, call_args, argc);
+    }
+
+    /* Fallback: tree-walking interpreter */
+    td_t* params_list = LAMBDA_PARAMS(lambda);
+    td_t* body = LAMBDA_BODY(lambda);
 
     int64_t param_count = td_len(params_list);
     td_t** param_syms = (td_t**)td_data(params_list);
 
     td_env_push_scope();
 
-    /* Bind parameters to argument values */
     for (int64_t i = 0; i < param_count && i < argc; i++) {
         td_env_set_local(param_syms[i]->i64, call_args[i]);
     }
 
-    /* Eval body expressions in sequence, return last */
     int64_t body_count = td_len(body);
     td_t** body_exprs = (td_t**)td_data(body);
     td_t* result = NULL;
@@ -257,6 +275,247 @@ static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
 
     td_env_pop_scope();
     return result;
+}
+
+/* ══════════════════════════════════════════
+ * Stack-based VM executor (bytecode interpreter)
+ * ══════════════════════════════════════════ */
+
+#define VM_STACK_SIZE 256
+
+static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
+    td_t* bc_vec = LAMBDA_BC(lambda);
+    td_t* consts = LAMBDA_CONSTS(lambda);
+    int32_t n_locals = LAMBDA_NLOCALS(lambda);
+    td_t* params_list = LAMBDA_PARAMS(lambda);
+
+    uint8_t* code = (uint8_t*)td_data(bc_vec);
+    td_t** cpool = (td_t**)td_data(consts);
+
+    /* Stack and locals */
+    td_t* stack[VM_STACK_SIZE];
+    int32_t sp = 0;
+
+    td_t* locals[256];
+    memset(locals, 0, n_locals * sizeof(td_t*));
+
+    /* Bind parameters into local slots */
+    int64_t param_count = td_len(params_list);
+    for (int64_t i = 0; i < param_count && i < argc; i++) {
+        td_retain(call_args[i]);
+        locals[i] = call_args[i];
+    }
+
+    int32_t ip = 0;
+
+    for (;;) {
+        uint8_t op = code[ip++];
+        switch (op) {
+
+        case OP_RET: {
+            td_t* result = (sp > 0) ? stack[--sp] : make_i64(0);
+            /* Release remaining stack and locals */
+            for (int32_t i = 0; i < sp; i++)
+                if (stack[i]) td_release(stack[i]);
+            for (int32_t i = 0; i < n_locals; i++)
+                if (locals[i]) td_release(locals[i]);
+            return result;
+        }
+
+        case OP_LOADCONST: {
+            uint8_t idx = code[ip++];
+            td_t* val = cpool[idx];
+            td_retain(val);
+            stack[sp++] = val;
+            break;
+        }
+
+        case OP_LOADCONST_W: {
+            uint16_t idx = (uint16_t)(code[ip] << 8) | code[ip + 1];
+            ip += 2;
+            td_t* val = cpool[idx];
+            td_retain(val);
+            stack[sp++] = val;
+            break;
+        }
+
+        case OP_LOADENV: {
+            uint8_t slot = code[ip++];
+            td_t* val = locals[slot];
+            if (val) td_retain(val);
+            else val = make_i64(0);
+            stack[sp++] = val;
+            break;
+        }
+
+        case OP_STOREENV: {
+            uint8_t slot = code[ip++];
+            td_t* val = stack[--sp];
+            if (locals[slot]) td_release(locals[slot]);
+            locals[slot] = val;
+            /* Store does NOT consume the value from perspective of the
+             * expression — but our compiler emits DUP before STOREENV
+             * when the value is needed. So here we just store. */
+            break;
+        }
+
+        case OP_POP: {
+            if (sp > 0) {
+                td_t* val = stack[--sp];
+                if (val) td_release(val);
+            }
+            break;
+        }
+
+        case OP_DUP: {
+            td_t* val = stack[sp - 1];
+            td_retain(val);
+            stack[sp++] = val;
+            break;
+        }
+
+        case OP_RESOLVE: {
+            uint8_t idx = code[ip++];
+            td_t* name_obj = cpool[idx];
+            td_t* val = td_env_get(name_obj->i64);
+            if (!val) {
+                for (int32_t i = 0; i < sp; i++)
+                    if (stack[i]) td_release(stack[i]);
+                for (int32_t i = 0; i < n_locals; i++)
+                    if (locals[i]) td_release(locals[i]);
+                return TD_ERR_PTR(TD_ERR_DOMAIN);
+            }
+            td_retain(val);
+            stack[sp++] = val;
+            break;
+        }
+
+        case OP_JMP: {
+            int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
+            ip += 2;
+            ip += offset;
+            break;
+        }
+
+        case OP_JMPF: {
+            int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
+            ip += 2;
+            td_t* cond = stack[--sp];
+            int truthy = 0;
+            if (cond->type == TD_ATOM_BOOL) truthy = cond->b8;
+            else if (cond->type == TD_ATOM_I64) truthy = cond->i64 != 0;
+            else truthy = 1;
+            td_release(cond);
+            if (!truthy) ip += offset;
+            break;
+        }
+
+        case OP_CALL1: {
+            td_t* arg = stack[--sp];
+            td_t* fn_obj = stack[--sp];
+            td_unary_fn fn = (td_unary_fn)(uintptr_t)fn_obj->i64;
+            td_t* result = fn(arg);
+            td_release(arg);
+            td_release(fn_obj);
+            stack[sp++] = result;
+            break;
+        }
+
+        case OP_CALL2: {
+            td_t* right = stack[--sp];
+            td_t* left = stack[--sp];
+            td_t* fn_obj = stack[--sp];
+
+            if (fn_obj->attrs & TD_FN_SPECIAL_FORM) {
+                /* Special forms receive unevaluated args — but in VM
+                 * context args are already evaluated. For binary special
+                 * forms like set/let this path shouldn't be hit (they're
+                 * compiled to STOREENV). Use direct call. */
+                td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
+                td_t* result = fn(left, right);
+                td_release(left);
+                td_release(right);
+                td_release(fn_obj);
+                stack[sp++] = result;
+            } else {
+                td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
+                td_t* result = fn(left, right);
+                td_release(left);
+                td_release(right);
+                td_release(fn_obj);
+                stack[sp++] = result;
+            }
+            break;
+        }
+
+        case OP_CALLN: {
+            uint8_t n = code[ip++];
+            td_t* args[64];
+            for (int32_t i = n - 1; i >= 0; i--)
+                args[i] = stack[--sp];
+            td_t* fn_obj = stack[--sp];
+            td_vary_fn fn = (td_vary_fn)(uintptr_t)fn_obj->i64;
+            td_t* result = fn(args, n);
+            for (int32_t i = 0; i < n; i++)
+                td_release(args[i]);
+            td_release(fn_obj);
+            stack[sp++] = result;
+            break;
+        }
+
+        case OP_CALLF: {
+            /* Call a compiled lambda — recursive vm_exec for now.
+             * Full frame-based dispatch comes in Task 4.2. */
+            uint8_t n = code[ip++];
+            td_t* args[64];
+            for (int32_t i = n - 1; i >= 0; i--)
+                args[i] = stack[--sp];
+            td_t* fn_obj = stack[--sp];
+            td_t* result = call_lambda(fn_obj, args, n);
+            for (int32_t i = 0; i < n; i++)
+                td_release(args[i]);
+            td_release(fn_obj);
+            stack[sp++] = result;
+            break;
+        }
+
+        case OP_CALLD: {
+            /* Dynamic dispatch — build a list and pass to td_eval */
+            uint8_t n = code[ip++];
+            td_t* args[64];
+            for (int32_t i = n - 1; i >= 0; i--)
+                args[i] = stack[--sp];
+            td_t* fn_obj = stack[--sp];
+
+            /* Build call list: (fn arg1 arg2 ...) */
+            td_t* call_list = td_alloc((n + 1) * sizeof(td_t*));
+            call_list->type = TD_LIST;
+            call_list->len = n + 1;
+            td_t** elems = (td_t**)td_data(call_list);
+            elems[0] = fn_obj;  /* already retained from stack */
+            for (int32_t i = 0; i < n; i++)
+                elems[i + 1] = args[i];
+
+            td_t* result = td_eval(call_list);
+            td_release(call_list);
+            stack[sp++] = result;
+            break;
+        }
+
+        case OP_CALLS:
+            /* Tail call — for now just do a regular CALLF.
+             * True tail call optimization comes in Task 4.2. */
+            /* fall through */
+        default: {
+            /* Unknown opcode — abort with error */
+            for (int32_t i = 0; i < sp; i++)
+                if (stack[i]) td_release(stack[i]);
+            for (int32_t i = 0; i < n_locals; i++)
+                if (locals[i]) td_release(locals[i]);
+            return TD_ERR_PTR(TD_ERR_DOMAIN);
+        }
+        }
+    }
 }
 
 /* ══════════════════════════════════════════

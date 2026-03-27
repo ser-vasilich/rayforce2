@@ -337,6 +337,31 @@ static MunitResult test_eval_lambda_let(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: compile basic lambda ---- */
+static MunitResult test_compile_basic(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (set f (fn [x] (+ x 1))) (f 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 11);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: compile closure ---- */
+static MunitResult test_compile_closure(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Verify compiled lambda with multiple body exprs and let binding */
+    td_t* result = td_eval_str("(do (set f (fn [a b] (let c (+ a b)) (* c 2))) (f 3 4))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 14);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -365,6 +390,8 @@ static MunitTest lang_tests[] = {
     { "/eval/lambda",       test_eval_lambda,       lang_setup, lang_teardown, 0, NULL },
     { "/eval/lambda_multi", test_eval_lambda_multi, lang_setup, lang_teardown, 0, NULL },
     { "/eval/lambda_let",   test_eval_lambda_let,   lang_setup, lang_teardown, 0, NULL },
+    { "/compile/basic",     test_compile_basic,     lang_setup, lang_teardown, 0, NULL },
+    { "/compile/closure",   test_compile_closure,   lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

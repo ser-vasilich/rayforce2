@@ -201,15 +201,15 @@ cd build && ctest --output-on-failure
 
 Reference: `/home/hetoku/data/work/kdb/src/lang/compile.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_compile_basic` — `(do (set f (fn [x] (+ x 1))) (f 10))` → i64 11 (same as interpreted)
   - `test_compile_closure` — verify compiled lambda matches interpreted result
-- [ ] Define opcodes in `eval.h`:
+- [x] Define opcodes in `eval.h`:
   - `OP_RET`, `OP_JMP`, `OP_JMPF`
   - `OP_LOADCONST`, `OP_LOADENV`, `OP_STOREENV`, `OP_POP`
   - `OP_RESOLVE`
   - `OP_CALL1`, `OP_CALL2`, `OP_CALLN`, `OP_CALLF`, `OP_CALLS`, `OP_CALLD`
-- [ ] Implement `td_compile(td_t* lambda)` in `compile.c`:
+- [x] Implement `td_compile(td_t* lambda)` in `compile.c`:
   - `compiler_t` struct: code buffer, constant pool, local tracking
   - Walk parsed body, emit bytecode:
     - Literals → `OP_LOADCONST`
@@ -218,9 +218,9 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/compile.c`
     - `if` → `OP_JMPF` + branch
     - `let` → `OP_STOREENV`
   - Store compiled bytecode + constants in lambda object
-- [ ] Trigger compilation on first call (lazy, same as Rayforce)
-- [ ] Run tests: pass
-- [ ] Commit: `feat(lang): bytecode compiler for lambda functions`
+- [x] Trigger compilation on first call (lazy, same as Rayforce)
+- [x] Run tests: pass
+- [x] Commit: `feat(lang): bytecode compiler for lambda functions`
 
 ---
 
