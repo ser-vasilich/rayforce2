@@ -127,6 +127,34 @@ extern "C" {
 /* Variable-length string column (inline + pool) */
 #define TD_STR       21
 
+/* Function types (Rayforce-compatible) */
+#define TD_LAMBDA    100   /* User-defined function (compiled body + env) */
+#define TD_UNARY     101   /* Unary builtin: td_t* (*)(td_t*) */
+#define TD_BINARY    102   /* Binary builtin: td_t* (*)(td_t*, td_t*) */
+#define TD_VARY      103   /* Variadic builtin: td_t* (*)(td_t**, int64_t) */
+
+/* Function atom types (negative = atom) */
+#define TD_ATOM_LAMBDA    (-TD_LAMBDA)
+#define TD_ATOM_UNARY     (-TD_UNARY)
+#define TD_ATOM_BINARY    (-TD_BINARY)
+#define TD_ATOM_VARY      (-TD_VARY)
+
+/* Function attribute flags (stored in attrs byte) */
+#define TD_FN_NONE          0x00
+#define TD_FN_LEFT_ATOMIC   0x01  /* auto-map left arg over vectors */
+#define TD_FN_RIGHT_ATOMIC  0x02  /* auto-map right arg over vectors */
+#define TD_FN_ATOMIC        0x04  /* auto-map all args over vectors */
+#define TD_FN_AGGR          0x08  /* aggregation function */
+#define TD_FN_SPECIAL_FORM  0x10  /* receives unevaluated args */
+
+/* AST name flag (distinguishes symbol literal from variable reference) */
+#define TD_ATTR_NAME        0x20  /* td_t SYM atom with this flag = name reference */
+
+/* Function type signatures (use union td_t since td_t typedef comes later) */
+typedef union td_t* (*td_unary_fn)(union td_t*);
+typedef union td_t* (*td_binary_fn)(union td_t*, union td_t*);
+typedef union td_t* (*td_vary_fn)(union td_t**, int64_t);
+
 /* Symbol width encoding (lower 2 bits of attrs when type == TD_SYM) */
 #define TD_SYM_W_MASK   0x03
 #define TD_SYM_W8       0x00   /* uint8_t  indices — dict ≤ 255 entries */

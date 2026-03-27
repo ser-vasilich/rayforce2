@@ -32,6 +32,10 @@ cd build && ctest --output-on-failure
 
 ### Task 1.1: Add function type tags to td.h
 
+- [x] Add type tags, function attribute flags, and function typedefs to td.h
+- [x] Verify build compiles
+- [x] Run existing tests (no regressions)
+
 **Files:**
 - Modify: `include/teide/td.h`
 
@@ -89,6 +93,10 @@ git commit -m "feat(lang): add TD_UNARY/TD_BINARY/TD_VARY/TD_LAMBDA type tags an
 ---
 
 ### Task 1.2: Function object constructors
+
+- [ ] Implement function object constructors and environment
+- [ ] Write tests for env operations
+- [ ] Verify build and tests pass
 
 **Files:**
 - Create: `src/lang/env.h`
@@ -304,6 +312,8 @@ git commit -m "feat(lang): function object constructors and global environment"
 ## Phase 2: Lexer
 
 ### Task 2.1: ASCII dispatch table and basic tokenization
+
+- [ ] Implement ASCII dispatch table and basic tokenization
 
 **Files:**
 - Create: `src/lang/parse.h`
@@ -718,6 +728,8 @@ git commit -m "feat(lang): lexer with ASCII dispatch table and recursive descent
 
 ### Task 2.2: Parse s-expressions and vector literals
 
+- [ ] Implement s-expression and vector literal parsing
+
 **Files:**
 - Modify: `test/test_lang.c`
 
@@ -801,6 +813,8 @@ git commit -m "test(lang): s-expression and vector parsing tests"
 ## Phase 3: Tree-Walking Eval
 
 ### Task 3.1: Eval with builtin dispatch
+
+- [ ] Implement eval with builtin dispatch
 
 **Files:**
 - Create: `src/lang/eval.h`
@@ -1026,6 +1040,8 @@ git commit -m "feat(lang): tree-walking eval with arithmetic builtins"
 
 ### Task 3.2: Variable binding (set, let) and conditionals (if)
 
+- [ ] Implement variable binding and conditionals
+
 **Files:**
 - Modify: `src/lang/eval.c`
 - Modify: `test/test_lang.c`
@@ -1081,6 +1097,8 @@ git commit -m "feat(lang): set/let variable binding and if conditional"
 
 ### Task 3.3: Lambda functions
 
+- [ ] Implement lambda functions
+
 **Files:**
 - Modify: `src/lang/eval.c`
 - Modify: `test/test_lang.c`
@@ -1130,6 +1148,8 @@ git commit -m "feat(lang): lambda functions with lexical binding"
 
 ### Task 4.1: Bytecode compiler (AST → bytecode)
 
+- [ ] Implement bytecode compiler
+
 **Files:**
 - Create: `src/lang/compile.c`
 - Modify: `src/lang/eval.h` (add compile API)
@@ -1172,6 +1192,8 @@ git commit -m "feat(lang): bytecode compiler for lambda functions"
 ---
 
 ### Task 4.2: Stack-based VM (computed goto)
+
+- [ ] Implement stack-based VM
 
 **Files:**
 - Modify: `src/lang/eval.c` (add `td_vm_eval`)
@@ -1226,6 +1248,8 @@ git commit -m "feat(lang): stack-based VM with computed goto dispatch"
 
 ### Task 4.3: Error handling (try/raise)
 
+- [ ] Implement error handling
+
 **Files:**
 - Modify: `src/lang/eval.c`
 - Modify: `test/test_lang.c`
@@ -1263,6 +1287,8 @@ git commit -m "feat(lang): try/raise error handling with trap frames"
 ## Phase 5: Collection & Higher-Order Builtins
 
 ### Task 5.1: Vector operations
+
+- [ ] Implement vector operations
 
 **Files:**
 - Modify: `src/lang/eval.c`
@@ -1309,6 +1335,8 @@ git commit -m "feat(lang): FN_ATOMIC auto-mapping and aggregation builtins"
 ---
 
 ### Task 5.2: Higher-order functions (map, fold, scan, filter)
+
+- [ ] Implement higher-order functions
 
 **Files:**
 - Modify: `src/lang/eval.c`
@@ -1358,6 +1386,8 @@ git commit -m "feat(lang): higher-order functions (map, fold, scan, filter)"
 
 ### Task 6.1: Table construction and column access
 
+- [ ] Implement table construction and column access
+
 **Files:**
 - Modify: `src/lang/eval.c`
 - Modify: `test/test_lang.c`
@@ -1397,6 +1427,8 @@ git commit -m "feat(lang): table construction and column access"
 ---
 
 ### Task 6.2: Select queries (bridge to Teide DAG)
+
+- [ ] Implement select queries
 
 **Files:**
 - Modify: `src/lang/eval.c`
@@ -1448,6 +1480,8 @@ git commit -m "feat(lang): select queries bridging to Teide DAG executor"
 
 ### Task 7.1: I/O builtins
 
+- [ ] Implement I/O builtins
+
 **Files:**
 - Modify: `src/lang/eval.c`
 - Modify: `test/test_lang.c`
@@ -1476,6 +1510,8 @@ git commit -m "feat(lang): I/O builtins (read-csv, write-csv, println)"
 ---
 
 ### Task 7.2: REPL binary
+
+- [ ] Implement REPL binary
 
 **Files:**
 - Create: `src/lang/repl.c`
@@ -1542,6 +1578,8 @@ git commit -m "feat(lang): Rayfall REPL binary"
 ## Phase 8: Heap Threading (Per-VM Heaps)
 
 ### Task 8.1: Add heap_id to td_t and per-VM heap allocation
+
+- [ ] Implement heap_id and per-VM heap allocation
 
 **Files:**
 - Modify: `include/teide/td.h`
