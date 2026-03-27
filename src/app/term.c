@@ -1,5 +1,6 @@
 #include "app/term.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -7,6 +8,8 @@
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #endif
 
 /* ===== Cursor helpers ===== */
@@ -132,12 +135,14 @@ td_term_t* td_term_create(void) {
     term->last_total_rows = 1;
     td_term_get_size(term);
     td_hist_create(&term->hist);
+    td_hist_load(&term->hist, NULL);
 
     return term;
 }
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    td_hist_save(&term->hist, NULL);
     td_hist_destroy(&term->hist);
     SetConsoleMode(term->h_stdin,  term->old_stdin_mode);
     SetConsoleMode(term->h_stdout, term->old_stdout_mode);
@@ -174,12 +179,14 @@ td_term_t* td_term_create(void) {
     term->last_total_rows = 1;
     td_term_get_size(term);
     td_hist_create(&term->hist);
+    td_hist_load(&term->hist, NULL);
 
     return term;
 }
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    td_hist_save(&term->hist, NULL);
     td_hist_destroy(&term->hist);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
     td_free(term->_block);
@@ -278,6 +285,96 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
     int32_t len = (int32_t)strlen(entry);
     memcpy(buf, entry, (size_t)len);
     return len;
+}
+
+/* ===== History persistence ===== */
+
+static void hist_build_path(char* out, int32_t out_size) {
+    const char* home = getenv("HOME");
+#if defined(_WIN32)
+    if (!home) home = getenv("USERPROFILE");
+#endif
+    if (!home) home = ".";
+    snprintf(out, (size_t)out_size, "%s/%s", home, HIST_DEFAULT_PATH);
+}
+
+void td_hist_load(td_hist_t* hist, const char* path) {
+    char pathbuf[1024];
+    if (!path) {
+        hist_build_path(pathbuf, (int32_t)sizeof(pathbuf));
+        path = pathbuf;
+    }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+
+    /* Get file size */
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size == 0) {
+        close(fd);
+        return;
+    }
+
+    /* Read entire file into a temp buffer */
+    int64_t fsize = st.st_size;
+    if (fsize > TERM_BUF_SIZE * 100) fsize = TERM_BUF_SIZE * 100; /* sanity cap */
+    td_t* fbuf_block = td_alloc(fsize + 1);
+    if (!fbuf_block) { close(fd); return; }
+    char* fbuf = (char*)td_data(fbuf_block);
+
+    int64_t total = 0;
+    while (total < fsize) {
+        ssize_t n = read(fd, fbuf + total, (size_t)(fsize - total));
+        if (n <= 0) break;
+        total += n;
+    }
+    close(fd);
+
+    /* Parse null-byte delimited entries */
+    char* p = fbuf;
+    char* end = fbuf + total;
+    while (p < end) {
+        char* entry_start = p;
+        /* Find next null byte or end */
+        while (p < end && *p != '\0') p++;
+        int32_t len = (int32_t)(p - entry_start);
+        if (len > 0)
+            td_hist_add(hist, entry_start, len);
+        if (p < end) p++; /* skip null delimiter */
+    }
+
+    td_free(fbuf_block);
+}
+
+void td_hist_save(td_hist_t* hist, const char* path) {
+    char pathbuf[1024];
+    if (!path) {
+        hist_build_path(pathbuf, (int32_t)sizeof(pathbuf));
+        path = pathbuf;
+    }
+
+    if (hist->count == 0) return;
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+
+    /* Only save last HIST_MAX_ENTRIES entries */
+    int32_t start = 0;
+    if (hist->count > HIST_MAX_ENTRIES)
+        start = hist->count - HIST_MAX_ENTRIES;
+
+    for (int32_t i = start; i < hist->count; i++) {
+        const char* entry = hist->entries[i];
+        int32_t len = (int32_t)strlen(entry);
+        write(fd, entry, (size_t)len);
+        if (i < hist->count - 1) {
+            write(fd, "\0", 1);
+        }
+    }
+    /* Write trailing null so load knows where last entry ends */
+    write(fd, "\0", 1);
+
+    close(fd);
 }
 
 /* ===== UTF-8 helpers ===== */

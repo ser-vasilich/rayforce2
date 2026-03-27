@@ -130,16 +130,16 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Modify `src/app/term.c`
 
-- [ ] Implement `td_hist_load(path)`:
+- [x] Implement `td_hist_load(path)`:
   - Open `~/.teide_history` (or `$HOME/.teide_history`)
   - Read line by line, add each to history entries
   - Multi-line entries delimited by `\x00` (null byte between entries, newlines within)
-- [ ] Implement `td_hist_save(hist, path)`:
+- [x] Implement `td_hist_save(hist, path)`:
   - Write all entries to file, `\x00` delimited
   - Truncate to last 1000 entries if exceeds
-- [ ] Wire into `td_term_create()` → `td_hist_load()` and `td_term_destroy()` → `td_hist_save()`
-- [ ] Smoke test: type expressions, exit, restart, Up recalls previous session's history
-- [ ] Commit: `feat(repl): persistent history file (~/.teide_history)`
+- [x] Wire into `td_term_create()` → `td_hist_load()` and `td_term_destroy()` → `td_hist_save()`
+- [x] Smoke test: type expressions, exit, restart, Up recalls previous session's history
+- [x] Commit: `feat(repl): persistent history file (~/.teide_history)`
 
 ---
 

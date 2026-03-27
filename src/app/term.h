@@ -106,5 +106,10 @@ void    td_hist_destroy(td_hist_t* hist);
 void    td_hist_add(td_hist_t* hist, const char* buf, int32_t len);
 int32_t td_hist_prev(td_hist_t* hist, char* buf);
 int32_t td_hist_next(td_hist_t* hist, char* buf);
+void    td_hist_load(td_hist_t* hist, const char* path);
+void    td_hist_save(td_hist_t* hist, const char* path);
+
+#define HIST_MAX_ENTRIES 1000
+#define HIST_DEFAULT_PATH ".teide_history"
 
 #endif /* TD_TERM_H */
