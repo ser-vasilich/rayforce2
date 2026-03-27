@@ -899,6 +899,70 @@ static MunitResult test_eval_select_xbar(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: update ---- */
+static MunitResult test_eval_update(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Update salary to (* salary 2) where name == 2 (second row) */
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'dept 'salary] "
+        "(list [1 2 3] [10 20 10] [50000 60000 70000]))) "
+        "(update {salary: (* salary 2) from: t where: (== name 2)}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    /* Check salary column: [50000, 120000, 70000] */
+    int64_t sal_id = td_sym_intern("salary", 6);
+    td_t* sal_col = td_table_get_col(result, sal_id);
+    munit_assert_ptr_not_null(sal_col);
+    int64_t* sal_data = (int64_t*)td_data(sal_col);
+    munit_assert_int(sal_data[0], ==, 50000);
+    munit_assert_int(sal_data[1], ==, 120000);
+    munit_assert_int(sal_data[2], ==, 70000);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: insert ---- */
+static MunitResult test_eval_insert(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'salary] (list [1 2 3] [50000 60000 70000]))) "
+        "(insert t (list 4 80000)))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 4);
+    /* Verify last row */
+    int64_t name_id = td_sym_intern("name", 4);
+    td_t* name_col = td_table_get_col(result, name_id);
+    munit_assert_int(((int64_t*)td_data(name_col))[3], ==, 4);
+    int64_t sal_id = td_sym_intern("salary", 6);
+    td_t* sal_col = td_table_get_col(result, sal_id);
+    munit_assert_int(((int64_t*)td_data(sal_col))[3], ==, 80000);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: upsert (update existing row) ---- */
+static MunitResult test_eval_upsert(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Upsert by 'name key — row with name=2 exists, update it */
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'salary] (list [1 2 3] [50000 60000 70000]))) "
+        "(upsert t 'name (list 2 99000)))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    /* Verify row 2's salary was updated */
+    int64_t sal_id = td_sym_intern("salary", 6);
+    td_t* sal_col = td_table_get_col(result, sal_id);
+    munit_assert_int(((int64_t*)td_data(sal_col))[1], ==, 99000);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -965,6 +1029,9 @@ static MunitTest lang_tests[] = {
     { "/eval/select_cols",     test_eval_select_cols,     lang_setup, lang_teardown, 0, NULL },
     { "/eval/select_groupby",  test_eval_select_groupby,  lang_setup, lang_teardown, 0, NULL },
     { "/eval/select_xbar",     test_eval_select_xbar,     lang_setup, lang_teardown, 0, NULL },
+    { "/eval/update",          test_eval_update,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/insert",          test_eval_insert,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/upsert",          test_eval_upsert,          lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

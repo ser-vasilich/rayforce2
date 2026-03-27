@@ -1281,6 +1281,314 @@ static td_t* ray_xbar(td_t* col, td_t* bucket) {
 }
 
 /* ══════════════════════════════════════════
+ * Update, Insert, Upsert
+ * ══════════════════════════════════════════ */
+
+/* Helper: convert a Rayfall list of atoms into a typed column vector by
+ * appending to an existing column (for insert/upsert). */
+static td_t* append_atom_to_col(td_t* col_vec, td_t* atom) {
+    int8_t ct = col_vec->type;
+    if (ct == TD_I64 || ct == TD_SYM) {
+        int64_t v = atom->i64;
+        return td_vec_append(col_vec, &v);
+    } else if (ct == TD_F64) {
+        double v = (atom->type == TD_ATOM_F64) ? atom->f64 : (double)atom->i64;
+        return td_vec_append(col_vec, &v);
+    } else if (ct == TD_BOOL) {
+        uint8_t v = atom->b8;
+        return td_vec_append(col_vec, &v);
+    }
+    return TD_ERR_PTR(TD_ERR_TYPE);
+}
+
+/* (update {col: expr ... from: t [where: pred]})
+ * Special form — receives unevaluated dict arg.
+ * For rows matching where (or all if no where), evaluate column expressions
+ * and replace those column values. Returns a new table. */
+static td_t* ray_update(td_t** args, int64_t n) {
+    if (n < 1) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* dict = args[0];
+    if (!dict || dict->type != TD_LIST || !(dict->attrs & TD_ATTR_DICT))
+        return TD_ERR_PTR(TD_ERR_TYPE);
+
+    td_t* from_expr = dict_get(dict, "from");
+    if (!from_expr) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = td_eval(from_expr);
+    if (TD_IS_ERR(tbl)) return tbl;
+    if (tbl->type != TD_TABLE) { td_release(tbl); return TD_ERR_PTR(TD_ERR_TYPE); }
+
+    td_t* where_expr = dict_get(dict, "where");
+
+    /* Evaluate WHERE using the DAG to get a boolean mask */
+    int64_t nrows = td_table_nrows(tbl);
+    uint8_t* mask = NULL;
+
+    if (where_expr) {
+        td_graph_t* g = td_graph_new(tbl);
+        if (!g) { td_release(tbl); return TD_ERR_PTR(TD_ERR_OOM); }
+        td_op_t* root = td_const_table(g, tbl);
+        td_op_t* pred = compile_expr_dag(g, where_expr);
+        if (!pred) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        root = td_filter(g, root, pred);
+        root = td_optimize(g, root);
+        td_t* filtered = td_execute(g, root);
+        td_graph_free(g);
+
+        if (TD_IS_ERR(filtered)) { td_release(tbl); return filtered; }
+
+        /* Build mask: which original rows passed the filter?
+         * We use a simple approach: evaluate the predicate expression
+         * directly for each row using the Rayfall evaluator. */
+        td_release(filtered);
+
+        /* Re-evaluate: build the predicate as a DAG over the full table,
+         * but only extract the boolean column result. */
+        g = td_graph_new(tbl);
+        if (!g) { td_release(tbl); return TD_ERR_PTR(TD_ERR_OOM); }
+        td_op_t* pred2 = compile_expr_dag(g, where_expr);
+        if (!pred2) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        pred2 = td_optimize(g, pred2);
+        td_t* mask_vec = td_execute(g, pred2);
+        td_graph_free(g);
+
+        if (TD_IS_ERR(mask_vec)) { td_release(tbl); return mask_vec; }
+        if (mask_vec->type != TD_BOOL || mask_vec->len != nrows) {
+            td_release(mask_vec);
+            td_release(tbl);
+            return TD_ERR_PTR(TD_ERR_TYPE);
+        }
+        mask = (uint8_t*)td_data(mask_vec);
+        /* Keep mask_vec alive until we're done */
+
+        /* Build a new table with updated columns */
+        int64_t ncols = td_table_ncols(tbl);
+        int64_t dict_n = td_len(dict);
+        td_t** dict_elems = (td_t**)td_data(dict);
+        int64_t from_id = td_sym_intern("from", 4);
+        int64_t where_id = td_sym_intern("where", 5);
+
+        td_t* result = td_table_new(ncols);
+        if (TD_IS_ERR(result)) { td_release(mask_vec); td_release(tbl); return result; }
+
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t col_name = td_table_col_name(tbl, c);
+            td_t* orig_col = td_table_get_col_idx(tbl, c);
+
+            /* Check if this column has an update expression */
+            td_t* update_expr = NULL;
+            for (int64_t d = 0; d + 1 < dict_n; d += 2) {
+                int64_t kid = dict_elems[d]->i64;
+                if (kid == from_id || kid == where_id) continue;
+                if (kid == col_name) { update_expr = dict_elems[d + 1]; break; }
+            }
+
+            if (!update_expr) {
+                /* No update for this column — copy as-is */
+                td_retain(orig_col);
+                result = td_table_add_col(result, col_name, orig_col);
+                td_release(orig_col);
+            } else {
+                /* Evaluate the expression for each row and apply to matching rows */
+                int8_t ct = orig_col->type;
+                td_t* new_col = td_vec_new(ct, nrows);
+                if (TD_IS_ERR(new_col)) { td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+
+                /* Evaluate expression via DAG */
+                td_graph_t* ug = td_graph_new(tbl);
+                td_op_t* expr_op = compile_expr_dag(ug, update_expr);
+                if (!expr_op) { td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); td_graph_free(ug); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+                expr_op = td_optimize(ug, expr_op);
+                td_t* expr_vec = td_execute(ug, expr_op);
+                td_graph_free(ug);
+
+                if (TD_IS_ERR(expr_vec)) { td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return expr_vec; }
+
+                /* Merge: use expr_vec for matching rows, orig_col for non-matching */
+                size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+                uint8_t* orig_data = (uint8_t*)td_data(orig_col);
+                uint8_t* expr_data = (uint8_t*)td_data(expr_vec);
+                for (int64_t r = 0; r < nrows; r++) {
+                    void* src = mask[r] ? (expr_data + r * elem_sz) : (orig_data + r * elem_sz);
+                    new_col = td_vec_append(new_col, src);
+                    if (TD_IS_ERR(new_col)) { td_release(expr_vec); td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+                }
+                result = td_table_add_col(result, col_name, new_col);
+                td_release(new_col);
+                td_release(expr_vec);
+            }
+            if (TD_IS_ERR(result)) { td_release(mask_vec); td_release(tbl); return result; }
+        }
+
+        td_release(mask_vec);
+        td_release(tbl);
+        return result;
+    }
+
+    /* No WHERE — update all rows */
+    int64_t ncols = td_table_ncols(tbl);
+    int64_t dict_n = td_len(dict);
+    td_t** dict_elems = (td_t**)td_data(dict);
+    int64_t from_id = td_sym_intern("from", 4);
+
+    td_t* result = td_table_new(ncols);
+    if (TD_IS_ERR(result)) { td_release(tbl); return result; }
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t col_name = td_table_col_name(tbl, c);
+        td_t* orig_col = td_table_get_col_idx(tbl, c);
+
+        td_t* update_expr = NULL;
+        for (int64_t d = 0; d + 1 < dict_n; d += 2) {
+            int64_t kid = dict_elems[d]->i64;
+            if (kid == from_id) continue;
+            if (kid == col_name) { update_expr = dict_elems[d + 1]; break; }
+        }
+
+        if (!update_expr) {
+            td_retain(orig_col);
+            result = td_table_add_col(result, col_name, orig_col);
+            td_release(orig_col);
+        } else {
+            td_graph_t* ug = td_graph_new(tbl);
+            td_op_t* expr_op = compile_expr_dag(ug, update_expr);
+            if (!expr_op) { td_release(result); td_release(tbl); td_graph_free(ug); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            expr_op = td_optimize(ug, expr_op);
+            td_t* expr_vec = td_execute(ug, expr_op);
+            td_graph_free(ug);
+            if (TD_IS_ERR(expr_vec)) { td_release(result); td_release(tbl); return expr_vec; }
+            result = td_table_add_col(result, col_name, expr_vec);
+            td_release(expr_vec);
+        }
+        if (TD_IS_ERR(result)) { td_release(tbl); return result; }
+    }
+
+    td_release(tbl);
+    return result;
+}
+
+/* (insert table (list val1 val2 ...)) — append a row to a table */
+static td_t* ray_insert(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = args[0];
+    td_t* row = args[1];
+
+    if (tbl->type != TD_TABLE) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (!is_list(row)) return TD_ERR_PTR(TD_ERR_TYPE);
+
+    int64_t ncols = td_table_ncols(tbl);
+    if (td_len(row) != ncols) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t** row_elems = (td_t**)td_data(row);
+    int64_t nrows = td_table_nrows(tbl);
+
+    td_t* result = td_table_new(ncols);
+    if (TD_IS_ERR(result)) return result;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t col_name = td_table_col_name(tbl, c);
+        td_t* orig_col = td_table_get_col_idx(tbl, c);
+        int8_t ct = orig_col->type;
+
+        td_t* new_col = td_vec_new(ct, nrows + 1);
+        if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+
+        /* Copy existing data */
+        size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+        uint8_t* src = (uint8_t*)td_data(orig_col);
+        for (int64_t r = 0; r < nrows; r++) {
+            new_col = td_vec_append(new_col, src + r * elem_sz);
+            if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+        }
+
+        /* Append new row value */
+        new_col = append_atom_to_col(new_col, row_elems[c]);
+        if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+
+        result = td_table_add_col(result, col_name, new_col);
+        td_release(new_col);
+        if (TD_IS_ERR(result)) return result;
+    }
+
+    return result;
+}
+
+/* (upsert table key_col (list val1 val2 ...)) — update row if key matches, else insert */
+static td_t* ray_upsert(td_t** args, int64_t n) {
+    if (n < 3) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = args[0];
+    td_t* key_sym = args[1];
+    td_t* row = args[2];
+
+    if (tbl->type != TD_TABLE) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (key_sym->type != TD_ATOM_SYM) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (!is_list(row)) return TD_ERR_PTR(TD_ERR_TYPE);
+
+    int64_t ncols = td_table_ncols(tbl);
+    if (td_len(row) != ncols) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t** row_elems = (td_t**)td_data(row);
+    int64_t nrows = td_table_nrows(tbl);
+
+    /* Find the key column index */
+    int64_t key_col_idx = -1;
+    for (int64_t c = 0; c < ncols; c++) {
+        if (td_table_col_name(tbl, c) == key_sym->i64) {
+            key_col_idx = c;
+            break;
+        }
+    }
+    if (key_col_idx < 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    /* Find the row to update by key value */
+    td_t* key_col = td_table_get_col_idx(tbl, key_col_idx);
+    int64_t match_row = -1;
+    int8_t kt = key_col->type;
+    int64_t key_val = row_elems[key_col_idx]->i64;
+
+    if (kt == TD_I64 || kt == TD_SYM) {
+        int64_t* kdata = (int64_t*)td_data(key_col);
+        for (int64_t r = 0; r < nrows; r++) {
+            if (kdata[r] == key_val) { match_row = r; break; }
+        }
+    }
+
+    if (match_row < 0) {
+        /* Key not found — insert */
+        return ray_insert(args, 2);  /* reuse insert with (tbl, row) */
+    }
+
+    /* Key found — update that row */
+    td_t* result = td_table_new(ncols);
+    if (TD_IS_ERR(result)) return result;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t col_name = td_table_col_name(tbl, c);
+        td_t* orig_col = td_table_get_col_idx(tbl, c);
+        int8_t ct = orig_col->type;
+        size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+
+        td_t* new_col = td_vec_new(ct, nrows);
+        if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+
+        uint8_t* src = (uint8_t*)td_data(orig_col);
+        for (int64_t r = 0; r < nrows; r++) {
+            if (r == match_row) {
+                new_col = append_atom_to_col(new_col, row_elems[c]);
+            } else {
+                new_col = td_vec_append(new_col, src + r * elem_sz);
+            }
+            if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+        }
+
+        result = td_table_add_col(result, col_name, new_col);
+        td_release(new_col);
+        if (TD_IS_ERR(result)) return result;
+    }
+
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -1977,6 +2285,9 @@ static void td_register_builtins(void) {
 
     /* Query operations */
     register_vary("select",    TD_FN_SPECIAL_FORM, ray_select);
+    register_vary("update",    TD_FN_SPECIAL_FORM, ray_update);
+    register_vary("insert",    TD_FN_NONE, ray_insert);
+    register_vary("upsert",    TD_FN_NONE, ray_upsert);
     register_binary("xbar",    TD_FN_ATOMIC, ray_xbar);
 }
 

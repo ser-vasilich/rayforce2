@@ -385,15 +385,15 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_update` — `(update {salary: (* salary 1.1) from: t where: (= dept 'IT)})` → updated table
   - `test_eval_insert` — `(insert t (list "Charlie" 'IT 75000))` → table with new row
   - `test_eval_upsert` — `(upsert t 'id row)` → updated or inserted
-- [ ] Implement `ray_update` (`TD_UNARY`) — similar to select but modifies columns
-- [ ] Implement `ray_insert` (`TD_VARY`)
-- [ ] Implement `ray_upsert` (`TD_VARY`)
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): update and insert table operations`
+- [x] Implement `ray_update` (`TD_UNARY`) — similar to select but modifies columns
+- [x] Implement `ray_insert` (`TD_VARY`)
+- [x] Implement `ray_upsert` (`TD_VARY`)
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): update and insert table operations`
 
 ---
 
