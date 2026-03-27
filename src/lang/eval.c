@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <math.h>
 
+/* Maximum recursion depth for td_eval() to prevent stack overflow */
+#define TD_EVAL_MAX_DEPTH 512
+_Thread_local static int eval_depth = 0;
+
 /* ══════════════════════════════════════════
  * Arithmetic builtins
  * ══════════════════════════════════════════ */
@@ -2365,9 +2369,13 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
         [OP_TRAP_END]   = &&op_trap_end,
     };
 
-    td_vm_t vm;
-    memset(&vm, 0, sizeof(vm));
-    __VM = &vm;
+    td_t *vm_block = td_alloc(sizeof(td_vm_t));
+    if (!vm_block || TD_IS_ERR(vm_block)) return TD_ERR_PTR(TD_ERR_OOM);
+    td_vm_t *vmp = (td_vm_t *)td_data(vm_block);
+    memset(vmp, 0, sizeof(td_vm_t));
+    __VM = vmp;
+
+#define vm (*vmp)
 
     /* Set up initial frame */
     vm.fn = lambda;
@@ -2750,7 +2758,10 @@ op_ret: {
         /* Top-level return */
         td_release(vm.fn);
         __VM = NULL;
+#undef vm
+        td_free(vm_block);
         return result;  /* caller owns the POP'd reference */
+#define vm (*vmp)
     }
 
     /* Pop return frame */
@@ -2830,6 +2841,8 @@ vm_error: {
     for (int32_t i = 0; i < vm.tp; i++)
         td_release(vm.ts[i].fn);
     __VM = NULL;
+#undef vm
+    td_free(vm_block);
     return TD_ERR_PTR(TD_ERR_DOMAIN);
 }
 
@@ -2838,6 +2851,7 @@ vm_error: {
 #undef POP
 #undef PEEK
 #undef LOCAL
+#undef vm
 }
 
 /* ══════════════════════════════════════════
@@ -2975,31 +2989,38 @@ void td_lang_destroy(void) {
 td_t* td_eval(td_t* obj) {
     if (!obj || TD_IS_ERR(obj)) return obj;
 
+    if (++eval_depth > TD_EVAL_MAX_DEPTH) {
+        eval_depth--;
+        return TD_ERR_PTR(TD_ERR_LIMIT);
+    }
+
+    td_t* ret;
+
     /* Atoms: return themselves (retain) */
     if (td_is_atom(obj)) {
         /* Name reference: resolve from env */
         if (obj->type == TD_ATOM_SYM && (obj->attrs & TD_ATTR_NAME)) {
             td_t* val = td_env_get(obj->i64);
-            if (!val) return TD_ERR_PTR(TD_ERR_DOMAIN);
+            if (!val) { ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
             td_retain(val);
-            return val;
+            ret = val; goto out;
         }
         td_retain(obj);
-        return obj;
+        ret = obj; goto out;
     }
 
     /* Non-list vectors: return themselves */
-    if (obj->type != TD_LIST) { td_retain(obj); return obj; }
+    if (obj->type != TD_LIST) { td_retain(obj); ret = obj; goto out; }
 
     /* Empty list */
-    if (td_len(obj) == 0) { td_retain(obj); return obj; }
+    if (td_len(obj) == 0) { td_retain(obj); ret = obj; goto out; }
 
     /* Vector literal [x y z]: evaluate each element, return as data list */
     if (obj->attrs & TD_ATTR_VECTOR) {
         int64_t len = td_len(obj);
         td_t** src = (td_t**)td_data(obj);
         td_t* result = td_alloc(len * sizeof(td_t*));
-        if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+        if (!result) { ret = TD_ERR_PTR(TD_ERR_OOM); goto out; }
         result->type = TD_LIST;
         result->attrs = TD_ATTR_VECTOR;
         result->len = len;
@@ -3009,47 +3030,47 @@ td_t* td_eval(td_t* obj) {
             if (TD_IS_ERR(dst[i])) {
                 for (int64_t j = 0; j < i; j++) td_release(dst[j]);
                 td_release(result);
-                return dst[i];
+                ret = dst[i]; goto out;
             }
         }
-        return result;
+        ret = result; goto out;
     }
 
     /* List: evaluate first element, dispatch by type */
     td_t** elems = (td_t**)td_data(obj);
     td_t* head = td_eval(elems[0]);
-    if (TD_IS_ERR(head)) return head;
+    if (TD_IS_ERR(head)) { ret = head; goto out; }
 
     int64_t n = td_len(obj);
 
     switch (head->type) {
         case TD_ATOM_UNARY: {
-            if (n < 2) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            if (n < 2) { td_release(head); ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
             td_unary_fn fn = (td_unary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
             td_t* arg = td_eval(elems[1]);
             td_release(head);
-            if (TD_IS_ERR(arg)) return arg;
+            if (TD_IS_ERR(arg)) { ret = arg; goto out; }
             td_t* result;
             if ((fn_attrs & TD_FN_ATOMIC) && is_list(arg))
                 result = atomic_map_unary(fn, arg);
             else
                 result = fn(arg);
             td_release(arg);
-            return result;
+            ret = result; goto out;
         }
         case TD_ATOM_BINARY: {
-            if (n < 3) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            if (n < 3) { td_release(head); ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
             td_binary_fn fn = (td_binary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
             if (fn_attrs & TD_FN_SPECIAL_FORM) {
                 td_release(head);
-                return fn(elems[1], elems[2]);
+                ret = fn(elems[1], elems[2]); goto out;
             }
             td_t* left = td_eval(elems[1]);
-            if (TD_IS_ERR(left)) { td_release(head); return left; }
+            if (TD_IS_ERR(left)) { td_release(head); ret = left; goto out; }
             td_t* right = td_eval(elems[2]);
-            if (TD_IS_ERR(right)) { td_release(head); td_release(left); return right; }
+            if (TD_IS_ERR(right)) { td_release(head); td_release(left); ret = right; goto out; }
             td_release(head);
             td_t* result;
             if ((fn_attrs & TD_FN_ATOMIC) && (is_list(left) || is_list(right)))
@@ -3058,51 +3079,55 @@ td_t* td_eval(td_t* obj) {
                 result = fn(left, right);
             td_release(left);
             td_release(right);
-            return result;
+            ret = result; goto out;
         }
         case TD_ATOM_VARY: {
             td_vary_fn fn = (td_vary_fn)(uintptr_t)head->i64;
             if (head->attrs & TD_FN_SPECIAL_FORM) {
                 td_release(head);
-                return fn(elems + 1, n - 1);
+                ret = fn(elems + 1, n - 1); goto out;
             }
             int64_t argc = n - 1;
-            if (argc > 64) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            if (argc > 64) { td_release(head); ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
             td_t* args[64];
             for (int64_t i = 0; i < argc; i++) {
                 args[i] = td_eval(elems[i + 1]);
                 if (TD_IS_ERR(args[i])) {
                     for (int64_t j = 0; j < i; j++) td_release(args[j]);
                     td_release(head);
-                    return args[i];
+                    ret = args[i]; goto out;
                 }
             }
             td_release(head);
             td_t* result = fn(args, argc);
             for (int64_t i = 0; i < argc; i++) td_release(args[i]);
-            return result;
+            ret = result; goto out;
         }
         case TD_ATOM_LAMBDA: {
             int64_t argc = n - 1;
-            if (argc > 64) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            if (argc > 64) { td_release(head); ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
             td_t* args[64];
             for (int64_t i = 0; i < argc; i++) {
                 args[i] = td_eval(elems[i + 1]);
                 if (TD_IS_ERR(args[i])) {
                     for (int64_t j = 0; j < i; j++) td_release(args[j]);
                     td_release(head);
-                    return args[i];
+                    ret = args[i]; goto out;
                 }
             }
             td_t* result = call_lambda(head, args, argc);
             for (int64_t i = 0; i < argc; i++) td_release(args[i]);
             td_release(head);
-            return result;
+            ret = result; goto out;
         }
         default:
             td_release(head);
-            return TD_ERR_PTR(TD_ERR_TYPE);
+            ret = TD_ERR_PTR(TD_ERR_TYPE); goto out;
     }
+
+out:
+    eval_depth--;
+    return ret;
 }
 
 td_t* td_eval_str(const char* source) {

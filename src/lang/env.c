@@ -1,4 +1,5 @@
 #include "lang/env.h"
+#include <stdatomic.h>
 #include <string.h>
 
 /* ---- Function constructors ---- */
@@ -34,6 +35,19 @@ td_t* td_fn_vary(const char* name, uint8_t fn_attrs, td_vary_fn fn) {
 }
 
 /* ---- Global environment ---- */
+
+/* Spinlock protecting g_env mutations in td_env_set */
+static _Atomic(int) g_env_lock = 0;
+static inline void env_lock(void) {
+    while (atomic_exchange_explicit(&g_env_lock, 1, memory_order_acquire)) {
+#if defined(__x86_64__) || defined(__i386__)
+        __builtin_ia32_pause();
+#endif
+    }
+}
+static inline void env_unlock(void) {
+    atomic_store_explicit(&g_env_lock, 0, memory_order_release);
+}
 
 #define ENV_CAP 512
 
@@ -88,19 +102,25 @@ td_t* td_env_get(int64_t sym_id) {
 }
 
 td_err_t td_env_set(int64_t sym_id, td_t* val) {
+    env_lock();
     for (int32_t i = 0; i < g_env.count; i++) {
         if (g_env.keys[i] == sym_id) {
             if (g_env.vals[i]) td_release(g_env.vals[i]);
             td_retain(val);
             g_env.vals[i] = val;
+            env_unlock();
             return TD_OK;
         }
     }
-    if (g_env.count >= ENV_CAP) return TD_ERR_OOM;
+    if (g_env.count >= ENV_CAP) {
+        env_unlock();
+        return TD_ERR_OOM;
+    }
     g_env.keys[g_env.count] = sym_id;
     td_retain(val);
     g_env.vals[g_env.count] = val;
     g_env.count++;
+    env_unlock();
     return TD_OK;
 }
 

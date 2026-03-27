@@ -201,7 +201,23 @@ typedef union td_t* (*td_vary_fn)(union td_t**, int64_t);
 /* Number of types (positive range): must be > max type ID */
 #define TD_TYPE_COUNT 22
 
-/* ===== Attribute Flags ===== */
+/* ===== Attribute Flags =====
+ *
+ * The `attrs` byte in td_t is type-namespaced: the same bit positions carry
+ * different meanings depending on the object's type tag.
+ *
+ *   Bits 0x01-0x03  TD_SYM vectors:  sym index width (TD_SYM_W8/W16/W32/W64)
+ *   Bits 0x01-0x10  function atoms (TD_ATOM_UNARY/BINARY/VARY): TD_FN_* flags
+ *   Bits 0x01-0x02  TD_LIST atoms:   TD_ATTR_VECTOR / TD_ATTR_DICT
+ *   Bit  0x10       vectors:         TD_ATTR_SLICE
+ *   Bit  0x20       vectors:         TD_ATTR_NULLMAP_EXT
+ *   Bit  0x20       TD_ATOM_SYM:     TD_ATTR_NAME (variable reference)
+ *   Bit  0x40       vectors:         TD_ATTR_HAS_NULLS
+ *   Bit  0x80       all types:       TD_ATTR_ARENA (arena-allocated, no refcount)
+ *
+ * Overlapping bit values are safe because consumers always check the type tag
+ * before interpreting attrs.
+ */
 
 #define TD_ATTR_SLICE        0x10
 #define TD_ATTR_NULLMAP_EXT  0x20
@@ -248,7 +264,8 @@ typedef enum {
     TD_ERR_SCHEMA,
     TD_ERR_CORRUPT,
     TD_ERR_CANCEL,
-    TD_ERR_PARSE
+    TD_ERR_PARSE,
+    TD_ERR_LIMIT
 } td_err_t;
 
 #define TD_ERR_PTR(e)   ((td_t*)(uintptr_t)(e))
