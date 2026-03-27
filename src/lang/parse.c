@@ -115,7 +115,7 @@ static td_t* parse_string(td_parser_t *p) {
     size_t raw_len = (size_t)(scan - start);
     if (*scan != '"') return TD_ERR_PTR(TD_ERR_PARSE); /* unterminated string */
     scan++;
-    p->pos = (char *)scan;
+    p->pos = scan;
 
     if (!has_escape) return td_str(start, raw_len);
 

@@ -2709,8 +2709,9 @@ op_calld: {
 
     td_t *call_list = td_alloc((n + 1) * sizeof(td_t *));
     if (!call_list || TD_IS_ERR(call_list)) {
-        PUSH(TD_ERR_PTR(TD_ERR_OOM));
-        DISPATCH();
+        for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+        td_release(fn_obj);
+        goto vm_error;
     }
     call_list->type = TD_LIST;
     call_list->len = n + 1;
@@ -2962,6 +2963,7 @@ td_err_t td_lang_init(void) {
 }
 
 void td_lang_destroy(void) {
+    if (__raise_val) { td_release(__raise_val); __raise_val = NULL; }
     td_env_destroy();
     td_compile_reset();
 }
