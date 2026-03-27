@@ -1706,7 +1706,7 @@ static td_t* ray_window_join(td_t** args, int64_t n) {
  * ══════════════════════════════════════════ */
 
 /* Helper: print a td_t value to a file handle */
-static void print_value(FILE* fp, td_t* val) {
+void td_lang_print(FILE* fp, td_t* val) {
     if (!val || TD_IS_ERR(val)) { fprintf(fp, "error"); return; }
     switch (val->type) {
     case TD_ATOM_I64:  fprintf(fp, "%ld", (long)val->i64); break;
@@ -1730,7 +1730,7 @@ static void print_value(FILE* fp, td_t* val) {
         td_t** elems = (td_t**)td_data(val);
         for (int64_t i = 0; i < len; i++) {
             if (i > 0) fprintf(fp, " ");
-            print_value(fp, elems[i]);
+            td_lang_print(fp, elems[i]);
         }
         fprintf(fp, "]");
         break;
@@ -1749,7 +1749,7 @@ static void print_value(FILE* fp, td_t* val) {
 static td_t* ray_println(td_t** args, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) fputc(' ', stdout);
-        print_value(stdout, args[i]);
+        td_lang_print(stdout, args[i]);
     }
     fputc('\n', stdout);
     fflush(stdout);

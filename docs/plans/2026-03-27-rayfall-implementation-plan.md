@@ -438,18 +438,18 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Create `src/lang/repl.c`; Modify `CMakeLists.txt`
 
-- [ ] Create `src/lang/repl.c`:
+- [x] Create `src/lang/repl.c`:
   - `main()`: init heap, sym, lang
   - File mode: `argc > 1` → read file, eval
   - REPL mode: `fgets` loop, `td_eval_str(line)`, print result
   - Cleanup: `td_lang_destroy`, `td_sym_destroy`, `td_heap_destroy`
-- [ ] Add to `CMakeLists.txt`:
+- [x] Add to `CMakeLists.txt`:
   - `add_executable(teide_repl src/lang/repl.c)`
   - `target_link_libraries(teide_repl PRIVATE teide_static)`
-- [ ] Build: `cmake --build build`
-- [ ] Smoke test: `echo '(+ 1 2)' | ./build/teide_repl` → outputs `3`
-- [ ] Smoke test: `echo '(sum [1 2 3 4 5])' | ./build/teide_repl` → outputs `15`
-- [ ] Commit: `feat(lang): Rayfall REPL binary`
+- [x] Build: `cmake --build build`
+- [x] Smoke test: `echo '(+ 1 2)' | ./build/teide_repl` → outputs `3`
+- [x] Smoke test: `echo '(sum [1 2 3 4 5])' | ./build/teide_repl` → outputs `15`
+- [x] Commit: `feat(lang): Rayfall REPL binary`
 
 ---
 

@@ -10,6 +10,7 @@ option(TEIDE_WERROR "Treat warnings as errors" OFF)
 
 # Collect all source files under src/
 file(GLOB_RECURSE TEIDE_SOURCES CONFIGURE_DEPENDS "src/**/*.c")
+list(FILTER TEIDE_SOURCES EXCLUDE REGEX "src/lang/repl\\.c$")
 
 # Static library
 add_library(teide_static STATIC ${TEIDE_SOURCES})
@@ -60,6 +61,21 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(teide_static PUBLIC m pthread)
     target_link_libraries(teide PUBLIC m pthread)
+endif()
+
+# Rayfall REPL binary
+add_executable(teide_repl src/lang/repl.c)
+target_link_libraries(teide_repl PRIVATE teide_static)
+target_include_directories(teide_repl PRIVATE include src)
+target_compile_options(teide_repl PRIVATE ${TEIDE_WARNINGS})
+target_compile_options(teide_repl PRIVATE
+    $<$<CONFIG:Debug>:${TEIDE_DEBUG_FLAGS}>
+    $<$<CONFIG:Release>:${TEIDE_RELEASE_FLAGS}>
+)
+if(NOT MSVC)
+    target_link_options(teide_repl PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    )
 endif()
 
 # Fuzz targets (requires clang with libFuzzer)
