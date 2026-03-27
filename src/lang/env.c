@@ -43,12 +43,29 @@ static struct {
     int32_t count;
 } g_env;
 
+/* ---- Local scope stack ---- */
+
+#define SCOPE_CAP  64
+#define FRAME_CAP  64
+
+typedef struct {
+    int64_t keys[FRAME_CAP];
+    td_t*   vals[FRAME_CAP];
+    int32_t count;
+} td_scope_frame_t;
+
+static td_scope_frame_t scope_stack[SCOPE_CAP];
+static int32_t scope_depth = 0;
+
 td_err_t td_env_init(void) {
     memset(&g_env, 0, sizeof(g_env));
+    scope_depth = 0;
     return TD_OK;
 }
 
 void td_env_destroy(void) {
+    /* Pop any remaining scopes */
+    while (scope_depth > 0) td_env_pop_scope();
     for (int32_t i = 0; i < g_env.count; i++) {
         if (g_env.vals[i]) td_release(g_env.vals[i]);
     }
@@ -56,6 +73,14 @@ void td_env_destroy(void) {
 }
 
 td_t* td_env_get(int64_t sym_id) {
+    /* Search local scopes top-down first */
+    for (int32_t d = scope_depth - 1; d >= 0; d--) {
+        td_scope_frame_t* f = &scope_stack[d];
+        for (int32_t i = 0; i < f->count; i++) {
+            if (f->keys[i] == sym_id) return f->vals[i];
+        }
+    }
+    /* Fall through to global */
     for (int32_t i = 0; i < g_env.count; i++) {
         if (g_env.keys[i] == sym_id) return g_env.vals[i];
     }
@@ -76,5 +101,42 @@ void td_env_set(int64_t sym_id, td_t* val) {
         td_retain(val);
         g_env.vals[g_env.count] = val;
         g_env.count++;
+    }
+}
+
+void td_env_push_scope(void) {
+    if (scope_depth < SCOPE_CAP) {
+        scope_stack[scope_depth].count = 0;
+        scope_depth++;
+    }
+}
+
+void td_env_pop_scope(void) {
+    if (scope_depth <= 0) return;
+    scope_depth--;
+    td_scope_frame_t* f = &scope_stack[scope_depth];
+    for (int32_t i = 0; i < f->count; i++) {
+        if (f->vals[i]) td_release(f->vals[i]);
+    }
+    f->count = 0;
+}
+
+void td_env_set_local(int64_t sym_id, td_t* val) {
+    if (scope_depth <= 0) { td_env_set(sym_id, val); return; }
+    td_scope_frame_t* f = &scope_stack[scope_depth - 1];
+    /* Update existing in this frame */
+    for (int32_t i = 0; i < f->count; i++) {
+        if (f->keys[i] == sym_id) {
+            if (f->vals[i]) td_release(f->vals[i]);
+            td_retain(val);
+            f->vals[i] = val;
+            return;
+        }
+    }
+    if (f->count < FRAME_CAP) {
+        f->keys[f->count] = sym_id;
+        td_retain(val);
+        f->vals[f->count] = val;
+        f->count++;
     }
 }

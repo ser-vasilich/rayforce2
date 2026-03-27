@@ -253,6 +253,54 @@ static MunitResult test_eval_cmp(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: eval set ---- */
+static MunitResult test_eval_set(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (set x 10) x)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 10);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval if true ---- */
+static MunitResult test_eval_if_true(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(if true 1 2)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 1);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval if false ---- */
+static MunitResult test_eval_if_false(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(if false 1 2)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 2);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval let ---- */
+static MunitResult test_eval_let(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (let x 5) (+ x 3))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 8);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -274,6 +322,10 @@ static MunitTest lang_tests[] = {
     { "/eval/sub",          test_eval_sub,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/div",          test_eval_div,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/cmp",          test_eval_cmp,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/set",          test_eval_set,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/if_true",      test_eval_if_true,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/if_false",     test_eval_if_false,     lang_setup, lang_teardown, 0, NULL },
+    { "/eval/let",          test_eval_let,          lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

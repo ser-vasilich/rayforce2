@@ -34,7 +34,7 @@ cd build && ctest --output-on-failure
 
 **Files:** Modify `include/teide/td.h`
 
-- [ ] Add type tag defines after `TD_STR 21` (around line 128):
+- [x] Add type tag defines after `TD_STR 21` (around line 128):
   - `TD_LAMBDA 100`, `TD_UNARY 101`, `TD_BINARY 102`, `TD_VARY 103`
   - `TD_ATOM_LAMBDA (-100)`, `TD_ATOM_UNARY (-101)`, `TD_ATOM_BINARY (-102)`, `TD_ATOM_VARY (-103)`
   - `TD_FN_NONE 0x00`, `TD_FN_LEFT_ATOMIC 0x01`, `TD_FN_RIGHT_ATOMIC 0x02`, `TD_FN_ATOMIC 0x04`, `TD_FN_AGGR 0x08`, `TD_FN_SPECIAL_FORM 0x10`
@@ -42,9 +42,9 @@ cd build && ctest --output-on-failure
   - `typedef td_t* (*td_unary_fn)(td_t*)`
   - `typedef td_t* (*td_binary_fn)(td_t*, td_t*)`
   - `typedef td_t* (*td_vary_fn)(td_t**, int64_t)`
-- [ ] Verify build: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`
-- [ ] Run existing tests: `cd build && ctest --output-on-failure` — all pass, no regressions
-- [ ] Commit: `feat(lang): add TD_UNARY/TD_BINARY/TD_VARY/TD_LAMBDA type tags and FN_* flags`
+- [x] Verify build: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build`
+- [x] Run existing tests: `cd build && ctest --output-on-failure` — all pass, no regressions
+- [x] Commit: `feat(lang): add TD_UNARY/TD_BINARY/TD_VARY/TD_LAMBDA type tags and FN_* flags`
 
 ---
 
@@ -52,20 +52,20 @@ cd build && ctest --output-on-failure
 
 **Files:** Create `src/lang/env.h`, `src/lang/env.c`, `test/test_lang.c`; Modify `test/test_main.c`
 
-- [ ] Write `test/test_lang.c` with setup/teardown (`td_heap_init`/`td_sym_init`) and tests:
+- [x] Write `test/test_lang.c` with setup/teardown (`td_heap_init`/`td_sym_init`) and tests:
   - `test_fn_unary` — creates `TD_ATOM_UNARY` object, checks type + attrs
   - `test_fn_binary` — creates `TD_ATOM_BINARY` object
   - `test_fn_vary` — creates `TD_ATOM_VARY` object
-- [ ] Register `test_lang_suite` in `test/test_main.c` (extern + child_suites)
-- [ ] Run tests, verify linker failure (functions don't exist yet)
-- [ ] Create `src/lang/env.h`:
+- [x] Register `test_lang_suite` in `test/test_main.c` (extern + child_suites)
+- [x] Run tests, verify linker failure (functions don't exist yet)
+- [x] Create `src/lang/env.h`:
   - `td_fn_unary(name, fn_attrs, fn)` / `td_fn_binary(...)` / `td_fn_vary(...)`
   - `td_env_init()` / `td_env_destroy()` / `td_env_get(sym_id)` / `td_env_set(sym_id, val)`
-- [ ] Create `src/lang/env.c`:
+- [x] Create `src/lang/env.c`:
   - Function constructors: `td_alloc(0)`, set `type = TD_ATOM_UNARY/...`, store fn pointer in `i64` field
   - Global env: fixed-size array of `{key, val}` pairs, linear scan (512 slots)
-- [ ] Run tests: `./build/test_teide --suite /lang` — 3/3 pass
-- [ ] Commit: `feat(lang): function object constructors and global environment`
+- [x] Run tests: `./build/test_teide --suite /lang` — 3/3 pass
+- [x] Commit: `feat(lang): function object constructors and global environment`
 
 ---
 
@@ -75,16 +75,16 @@ cd build && ctest --output-on-failure
 
 **Files:** Create `src/lang/parse.h`, `src/lang/parse.c`; Modify `test/test_lang.c`
 
-- [ ] Add lexer tests to `test/test_lang.c`:
+- [x] Add lexer tests to `test/test_lang.c`:
   - `test_lex_i64` — `td_parse("42")` → `TD_ATOM_I64`, value 42
   - `test_lex_neg_i64` — `td_parse("-7")` → value -7
   - `test_lex_f64` — `td_parse("3.14")` → `TD_ATOM_F64`, value 3.14
   - `test_lex_string` — `td_parse("\"hello\"")` → `TD_ATOM_STR`
   - `test_lex_symbol` — `td_parse("'AAPL")` → `TD_ATOM_SYM`
   - `test_lex_bool` — `td_parse("true")` → `TD_ATOM_BOOL` b8=1, `td_parse("false")` → b8=0
-- [ ] Run tests, verify linker failure (`td_parse` not found)
-- [ ] Create `src/lang/parse.h`: declare `td_t* td_parse(const char* source)`
-- [ ] Create `src/lang/parse.c`:
+- [x] Run tests, verify linker failure (`td_parse` not found)
+- [x] Create `src/lang/parse.h`: declare `td_t* td_parse(const char* source)`
+- [x] Create `src/lang/parse.c`:
   - 128-byte `_PA[]` ASCII dispatch table (reference: kdb `parse.c:25-66`)
   - `PA(c)` macro: single indexed read, zero branches
   - Actions: `PA_DIGIT`, `PA_ALPHA`, `PA_STRING`, `PA_QUOTE`, `PA_LPAREN/RPAREN`, `PA_LBRACK/RBRACK`, `PA_LBRACE/RBRACE`, `PA_COLON`, `PA_WS`, `PA_END`, `PA_MINUS`, `PA_SEMI`
@@ -99,8 +99,8 @@ cd build && ctest --output-on-failure
   - `parse_list()` — `(expr ...)` → list
   - `parse_expr()` — dispatch via `PA(*pos)` switch
   - `td_parse()` — public entry, creates parser state, calls `parse_expr`
-- [ ] Run tests: `./build/test_teide --suite /lang/lex` — all pass
-- [ ] Commit: `feat(lang): lexer with ASCII dispatch table and recursive descent parser`
+- [x] Run tests: `./build/test_teide --suite /lang/lex` — all pass
+- [x] Commit: `feat(lang): lexer with ASCII dispatch table and recursive descent parser`
 
 ---
 
@@ -108,13 +108,13 @@ cd build && ctest --output-on-failure
 
 **Files:** Modify `test/test_lang.c`
 
-- [ ] Add parse tests:
+- [x] Add parse tests:
   - `test_parse_sexpr` — `td_parse("(+ 1 2)")` → `TD_LIST`, len 3
   - `test_parse_nested` — `td_parse("(+ (* 2 3) 4)")` → outer list len 3, second elem is list len 3
   - `test_parse_vector` — `td_parse("[1 2 3]")` → list/vector len 3
   - `test_parse_empty_list` — `td_parse("()")` → `TD_LIST`, len 0
-- [ ] Run tests: `./build/test_teide --suite /lang/parse` — all pass
-- [ ] Commit: `test(lang): s-expression and vector parsing tests`
+- [x] Run tests: `./build/test_teide --suite /lang/parse` — all pass
+- [x] Commit: `test(lang): s-expression and vector parsing tests`
 
 ---
 
@@ -158,18 +158,18 @@ cd build && ctest --output-on-failure
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_set` — `(do (set x 10) x)` → i64 10
   - `test_eval_if_true` — `(if true 1 2)` → i64 1
   - `test_eval_if_false` — `(if false 1 2)` → i64 2
   - `test_eval_let` — `(do (let x 5) (+ x 3))` → i64 8
-- [ ] Implement `ray_set` (`FN_SPECIAL_FORM, TD_BINARY`) — eval value, store in global env
-- [ ] Implement `ray_let` (`FN_SPECIAL_FORM, TD_BINARY`) — eval value, store in local scope
-- [ ] Implement `ray_cond` / `if` (`FN_SPECIAL_FORM, TD_VARY`) — eval condition, branch
-- [ ] Implement `ray_do` (`FN_SPECIAL_FORM, TD_VARY`) — eval each expr in sequence, return last
-- [ ] Register all in `td_lang_init()`
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): set/let variable binding and if/do control flow`
+- [x] Implement `ray_set` (`FN_SPECIAL_FORM, TD_BINARY`) — eval value, store in global env
+- [x] Implement `ray_let` (`FN_SPECIAL_FORM, TD_BINARY`) — eval value, store in local scope
+- [x] Implement `ray_cond` / `if` (`FN_SPECIAL_FORM, TD_VARY`) — eval condition, branch
+- [x] Implement `ray_do` (`FN_SPECIAL_FORM, TD_VARY`) — eval each expr in sequence, return last
+- [x] Register all in `td_lang_init()`
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): set/let variable binding and if/do control flow`
 
 ---
 

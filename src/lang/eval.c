@@ -129,6 +129,63 @@ static td_t* ray_neg(td_t* x) {
 }
 
 /* ══════════════════════════════════════════
+ * Special forms: set, let, if, do
+ * ══════════════════════════════════════════ */
+
+/* (set name value) — bind in global env. Receives unevaluated args. */
+static td_t* ray_set(td_t* name_obj, td_t* val_expr) {
+    if (name_obj->type != TD_ATOM_SYM)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    td_t* val = td_eval(val_expr);
+    if (TD_IS_ERR(val)) return val;
+    td_env_set(name_obj->i64, val);
+    return val;  /* set returns the value */
+}
+
+/* (let name value) — bind in local scope. Receives unevaluated args. */
+static td_t* ray_let(td_t* name_obj, td_t* val_expr) {
+    if (name_obj->type != TD_ATOM_SYM)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    td_t* val = td_eval(val_expr);
+    if (TD_IS_ERR(val)) return val;
+    td_env_set_local(name_obj->i64, val);
+    return val;
+}
+
+/* (if cond then else?) — conditional. Receives unevaluated args. */
+static td_t* ray_cond(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* cond = td_eval(args[0]);
+    if (TD_IS_ERR(cond)) return cond;
+    int truthy = 0;
+    if (cond->type == TD_ATOM_BOOL) truthy = cond->b8;
+    else if (cond->type == TD_ATOM_I64) truthy = cond->i64 != 0;
+    else truthy = 1;  /* non-null is truthy */
+    td_release(cond);
+    if (truthy) return td_eval(args[1]);
+    if (n >= 3) return td_eval(args[2]);
+    /* No else branch: return 0 */
+    return make_i64(0);
+}
+
+/* (do expr1 expr2 ...) — evaluate in sequence, return last. Pushes local scope. */
+static td_t* ray_do(td_t** args, int64_t n) {
+    if (n == 0) return make_i64(0);
+    td_env_push_scope();
+    td_t* result = NULL;
+    for (int64_t i = 0; i < n; i++) {
+        if (result) td_release(result);
+        result = td_eval(args[i]);
+        if (TD_IS_ERR(result)) {
+            td_env_pop_scope();
+            return result;
+        }
+    }
+    td_env_pop_scope();
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -142,6 +199,13 @@ static void register_binary(const char* name, uint8_t attrs, td_binary_fn fn) {
 static void register_unary(const char* name, uint8_t attrs, td_unary_fn fn) {
     int64_t sym = td_sym_intern(name, strlen(name));
     td_t* obj = td_fn_unary(name, attrs, fn);
+    td_env_set(sym, obj);
+    td_release(obj);
+}
+
+static void register_vary(const char* name, uint8_t attrs, td_vary_fn fn) {
+    int64_t sym = td_sym_intern(name, strlen(name));
+    td_t* obj = td_fn_vary(name, attrs, fn);
     td_env_set(sym, obj);
     td_release(obj);
 }
@@ -162,6 +226,12 @@ static void td_register_builtins(void) {
     register_binary("or",  TD_FN_NONE,   ray_or);
     register_unary("not",  TD_FN_NONE,   ray_not);
     register_unary("neg",  TD_FN_ATOMIC, ray_neg);
+
+    /* Special forms */
+    register_binary("set", TD_FN_SPECIAL_FORM, ray_set);
+    register_binary("let", TD_FN_SPECIAL_FORM, ray_let);
+    register_vary("if",    TD_FN_SPECIAL_FORM, ray_cond);
+    register_vary("do",    TD_FN_SPECIAL_FORM, ray_do);
 }
 
 /* ══════════════════════════════════════════
