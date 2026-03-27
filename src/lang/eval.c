@@ -278,244 +278,404 @@ static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
 }
 
 /* ══════════════════════════════════════════
- * Stack-based VM executor (bytecode interpreter)
+ * Stack-based VM executor (computed goto, frame-based)
  * ══════════════════════════════════════════ */
 
-#define VM_STACK_SIZE 256
+static _Thread_local td_vm_t *__VM = NULL;
 
 static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
-    td_t* bc_vec = LAMBDA_BC(lambda);
-    td_t* consts = LAMBDA_CONSTS(lambda);
+    /* Computed goto dispatch table */
+    static void *dispatch[OP__COUNT] = {
+        [OP_RET]        = &&op_ret,
+        [OP_JMP]        = &&op_jmp,
+        [OP_JMPF]       = &&op_jmpf,
+        [OP_LOADCONST]  = &&op_loadconst,
+        [OP_LOADENV]    = &&op_loadenv,
+        [OP_STOREENV]   = &&op_storeenv,
+        [OP_POP]        = &&op_pop,
+        [OP_RESOLVE]    = &&op_resolve,
+        [OP_CALL1]      = &&op_call1,
+        [OP_CALL2]      = &&op_call2,
+        [OP_CALLN]      = &&op_calln,
+        [OP_CALLF]      = &&op_callf,
+        [OP_CALLS]      = &&op_calls,
+        [OP_CALLD]      = &&op_calld,
+        [OP_DUP]        = &&op_dup,
+        [OP_LOADCONST_W] = &&op_loadconst_w,
+    };
+
+    td_vm_t vm;
+    memset(&vm, 0, sizeof(vm));
+    __VM = &vm;
+
+    /* Set up initial frame */
+    vm.fn = lambda;
+    td_retain(lambda);
     int32_t n_locals = LAMBDA_NLOCALS(lambda);
-    td_t* params_list = LAMBDA_PARAMS(lambda);
-
-    uint8_t* code = (uint8_t*)td_data(bc_vec);
-    td_t** cpool = (td_t**)td_data(consts);
-
-    /* Stack and locals */
-    td_t* stack[VM_STACK_SIZE];
-    int32_t sp = 0;
-
-    td_t* locals[256];
-    memset(locals, 0, n_locals * sizeof(td_t*));
+    vm.fp = 0;
+    vm.sp = n_locals;
 
     /* Bind parameters into local slots */
-    int64_t param_count = td_len(params_list);
+    int64_t param_count = td_len(LAMBDA_PARAMS(lambda));
     for (int64_t i = 0; i < param_count && i < argc; i++) {
         td_retain(call_args[i]);
-        locals[i] = call_args[i];
+        vm.ps[i] = call_args[i];
     }
 
+    uint8_t *code = (uint8_t *)td_data(LAMBDA_BC(lambda));
+    td_t **cpool = (td_t **)td_data(LAMBDA_CONSTS(lambda));
     int32_t ip = 0;
 
-    for (;;) {
-        uint8_t op = code[ip++];
-        switch (op) {
+#define DISPATCH() goto *dispatch[code[ip++]]
+#define PUSH(v)    (vm.ps[vm.sp++] = (v))
+#define POP()      (vm.ps[--vm.sp])
+#define PEEK()     (vm.ps[vm.sp - 1])
+#define LOCAL(s)   (vm.ps[vm.fp + (s)])
 
-        case OP_RET: {
-            td_t* result = (sp > 0) ? stack[--sp] : make_i64(0);
-            /* Release remaining stack and locals */
-            for (int32_t i = 0; i < sp; i++)
-                if (stack[i]) td_release(stack[i]);
-            for (int32_t i = 0; i < n_locals; i++)
-                if (locals[i]) td_release(locals[i]);
-            return result;
-        }
+    DISPATCH();
 
-        case OP_LOADCONST: {
-            uint8_t idx = code[ip++];
-            td_t* val = cpool[idx];
-            td_retain(val);
-            stack[sp++] = val;
-            break;
-        }
+op_loadconst: {
+    uint8_t idx = code[ip++];
+    td_t *val = cpool[idx];
+    td_retain(val);
+    PUSH(val);
+    DISPATCH();
+}
 
-        case OP_LOADCONST_W: {
-            uint16_t idx = (uint16_t)(code[ip] << 8) | code[ip + 1];
-            ip += 2;
-            td_t* val = cpool[idx];
-            td_retain(val);
-            stack[sp++] = val;
-            break;
-        }
+op_loadconst_w: {
+    uint16_t idx = (uint16_t)(code[ip] << 8) | code[ip + 1];
+    ip += 2;
+    td_t *val = cpool[idx];
+    td_retain(val);
+    PUSH(val);
+    DISPATCH();
+}
 
-        case OP_LOADENV: {
-            uint8_t slot = code[ip++];
-            td_t* val = locals[slot];
-            if (val) td_retain(val);
-            else val = make_i64(0);
-            stack[sp++] = val;
-            break;
-        }
+op_loadenv: {
+    uint8_t slot = code[ip++];
+    td_t *val = LOCAL(slot);
+    if (val) td_retain(val);
+    else val = make_i64(0);
+    PUSH(val);
+    DISPATCH();
+}
 
-        case OP_STOREENV: {
-            uint8_t slot = code[ip++];
-            td_t* val = stack[--sp];
-            if (locals[slot]) td_release(locals[slot]);
-            locals[slot] = val;
-            /* Store does NOT consume the value from perspective of the
-             * expression — but our compiler emits DUP before STOREENV
-             * when the value is needed. So here we just store. */
-            break;
-        }
+op_storeenv: {
+    uint8_t slot = code[ip++];
+    td_t *val = POP();
+    if (LOCAL(slot)) td_release(LOCAL(slot));
+    LOCAL(slot) = val;
+    DISPATCH();
+}
 
-        case OP_POP: {
-            if (sp > 0) {
-                td_t* val = stack[--sp];
-                if (val) td_release(val);
-            }
-            break;
-        }
+op_pop: {
+    if (vm.sp > vm.fp + n_locals) {
+        td_t *val = POP();
+        if (val) td_release(val);
+    }
+    DISPATCH();
+}
 
-        case OP_DUP: {
-            td_t* val = stack[sp - 1];
-            td_retain(val);
-            stack[sp++] = val;
-            break;
-        }
+op_dup: {
+    td_t *val = PEEK();
+    td_retain(val);
+    PUSH(val);
+    DISPATCH();
+}
 
-        case OP_RESOLVE: {
-            uint8_t idx = code[ip++];
-            td_t* name_obj = cpool[idx];
-            td_t* val = td_env_get(name_obj->i64);
-            if (!val) {
-                for (int32_t i = 0; i < sp; i++)
-                    if (stack[i]) td_release(stack[i]);
-                for (int32_t i = 0; i < n_locals; i++)
-                    if (locals[i]) td_release(locals[i]);
-                return TD_ERR_PTR(TD_ERR_DOMAIN);
-            }
-            td_retain(val);
-            stack[sp++] = val;
-            break;
-        }
+op_resolve: {
+    uint8_t idx = code[ip++];
+    td_t *name_obj = cpool[idx];
+    td_t *val = td_env_get(name_obj->i64);
+    if (!val) goto vm_error;
+    td_retain(val);
+    PUSH(val);
+    DISPATCH();
+}
 
-        case OP_JMP: {
-            int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
-            ip += 2;
-            ip += offset;
-            break;
-        }
+op_jmp: {
+    int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
+    ip += 2;
+    ip += offset;
+    DISPATCH();
+}
 
-        case OP_JMPF: {
-            int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
-            ip += 2;
-            td_t* cond = stack[--sp];
-            int truthy = 0;
-            if (cond->type == TD_ATOM_BOOL) truthy = cond->b8;
-            else if (cond->type == TD_ATOM_I64) truthy = cond->i64 != 0;
-            else truthy = 1;
-            td_release(cond);
-            if (!truthy) ip += offset;
-            break;
-        }
+op_jmpf: {
+    int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
+    ip += 2;
+    td_t *cond = POP();
+    int truthy = 0;
+    if (cond->type == TD_ATOM_BOOL) truthy = cond->b8;
+    else if (cond->type == TD_ATOM_I64) truthy = cond->i64 != 0;
+    else truthy = 1;
+    td_release(cond);
+    if (!truthy) ip += offset;
+    DISPATCH();
+}
 
-        case OP_CALL1: {
-            td_t* arg = stack[--sp];
-            td_t* fn_obj = stack[--sp];
-            td_unary_fn fn = (td_unary_fn)(uintptr_t)fn_obj->i64;
-            td_t* result = fn(arg);
-            td_release(arg);
-            td_release(fn_obj);
-            stack[sp++] = result;
-            break;
-        }
+op_call1: {
+    td_t *arg = POP();
+    td_t *fn_obj = POP();
+    td_unary_fn fn = (td_unary_fn)(uintptr_t)fn_obj->i64;
+    td_t *result = fn(arg);
+    td_release(arg);
+    td_release(fn_obj);
+    PUSH(result);
+    DISPATCH();
+}
 
-        case OP_CALL2: {
-            td_t* right = stack[--sp];
-            td_t* left = stack[--sp];
-            td_t* fn_obj = stack[--sp];
+op_call2: {
+    td_t *right = POP();
+    td_t *left = POP();
+    td_t *fn_obj = POP();
+    td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
+    td_t *result = fn(left, right);
+    td_release(left);
+    td_release(right);
+    td_release(fn_obj);
+    PUSH(result);
+    DISPATCH();
+}
 
-            if (fn_obj->attrs & TD_FN_SPECIAL_FORM) {
-                /* Special forms receive unevaluated args — but in VM
-                 * context args are already evaluated. For binary special
-                 * forms like set/let this path shouldn't be hit (they're
-                 * compiled to STOREENV). Use direct call. */
-                td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
-                td_t* result = fn(left, right);
-                td_release(left);
-                td_release(right);
-                td_release(fn_obj);
-                stack[sp++] = result;
-            } else {
-                td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
-                td_t* result = fn(left, right);
-                td_release(left);
-                td_release(right);
-                td_release(fn_obj);
-                stack[sp++] = result;
-            }
-            break;
-        }
+op_calln: {
+    uint8_t n = code[ip++];
+    td_t *fn_args[64];
+    for (int32_t i = n - 1; i >= 0; i--)
+        fn_args[i] = POP();
+    td_t *fn_obj = POP();
+    td_vary_fn fn = (td_vary_fn)(uintptr_t)fn_obj->i64;
+    td_t *result = fn(fn_args, n);
+    for (int32_t i = 0; i < n; i++)
+        td_release(fn_args[i]);
+    td_release(fn_obj);
+    PUSH(result);
+    DISPATCH();
+}
 
-        case OP_CALLN: {
-            uint8_t n = code[ip++];
-            td_t* args[64];
-            for (int32_t i = n - 1; i >= 0; i--)
-                args[i] = stack[--sp];
-            td_t* fn_obj = stack[--sp];
-            td_vary_fn fn = (td_vary_fn)(uintptr_t)fn_obj->i64;
-            td_t* result = fn(args, n);
-            for (int32_t i = 0; i < n; i++)
-                td_release(args[i]);
-            td_release(fn_obj);
-            stack[sp++] = result;
-            break;
-        }
+op_callf: {
+    uint8_t n = code[ip++];
+    td_t *fn_args[64];
+    for (int32_t i = n - 1; i >= 0; i--)
+        fn_args[i] = POP();
+    td_t *fn_obj = POP();
 
-        case OP_CALLF: {
-            /* Call a compiled lambda — recursive vm_exec for now.
-             * Full frame-based dispatch comes in Task 4.2. */
-            uint8_t n = code[ip++];
-            td_t* args[64];
-            for (int32_t i = n - 1; i >= 0; i--)
-                args[i] = stack[--sp];
-            td_t* fn_obj = stack[--sp];
-            td_t* result = call_lambda(fn_obj, args, n);
-            for (int32_t i = 0; i < n; i++)
-                td_release(args[i]);
-            td_release(fn_obj);
-            stack[sp++] = result;
-            break;
-        }
+    /* Compiled lambda: push frame, switch to callee bytecode */
+    if (fn_obj->type == TD_ATOM_LAMBDA) {
+        if (!LAMBDA_IS_COMPILED(fn_obj))
+            td_compile(fn_obj);
 
-        case OP_CALLD: {
-            /* Dynamic dispatch — build a list and pass to td_eval */
-            uint8_t n = code[ip++];
-            td_t* args[64];
-            for (int32_t i = n - 1; i >= 0; i--)
-                args[i] = stack[--sp];
-            td_t* fn_obj = stack[--sp];
+        if (LAMBDA_IS_COMPILED(fn_obj)) {
+            /* Push return frame */
+            vm.rs[vm.rp++] = (vm_ctx_t){ .fn = vm.fn, .fp = vm.fp, .ip = ip };
 
-            /* Build call list: (fn arg1 arg2 ...) */
-            td_t* call_list = td_alloc((n + 1) * sizeof(td_t*));
-            call_list->type = TD_LIST;
-            call_list->len = n + 1;
-            td_t** elems = (td_t**)td_data(call_list);
-            elems[0] = fn_obj;  /* already retained from stack */
-            for (int32_t i = 0; i < n; i++)
-                elems[i + 1] = args[i];
+            /* Set up new frame */
+            vm.fn = fn_obj;  /* takes ownership of stack ref */
+            vm.fp = vm.sp;
+            int32_t callee_locals = LAMBDA_NLOCALS(fn_obj);
+            vm.sp += callee_locals;
+            n_locals = callee_locals;
 
-            td_t* result = td_eval(call_list);
-            td_release(call_list);
-            stack[sp++] = result;
-            break;
-        }
+            /* Bind parameters */
+            int64_t pcnt = td_len(LAMBDA_PARAMS(fn_obj));
+            int64_t bind = pcnt < n ? pcnt : n;
+            for (int64_t i = 0; i < bind; i++)
+                LOCAL(i) = fn_args[i];  /* transfer ownership from args */
+            for (int32_t i = (int32_t)bind; i < callee_locals; i++)
+                LOCAL(i) = NULL;
+            for (int64_t i = bind; i < n; i++)
+                td_release(fn_args[i]);  /* excess args */
 
-        case OP_CALLS:
-            /* Tail call — for now just do a regular CALLF.
-             * True tail call optimization comes in Task 4.2. */
-            /* fall through */
-        default: {
-            /* Unknown opcode — abort with error */
-            for (int32_t i = 0; i < sp; i++)
-                if (stack[i]) td_release(stack[i]);
-            for (int32_t i = 0; i < n_locals; i++)
-                if (locals[i]) td_release(locals[i]);
-            return TD_ERR_PTR(TD_ERR_DOMAIN);
-        }
+            /* Switch to callee bytecode */
+            code = (uint8_t *)td_data(LAMBDA_BC(fn_obj));
+            cpool = (td_t **)td_data(LAMBDA_CONSTS(fn_obj));
+            ip = 0;
+            DISPATCH();
         }
     }
+
+    /* Non-lambda or uncompiled: dispatch by type */
+    {
+        td_t *result;
+        switch (fn_obj->type) {
+        case TD_ATOM_UNARY:
+            result = ((td_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
+            td_release(fn_args[0]);
+            for (int32_t i = 1; i < n; i++) td_release(fn_args[i]);
+            break;
+        case TD_ATOM_BINARY:
+            result = ((td_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
+            td_release(fn_args[0]);
+            td_release(fn_args[1]);
+            for (int32_t i = 2; i < n; i++) td_release(fn_args[i]);
+            break;
+        case TD_ATOM_VARY:
+            result = ((td_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
+            for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+            break;
+        case TD_ATOM_LAMBDA:
+            result = call_lambda(fn_obj, fn_args, n);
+            for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+            break;
+        default:
+            for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+            result = TD_ERR_PTR(TD_ERR_TYPE);
+            break;
+        }
+        td_release(fn_obj);
+        PUSH(result);
+        DISPATCH();
+    }
+}
+
+op_calls: {
+    /* Tail call: reuse current frame (no return stack push) */
+    uint8_t n = code[ip++];
+    td_t *fn_args[64];
+    for (int32_t i = n - 1; i >= 0; i--)
+        fn_args[i] = POP();
+    td_t *fn_obj = POP();
+
+    if (fn_obj->type == TD_ATOM_LAMBDA) {
+        if (!LAMBDA_IS_COMPILED(fn_obj))
+            td_compile(fn_obj);
+
+        if (LAMBDA_IS_COMPILED(fn_obj)) {
+            /* Clean up current frame locals */
+            for (int32_t i = 0; i < n_locals; i++)
+                if (LOCAL(i)) { td_release(LOCAL(i)); LOCAL(i) = NULL; }
+
+            /* Reuse frame: reset sp to fp, don't push return context */
+            vm.sp = vm.fp;
+            td_release(vm.fn);
+            vm.fn = fn_obj;  /* takes ownership */
+            int32_t callee_locals = LAMBDA_NLOCALS(fn_obj);
+            vm.sp += callee_locals;
+            n_locals = callee_locals;
+
+            int64_t pcnt = td_len(LAMBDA_PARAMS(fn_obj));
+            int64_t bind = pcnt < n ? pcnt : n;
+            for (int64_t i = 0; i < bind; i++)
+                LOCAL(i) = fn_args[i];
+            for (int32_t i = (int32_t)bind; i < callee_locals; i++)
+                LOCAL(i) = NULL;
+            for (int64_t i = bind; i < n; i++)
+                td_release(fn_args[i]);
+
+            code = (uint8_t *)td_data(LAMBDA_BC(fn_obj));
+            cpool = (td_t **)td_data(LAMBDA_CONSTS(fn_obj));
+            ip = 0;
+            DISPATCH();
+        }
+    }
+
+    /* Fallback: same as CALLF non-lambda path */
+    {
+        td_t *result;
+        switch (fn_obj->type) {
+        case TD_ATOM_UNARY:
+            result = ((td_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
+            td_release(fn_args[0]);
+            for (int32_t i = 1; i < n; i++) td_release(fn_args[i]);
+            break;
+        case TD_ATOM_BINARY:
+            result = ((td_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
+            td_release(fn_args[0]);
+            td_release(fn_args[1]);
+            for (int32_t i = 2; i < n; i++) td_release(fn_args[i]);
+            break;
+        case TD_ATOM_VARY:
+            result = ((td_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
+            for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+            break;
+        default:
+            result = call_lambda(fn_obj, fn_args, n);
+            for (int32_t i = 0; i < n; i++) td_release(fn_args[i]);
+            break;
+        }
+        td_release(fn_obj);
+        PUSH(result);
+        DISPATCH();
+    }
+}
+
+op_calld: {
+    /* Dynamic dispatch: evaluate AST directly via td_eval */
+    uint8_t n = code[ip++];
+    if (n == 0) {
+        /* n=0: the AST itself is on the stack, eval it directly */
+        td_t *ast = POP();
+        td_t *result = td_eval(ast);
+        td_release(ast);
+        PUSH(result);
+        DISPATCH();
+    }
+    /* n>0: build call list and eval */
+    td_t *fn_args[64];
+    for (int32_t i = n - 1; i >= 0; i--)
+        fn_args[i] = POP();
+    td_t *fn_obj = POP();
+
+    td_t *call_list = td_alloc((n + 1) * sizeof(td_t *));
+    call_list->type = TD_LIST;
+    call_list->len = n + 1;
+    td_t **elems = (td_t **)td_data(call_list);
+    elems[0] = fn_obj;
+    for (int32_t i = 0; i < n; i++)
+        elems[i + 1] = fn_args[i];
+
+    td_t *result = td_eval(call_list);
+    td_release(call_list);
+    PUSH(result);
+    DISPATCH();
+}
+
+op_ret: {
+    td_t *result = (vm.sp > vm.fp + n_locals) ? POP() : make_i64(0);
+    td_retain(result);  /* protect from cleanup aliasing */
+
+    /* Clean up current frame */
+    while (vm.sp > vm.fp) {
+        td_t *v = vm.ps[--vm.sp];
+        if (v) td_release(v);
+    }
+
+    if (vm.rp == 0) {
+        /* Top-level return */
+        td_release(vm.fn);
+        __VM = NULL;
+        return result;  /* caller owns the retain */
+    }
+
+    /* Pop return frame */
+    td_release(vm.fn);
+    vm.rp--;
+    vm.fn = vm.rs[vm.rp].fn;
+    vm.fp = vm.rs[vm.rp].fp;
+    ip = vm.rs[vm.rp].ip;
+    code = (uint8_t *)td_data(LAMBDA_BC(vm.fn));
+    cpool = (td_t **)td_data(LAMBDA_CONSTS(vm.fn));
+    n_locals = LAMBDA_NLOCALS(vm.fn);
+    PUSH(result);
+    DISPATCH();
+}
+
+vm_error: {
+    /* Release everything on program stack */
+    for (int32_t i = 0; i < vm.sp; i++)
+        if (vm.ps[i]) td_release(vm.ps[i]);
+    /* Release fn references */
+    td_release(vm.fn);
+    for (int32_t i = 0; i < vm.rp; i++)
+        td_release(vm.rs[i].fn);
+    __VM = NULL;
+    return TD_ERR_PTR(TD_ERR_DOMAIN);
+}
+
+#undef DISPATCH
+#undef PUSH
+#undef POP
+#undef PEEK
+#undef LOCAL
 }
 
 /* ══════════════════════════════════════════

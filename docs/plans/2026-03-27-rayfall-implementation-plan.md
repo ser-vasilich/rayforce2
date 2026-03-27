@@ -230,16 +230,16 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/compile.c`
 
 Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/rayforce/core/eval.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_vm_fib` — `(do (set fib (fn [n] (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))) (fib 10))` → i64 55
   - `test_vm_loop` — `(do (set sum-to (fn [n acc] (if (== n 0) acc (sum-to (- n 1) (+ acc n))))) (sum-to 100 0))` → i64 5050
-- [ ] Define `td_vm_t` struct in `eval.h`:
+- [x] Define `td_vm_t` struct in `eval.h`:
   - `sp`, `fp`, `rp`, `id` (i32 each, first cache line)
   - `fn` (current lambda), `heap` pointer
   - `ps[VM_STACK_SIZE]` — program stack (cache-line aligned)
   - `rs[VM_STACK_SIZE]` — return stack (`ctx_t` = `{fn, fp, ip}`)
   - Thread-local `__VM` pointer
-- [ ] Implement `td_vm_eval(td_t* lambda)` with computed goto:
+- [x] Implement `td_vm_eval(td_t* lambda)` with computed goto:
   - Dispatch table: `static void *dispatch[] = { [OP_LOADCONST] = &&op_loadconst, ... }`
   - `DISPATCH()` macro, `PUSH()`/`POP()` macros
   - `OP_CALL1`: pop fn + arg, dispatch by fn type, push result
@@ -248,9 +248,9 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
   - `OP_RET`: pop frame, restore ip/fp/fn, push result
   - `OP_CALLS`: tail call (reuse frame)
   - `OP_CALLD`: fallback to `td_eval()` for dynamic dispatch
-- [ ] Wire into `td_eval()`: when calling a compiled lambda, route to `td_vm_eval()`
-- [ ] Run tests: pass (fib, loop)
-- [ ] Commit: `feat(lang): stack-based VM with computed goto dispatch`
+- [x] Wire into `td_eval()`: when calling a compiled lambda, route to `td_vm_eval()`
+- [x] Run tests: pass (fib, loop)
+- [x] Commit: `feat(lang): stack-based VM with computed goto dispatch`
 
 ---
 

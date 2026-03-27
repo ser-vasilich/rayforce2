@@ -362,6 +362,32 @@ static MunitResult test_compile_closure(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: VM recursive fibonacci ---- */
+static MunitResult test_vm_fib(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set fib (fn [n] (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))) (fib 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 55);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: VM tail-recursive loop ---- */
+static MunitResult test_vm_loop(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set sum-to (fn [n acc] (if (== n 0) acc (sum-to (- n 1) (+ acc n))))) (sum-to 100 0))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 5050);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -392,6 +418,8 @@ static MunitTest lang_tests[] = {
     { "/eval/lambda_let",   test_eval_lambda_let,   lang_setup, lang_teardown, 0, NULL },
     { "/compile/basic",     test_compile_basic,     lang_setup, lang_teardown, 0, NULL },
     { "/compile/closure",   test_compile_closure,   lang_setup, lang_teardown, 0, NULL },
+    { "/vm/fib",            test_vm_fib,            lang_setup, lang_teardown, 0, NULL },
+    { "/vm/loop",           test_vm_loop,           lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

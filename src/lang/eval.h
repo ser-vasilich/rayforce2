@@ -47,6 +47,27 @@ enum {
 
 #define LAMBDA_IS_COMPILED(lam) ((lam)->attrs & TD_FN_COMPILED)
 
+/* ===== VM Types ===== */
+
+#define VM_STACK_SIZE 1024
+
+typedef struct {
+    td_t   *fn;     /* lambda being executed */
+    int32_t fp;     /* frame pointer */
+    int32_t ip;     /* instruction pointer */
+} vm_ctx_t;
+
+typedef struct {
+    int32_t  sp;                    /* stack pointer */
+    int32_t  fp;                    /* frame pointer */
+    int32_t  rp;                    /* return stack pointer */
+    int32_t  id;                    /* VM identifier */
+    td_t    *fn;                    /* current lambda */
+    void    *heap;                  /* heap pointer (future use) */
+    td_t    *ps[VM_STACK_SIZE];     /* program stack */
+    vm_ctx_t rs[VM_STACK_SIZE];     /* return stack */
+} td_vm_t;
+
 /* ===== Public API ===== */
 
 /* Initialize the Rayfall runtime: symbols, environment, builtins. */
