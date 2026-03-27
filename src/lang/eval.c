@@ -6,10 +6,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <signal.h>
 
 /* Maximum recursion depth for td_eval() to prevent stack overflow */
 #define TD_EVAL_MAX_DEPTH 512
 _Thread_local static int eval_depth = 0;
+
+/* Interrupt flag — set by REPL signal handler, checked by eval/VM loops */
+static volatile sig_atomic_t g_eval_interrupted = 0;
+
+void td_eval_request_interrupt(void) { g_eval_interrupted = 1; }
+void td_eval_clear_interrupt(void)   { g_eval_interrupted = 0; }
+int  td_eval_is_interrupted(void)    { return g_eval_interrupted != 0; }
 
 /* ══════════════════════════════════════════
  * Arithmetic builtins
@@ -2477,6 +2485,7 @@ op_jmp: {
     int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
     ip += 2;
     ip += offset;
+    if (offset < 0 && g_eval_interrupted) goto vm_error;
     DISPATCH();
 }
 
@@ -2579,6 +2588,9 @@ op_callf: {
                 LOCAL(i) = NULL;
             for (int64_t i = bind; i < n; i++)
                 td_release(fn_args[i]);  /* excess args */
+
+            /* Check for Ctrl-C interrupt on each compiled call */
+            if (g_eval_interrupted) goto vm_error;
 
             /* Switch to callee bytecode */
             code = (uint8_t *)td_data(LAMBDA_BC(fn_obj));
@@ -2988,6 +3000,9 @@ void td_lang_destroy(void) {
 
 td_t* td_eval(td_t* obj) {
     if (!obj || TD_IS_ERR(obj)) return obj;
+
+    /* Check for external interrupt (e.g. Ctrl-C from REPL) */
+    if (g_eval_interrupted) return TD_ERR_PTR(TD_ERR_LIMIT);
 
     if (++eval_depth > TD_EVAL_MAX_DEPTH) {
         eval_depth--;

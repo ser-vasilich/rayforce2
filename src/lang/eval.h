@@ -106,4 +106,11 @@ void td_compile_reset(void);
 /* Print a td_t value to a FILE stream. */
 void td_lang_print(FILE* fp, td_t* val);
 
+/* Interrupt support: allow external code (REPL signal handler) to request
+ * that the evaluator abort early.  td_eval() and the bytecode VM check
+ * this flag at function-call and loop boundaries. */
+void td_eval_request_interrupt(void);
+void td_eval_clear_interrupt(void);
+int  td_eval_is_interrupted(void);
+
 #endif /* TD_EVAL_H */

@@ -285,17 +285,22 @@ void td_repl_destroy(td_repl_t* repl) {
     td_free(repl->_block);
 }
 
-static void eval_and_print(const char* input, bool use_color, bool timeit) {
+static void eval_and_print(td_term_t* term, const char* input,
+                           bool use_color, bool timeit) {
     int64_t t0 = 0, t1 = 0;
     if (timeit) t0 = time_now_ns();
 
     td_term_clear_interrupt();
+    td_eval_clear_interrupt();
+    if (term) td_term_eval_begin(term);
     td_t* result = td_eval_str(input);
+    if (term) td_term_eval_end(term);
 
     if (timeit) t1 = time_now_ns();
 
     if (td_term_interrupted()) {
         td_term_clear_interrupt();
+        td_eval_clear_interrupt();
         fprintf(stdout, "\n^C\n");
         fflush(stdout);
         if (result && !TD_IS_ERR(result)) td_release(result);
@@ -421,42 +426,171 @@ static void run_interactive(td_repl_t* repl) {
             continue;
         }
 
-        eval_and_print(str, true, repl->timeit);
+        eval_and_print(repl->term, str, true, repl->timeit);
         td_release(line);
     }
 }
 
+/* Parse state for bracket_delta, preserved across chunk boundaries. */
+typedef struct {
+    int in_string;   /* inside a "..." literal */
+    int in_comment;  /* inside a ;-comment (until newline) */
+} bracket_state_t;
+
+/* Compute the net bracket delta for a string, skipping string literals
+ * and ;-comments.  Result can be negative (more closers than openers).
+ * If `state` is non-NULL, string/comment parse state is carried across
+ * calls (required for chunked overflow recovery in piped mode). */
+static int32_t bracket_delta_s(const char* s, size_t len,
+                               bracket_state_t* state) {
+    int32_t depth = 0;
+    int in_string  = state ? state->in_string  : 0;
+    int in_comment = state ? state->in_comment : 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (in_comment) {
+            if (c == '\n') in_comment = 0;
+            continue;
+        }
+        if (in_string) {
+            if (c == '\\' && i + 1 < len) { i++; continue; }
+            if (c == '"') in_string = 0;
+            continue;
+        }
+        if (c == '"') { in_string = 1; continue; }
+        if (c == ';') {
+            in_comment = 1;
+            continue;
+        }
+        if (c == '(' || c == '[' || c == '{') depth++;
+        else if (c == ')' || c == ']' || c == '}') depth--;
+    }
+    if (state) {
+        state->in_string  = in_string;
+        state->in_comment = in_comment;
+    }
+    return depth;
+}
+
+/* Convenience wrapper with no persistent state (single-buffer calls). */
+static int32_t bracket_delta(const char* s, size_t len) {
+    return bracket_delta_s(s, len, NULL);
+}
+
+/* Count unmatched opening brackets (clamped >= 0). */
+static int32_t count_unmatched(const char* s, size_t len) {
+    int32_t d = bracket_delta(s, len);
+    return d > 0 ? d : 0;
+}
+
 static void run_piped(td_repl_t* repl) {
-    char buf[PIPE_BUF_SIZE];
-    fprintf(stdout, "teide> ");
-    fflush(stdout);
+    char line[PIPE_BUF_SIZE];
+    char accum[PIPE_BUF_SIZE];
+    size_t accum_len = 0;
+    bool mid_line = false; /* true when fgets returned without a newline */
 
-    while (fgets(buf, PIPE_BUF_SIZE, stdin)) {
-        size_t len = strlen(buf);
-        if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
-        if (len == 0) {
-            fprintf(stdout, "teide> ");
-            fflush(stdout);
+    while (fgets(line, PIPE_BUF_SIZE, stdin)) {
+        size_t len = strlen(line);
+        bool had_newline = (len > 0 && line[len - 1] == '\n');
+        if (had_newline) line[--len] = '\0';
+
+        /* Skip empty lines when no accumulation in progress */
+        if (len == 0 && accum_len == 0 && !mid_line)
+            continue;
+
+        if (accum_len == 0 && !mid_line) {
+            if (strcmp(line, "\\\\") == 0 || strcmp(line, "exit") == 0) break;
+
+            /* REPL commands */
+            if (line[0] == ':') {
+                size_t clen = len - 1;
+                const char* cmd = line + 1;
+                if ((clen == 1 && cmd[0] == 'q') ||
+                    (clen == 4 && memcmp(cmd, "quit", 4) == 0))
+                    break;
+                handle_command(repl, line, len);
+                continue;
+            }
+        }
+
+        /* Append chunk to accumulator */
+        size_t needed = accum_len + len + (accum_len > 0 && !mid_line ? 1 : 0);
+        if (needed < PIPE_BUF_SIZE) {
+            if (accum_len > 0 && !mid_line) accum[accum_len++] = '\n';
+            memcpy(accum + accum_len, line, len);
+            accum_len += len;
+            accum[accum_len] = '\0';
+        } else {
+            fprintf(stderr, "error: input too large (max %d bytes)\n",
+                    PIPE_BUF_SIZE - 1);
+            /* Compute bracket depth of the accumulated text plus the
+               current chunk that triggered the overflow.  Use stateful
+               parsing so string/comment context survives chunk splits. */
+            bracket_state_t bs = {0, 0};
+            int32_t depth = bracket_delta_s(accum, accum_len, &bs);
+            /* A logical newline separates accum from line (the normal
+               append path inserts one at line 519).  Reset comment state
+               so a trailing ;-comment in accum doesn't bleed into line. */
+            if (accum_len > 0 && !mid_line) bs.in_comment = 0;
+            depth += bracket_delta_s(line, len, &bs);
+            accum_len = 0;
+            mid_line = false;
+            /* Drain the rest of the oversized physical line. */
+            while (!had_newline) {
+                if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
+                len = strlen(line);
+                had_newline = (len > 0 && line[len - 1] == '\n');
+                if (had_newline) {
+                    line[--len] = '\0';
+                    bs.in_comment = 0; /* newline ends ; comment */
+                }
+                depth += bracket_delta_s(line, len, &bs);
+            }
+            /* If we were inside an unmatched multi-line form, keep
+               draining lines until brackets balance or EOF. */
+            while (depth > 0) {
+                if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
+                len = strlen(line);
+                had_newline = (len > 0 && line[len - 1] == '\n');
+                if (had_newline) {
+                    line[--len] = '\0';
+                    bs.in_comment = 0; /* newline ends ; comment */
+                }
+                depth += bracket_delta_s(line, len, &bs);
+                /* If fgets didn't see a newline, drain the rest of
+                   this physical line before counting brackets. */
+                while (!had_newline) {
+                    if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
+                    len = strlen(line);
+                    had_newline = (len > 0 && line[len - 1] == '\n');
+                    if (had_newline) {
+                        line[--len] = '\0';
+                        bs.in_comment = 0; /* newline ends ; comment */
+                    }
+                    depth += bracket_delta_s(line, len, &bs);
+                }
+            }
             continue;
         }
-        if (strcmp(buf, "\\\\") == 0 || strcmp(buf, "exit") == 0) break;
 
-        /* REPL commands */
-        if (buf[0] == ':') {
-            size_t clen = len - 1;
-            const char* cmd = buf + 1;
-            if ((clen == 1 && cmd[0] == 'q') ||
-                (clen == 4 && memcmp(cmd, "quit", 4) == 0))
-                break;
-            handle_command(repl, buf, len);
-            fprintf(stdout, "teide> ");
-            fflush(stdout);
-            continue;
+        /* Track whether we're in the middle of a physical line */
+        if (!had_newline) {
+            mid_line = true;
+            continue; /* keep accumulating until the line ends */
         }
+        mid_line = false;
 
-        eval_and_print(buf, false, repl->timeit);
-        fprintf(stdout, "teide> ");
-        fflush(stdout);
+        /* Evaluate when brackets are balanced */
+        if (count_unmatched(accum, accum_len) == 0) {
+            eval_and_print(NULL, accum, false, repl->timeit);
+            accum_len = 0;
+        }
+    }
+
+    /* Evaluate any remaining accumulated input */
+    if (accum_len > 0) {
+        accum[accum_len] = '\0';
+        eval_and_print(NULL, accum, false, repl->timeit);
     }
 }
 

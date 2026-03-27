@@ -152,6 +152,11 @@ void td_term_install_signals(td_term_t* term);
 int  td_term_interrupted(void);
 void td_term_clear_interrupt(void);
 
+/* Temporarily enable ISIG so Ctrl-C generates SIGINT during eval.
+ * Call td_term_eval_end() to restore raw mode after eval returns. */
+void td_term_eval_begin(td_term_t* term);
+void td_term_eval_end(td_term_t* term);
+
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
 

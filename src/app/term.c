@@ -4,10 +4,12 @@
 
 #include "app/term.h"
 #include "lang/env.h"
+#include "lang/eval.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <errno.h>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -29,6 +31,7 @@ static td_term_t* g_active_term = NULL;
 
 static void signal_handler(int sig) {
     g_interrupted = 1;
+    td_eval_request_interrupt();
 #if defined(_WIN32)
     if (sig == SIGTERM) {
 #else
@@ -87,6 +90,25 @@ void td_term_install_signals(td_term_t* term) {
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
 #endif
+}
+
+void td_term_eval_begin(td_term_t* term) {
+#if !defined(_WIN32)
+    /* Enable ISIG so Ctrl-C generates SIGINT during evaluation */
+    struct termios tio;
+    tcgetattr(STDIN_FILENO, &tio);
+    tio.c_lflag |= ISIG;
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+#endif
+    (void)term;
+}
+
+void td_term_eval_end(td_term_t* term) {
+#if !defined(_WIN32)
+    /* Restore raw mode (ISIG off) for input handling */
+    tcsetattr(STDIN_FILENO, TCSANOW, &term->newattr);
+#endif
+    (void)term;
 }
 
 /* ===== Cursor helpers ===== */
@@ -272,17 +294,45 @@ void td_term_destroy(td_term_t* term) {
 }
 
 int64_t td_term_getc(td_term_t* term) {
-    int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
-    return sz;
+    for (;;) {
+        int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
+        if (sz > 0) return sz;
+        if (sz < 0 && errno == EINTR) {
+            if (g_interrupted) return -2; /* signal caller to handle ^C */
+            continue; /* spurious EINTR, retry */
+        }
+        return sz; /* EOF or error */
+    }
 }
 
 #endif /* _WIN32 */
 
-/* Read a single byte via the platform-abstracted td_term_getc.
- * Returns the byte (0..255) on success, -1 on failure. */
+/* Read a single byte with a short timeout for escape sequence detection.
+ * Returns the byte (0..255) on success, -1 on timeout/failure.
+ * Uses VTIME to avoid blocking indefinitely on bare Esc. */
 static int term_read_byte(td_term_t* term) {
+#if defined(_WIN32)
     if (td_term_getc(term) <= 0) return -1;
     return (unsigned char)term->input[0];
+#else
+    /* Temporarily set a short timeout (100ms) for escape sequence reads */
+    struct termios tio;
+    tcgetattr(STDIN_FILENO, &tio);
+    tio.c_cc[VMIN]  = 0;
+    tio.c_cc[VTIME] = 1;  /* 100ms timeout */
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+
+    int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
+
+    /* Restore blocking mode */
+    tio.c_cc[VMIN]  = 1;
+    tio.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+
+    if (sz < 0 && errno == EINTR && g_interrupted) return -2;
+    if (sz <= 0) return -1;
+    return (unsigned char)term->input[0];
+#endif
 }
 
 /* ===== History ===== */
@@ -750,10 +800,14 @@ static void td_term_update_ghost(td_term_t* term) {
     term->ghost_len = 0;
 
     /* Only show ghost at end of buffer or end of a word */
-    if (term->buf_pos != term->buf_len)
+    if (term->buf_pos != term->buf_len) {
+        term->comp_count = 0;
         return;
-    if (term->buf_len == 0)
+    }
+    if (term->buf_len == 0) {
+        term->comp_count = 0;
         return;
+    }
 
     /* Extract word before cursor */
     int32_t ws = find_word_start(term->buf, term->buf_pos);
@@ -1090,11 +1144,16 @@ int32_t td_term_count_unmatched(td_term_t* term) {
             continue;
         }
         if (c == '"') { in_string = 1; continue; }
+        if (c == ';') {
+            while (i < term->multiline_len && term->multiline_buf[i] != '\n') i++;
+            continue;
+        }
         if (c == '(' || c == '[' || c == '{') depth++;
         else if (c == ')' || c == ']' || c == '}') { if (depth > 0) depth--; }
     }
 
-    /* Then scan current buf */
+    /* Then scan current buf — no newlines possible here (single line),
+       but skip from ';' to end of buf for consistency. */
     for (int32_t i = 0; i < term->buf_len; i++) {
         char c = term->buf[i];
         if (in_string) {
@@ -1103,6 +1162,7 @@ int32_t td_term_count_unmatched(td_term_t* term) {
             continue;
         }
         if (c == '"') { in_string = 1; continue; }
+        if (c == ';') break; /* rest of current line is a comment */
         if (c == '(' || c == '[' || c == '{') depth++;
         else if (c == ')' || c == ']' || c == '}') { if (depth > 0) depth--; }
     }
@@ -1315,16 +1375,28 @@ td_t* td_term_read(td_term_t* term) {
 
     for (;;) {
         int64_t sz = td_term_getc(term);
-        if (sz <= 0) return NULL;
+        if (sz <= 0) {
+            if (sz == -2) goto interrupted;
+            return NULL;
+        }
 
         int key = (unsigned char)term->input[0];
 
         if (key == KEYCODE_ESCAPE) {
             /* Read escape sequence via platform-abstracted helper */
             int seq0 = term_read_byte(term);
-            if (seq0 < 0) continue;
+            if (seq0 == -2) goto interrupted; /* SIGINT during esc read */
+            if (seq0 < 0) {
+                /* Bare Esc (no sequence followed) — dismiss popup if visible */
+                if (term->popup_visible) {
+                    td_term_popup_hide(term);
+                    td_term_redraw(term);
+                }
+                continue;
+            }
             if (seq0 == '[') {
                 int seq1 = term_read_byte(term);
+                if (seq1 == -2) goto interrupted;
                 if (seq1 < 0) continue;
                 switch (seq1) {
                     case 'A': key = -KEYCODE_UP;    goto handle; /* Up */
@@ -1335,6 +1407,7 @@ td_t* td_term_read(td_term_t* term) {
                     case 'F': key = -KEYCODE_END;   goto handle; /* End */
                     case '3': /* Delete key: \033[3~ */
                         { int seq2 = term_read_byte(term);
+                          if (seq2 == -2) goto interrupted;
                           if (seq2 == '~') {
                             if (term->buf_pos < term->buf_len) {
                                 int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
@@ -1353,6 +1426,7 @@ td_t* td_term_read(td_term_t* term) {
                         if (!(seq1 >= 0x40 && seq1 <= 0x7E)) {
                             for (int csi_i = 0; csi_i < 8; csi_i++) {
                                 int d = term_read_byte(term);
+                                if (d == -2) goto interrupted;
                                 if (d < 0 || (d >= 0x40 && d <= 0x7E)) break;
                             }
                         }
@@ -1360,6 +1434,7 @@ td_t* td_term_read(td_term_t* term) {
                 }
             } else if (seq0 == 'O') {
                 int seq1 = term_read_byte(term);
+                if (seq1 == -2) goto interrupted;
                 if (seq1 < 0) continue;
                 switch (seq1) {
                     case 'H': key = -KEYCODE_HOME; goto handle;
@@ -1374,6 +1449,19 @@ td_t* td_term_read(td_term_t* term) {
             }
             continue;
         }
+
+    interrupted:
+        /* External SIGINT — treat like Ctrl-C: clear line */
+        td_term_clear_interrupt();
+        if (term->popup_visible)
+            td_term_popup_hide(term);
+        term->buf_len = 0;
+        term->buf_pos = 0;
+        term->multiline_len = 0;
+        write(STDOUT_FILENO, "^C\n", 3);
+        td_term_prompt(term);
+        fflush(stdout);
+        continue;
 
     handle:
         /* ---- Popup navigation mode ---- */
@@ -1452,9 +1540,8 @@ td_t* td_term_read(td_term_t* term) {
         if (key == -KEYCODE_LEFT) {
             if (term->buf_pos > 0) {
                 int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
-                td_term_goto_position(term, term->buf_pos, prev);
                 term->buf_pos = prev;
-                fflush(stdout);
+                td_term_redraw(term);
             }
             continue;
         }
@@ -1462,9 +1549,8 @@ td_t* td_term_read(td_term_t* term) {
         if (key == -KEYCODE_RIGHT) {
             if (term->buf_pos < term->buf_len) {
                 int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
-                td_term_goto_position(term, term->buf_pos, next);
                 term->buf_pos = next;
-                fflush(stdout);
+                td_term_redraw(term);
             } else if (term->ghost_len > 0) {
                 /* Accept ghost text at end of line */
                 td_term_accept_ghost(term);
@@ -1474,16 +1560,14 @@ td_t* td_term_read(td_term_t* term) {
         }
 
         if (key == -KEYCODE_HOME || key == KEYCODE_CTRL_A) {
-            td_term_goto_position(term, term->buf_pos, 0);
             term->buf_pos = 0;
-            fflush(stdout);
+            td_term_redraw(term);
             continue;
         }
 
         if (key == -KEYCODE_END || key == KEYCODE_CTRL_E) {
-            td_term_goto_position(term, term->buf_pos, term->buf_len);
             term->buf_pos = term->buf_len;
-            fflush(stdout);
+            td_term_redraw(term);
             continue;
         }
 
@@ -1560,6 +1644,8 @@ td_t* td_term_read(td_term_t* term) {
         }
 
         case KEYCODE_CTRL_C: {
+            if (term->popup_visible)
+                td_term_popup_hide(term);
             term->buf_len = 0;
             term->buf_pos = 0;
             term->multiline_len = 0;
@@ -1626,7 +1712,18 @@ td_t* td_term_read(td_term_t* term) {
                 int64_t ssz = td_term_getc(term);
                 if (ssz <= 0) {
                     term->search_mode = 0;
-                    td_term_redraw(term);
+                    if (ssz == -2) {
+                        /* External SIGINT in search — clear and interrupt */
+                        td_term_clear_interrupt();
+                        term->buf_len = 0;
+                        term->buf_pos = 0;
+                        term->multiline_len = 0;
+                        write(STDOUT_FILENO, "^C\n", 3);
+                        td_term_prompt(term);
+                        fflush(stdout);
+                    } else {
+                        td_term_redraw(term);
+                    }
                     break;
                 }
 
@@ -1663,6 +1760,7 @@ td_t* td_term_read(td_term_t* term) {
                     term->search_mode = 0;
                     term->buf_len = 0;
                     term->buf_pos = 0;
+                    term->multiline_len = 0;
                     write(STDOUT_FILENO, "^C\n", 3);
                     td_term_prompt(term);
                     fflush(stdout);
