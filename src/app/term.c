@@ -89,8 +89,12 @@ void td_term_clear_interrupt(void) {
 }
 
 void td_term_install_signals(td_term_t* term) {
+    static int atexit_registered = 0;
     g_active_term = term;
-    atexit(atexit_handler);
+    if (!atexit_registered) {
+        atexit(atexit_handler);
+        atexit_registered = 1;
+    }
 
 #if defined(_WIN32)
     signal(SIGINT,  signal_handler);
@@ -731,7 +735,7 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
             /* String literal */
             int32_t j = i + 1;
             while (j < buf_len) {
-                if (buf[j] == '"' && (j == i + 1 || buf[j - 1] != '\\')) {
+                if (buf[j] == '"' && !is_escaped(buf, j)) {
                     j++;
                     break;
                 }
@@ -1487,6 +1491,8 @@ td_t* td_term_read(td_term_t* term) {
             continue;
         }
 
+        goto handle;
+
     interrupted:
         /* External SIGINT — treat like Ctrl-C: clear line */
         td_term_clear_interrupt();
@@ -1784,9 +1790,11 @@ td_t* td_term_read(td_term_t* term) {
                 }
 
                 if (skey == KEYCODE_ESCAPE) {
-                    /* Read and discard potential escape sequence */
-                    /* Use non-blocking check: set a short timeout */
-                    /* For simplicity, just cancel search */
+                    /* Consume potential escape sequence bytes (e.g. arrow keys) */
+                    int esc0 = term_read_byte(term);
+                    if (esc0 == '[') {
+                        (void)term_read_byte(term); /* consume sequence char */
+                    }
                     term->search_mode = 0;
                     td_term_redraw(term);
                     break;
