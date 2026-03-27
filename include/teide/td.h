@@ -824,6 +824,9 @@ td_t*    td_scratch_realloc(td_t* v, size_t new_data_size);
 void     td_heap_init(void);
 void     td_heap_destroy(void);
 void     td_heap_merge(td_heap_t* src);
+void     td_heap_flush_foreign(void);
+void     td_heap_push_pending(td_heap_t* heap);
+void     td_heap_drain_pending(void);
 
 uint8_t  td_order_for_size(size_t data_size);
 void     td_mem_stats(td_mem_stats_t* out);

@@ -461,17 +461,17 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 Reference: `/home/hetoku/data/work/rayforce/core/heap.h`, `/home/hetoku/data/work/rayforce/core/heap.c`
 
-- [ ] Add `heap_id` (u16) field to `td_t` header
-- [ ] Implement bitmap-based heap ID allocator (atomic CAS, same as Rayforce)
-- [ ] Add foreign block queue to heap struct (lock-free LIFO)
-- [ ] Modify `td_free()`: check `block->heap_id == current_heap->id`, if not → enqueue to foreign blocks
-- [ ] Implement `td_heap_flush_foreign()` — reclaim foreign blocks into own freelist
-- [ ] Implement `td_heap_push_pending()` / `td_heap_drain_pending()` for worker teardown
-- [ ] Add tests:
+- [x] Add `heap_id` (u16) field to `td_t` header
+- [x] Implement bitmap-based heap ID allocator (atomic CAS, same as Rayforce)
+- [x] Add foreign block queue to heap struct (lock-free LIFO)
+- [x] Modify `td_free()`: check `block->heap_id == current_heap->id`, if not → enqueue to foreign blocks
+- [x] Implement `td_heap_flush_foreign()` — reclaim foreign blocks into own freelist
+- [x] Implement `td_heap_push_pending()` / `td_heap_drain_pending()` for worker teardown
+- [x] Add tests:
   - `test_cross_heap_free` — alloc on heap A, free from heap B context, verify no crash
   - `test_heap_pending_merge` — create worker heap, destroy it, verify blocks reclaimed
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(mem): per-VM heap with heap_id and foreign block queue`
+- [x] Run tests: all pass
+- [x] Commit: `feat(mem): per-VM heap with heap_id and foreign block queue`
 
 ---
 

@@ -187,13 +187,23 @@ typedef struct {
 typedef struct td_heap {
     uint64_t        avail;                       /* bitmask: bit N set = freelist[N] non-empty */
     uint16_t        id;                          /* heap identity (for cross-thread free) */
-    td_t*           foreign;                     /* cross-heap freed blocks (singly-linked via fl_next) */
+    td_t*           foreign;                     /* cross-heap freed blocks (lock-free LIFO via fl_next) */
     td_slab_t       slabs[TD_SLAB_ORDERS];       /* small-block slab caches */
     td_fl_head_t    freelist[TD_HEAP_FL_SIZE];   /* circular sentinel per order */
     td_mem_stats_t  stats;
     uint32_t        pool_count;                  /* number of tracked pools */
     td_pool_entry_t pools[TD_MAX_POOLS];         /* pool tracking for destroy/merge */
+    struct td_heap* pending_next;                /* link for pending-merge LIFO queue */
 } td_heap_t;
+
+/* --------------------------------------------------------------------------
+ * Bitmap-based heap ID allocator (atomic CAS, reusable IDs)
+ * -------------------------------------------------------------------------- */
+#define TD_HEAP_ID_WORDS  16   /* 16 * 64 = 1024 IDs (matches registry size) */
+#define TD_HEAP_ID_BITS   (TD_HEAP_ID_WORDS * 64)
+
+/* Global pending-merge queue head (lock-free LIFO) */
+extern td_heap_t* td_heap_pending_merge;
 
 /* --------------------------------------------------------------------------
  * Pool-list scan: find which pool a block belongs to without reading the

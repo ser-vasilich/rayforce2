@@ -23,7 +23,9 @@
 
 #include "munit.h"
 #include <teide/td.h>
+#include "mem/heap.h"
 #include <string.h>
+#include <stdatomic.h>
 
 /* ---- Setup / Teardown -------------------------------------------------- */
 
@@ -378,7 +380,7 @@ static MunitResult test_pool_alignment(const void* params, void* fixture) {
 static MunitResult test_heap_id_derivation(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    /* Allocate blocks and verify pool header heap_id matches */
+    /* Allocate blocks and verify pool header heap_id matches current heap */
     td_t* v1 = td_alloc(0);
     td_t* v2 = td_alloc(1024);
     td_t* v3 = td_alloc(65536);
@@ -386,24 +388,107 @@ static MunitResult test_heap_id_derivation(const void* params, void* fixture) {
     munit_assert_ptr_not_null(v2);
     munit_assert_ptr_not_null(v3);
 
-    /* All blocks in same heap should derive same heap_id */
-    uintptr_t p1 = (uintptr_t)v1 & ~(((size_t)1 << 25) - 1);
-    uintptr_t p3 = (uintptr_t)v3 & ~(((size_t)1 << 25) - 1);
+    td_heap_t* h = td_tl_heap;
 
-    uint16_t hid1 = ((uint16_t*)p1)[0]; /* heap_id at offset 0 of pool header */
-    uint16_t hid3 = ((uint16_t*)p3)[0];
-
-    /* If same pool, heap_ids must match */
-    if (p1 == p3) {
-        munit_assert_uint(hid1, ==, hid3);
-    }
-    /* All heap_ids should be non-zero (counter starts at 1) */
-    munit_assert_uint(hid1, >, 0);
-    munit_assert_uint(hid3, >, 0);
+    /* Pool header heap_id should match current heap for all blocks */
+    td_pool_hdr_t* phdr1 = td_pool_of(v1);
+    td_pool_hdr_t* phdr2 = td_pool_of(v2);
+    td_pool_hdr_t* phdr3 = td_pool_of(v3);
+    munit_assert_uint(phdr1->heap_id, ==, h->id);
+    munit_assert_uint(phdr2->heap_id, ==, h->id);
+    munit_assert_uint(phdr3->heap_id, ==, h->id);
 
     td_free(v1);
     td_free(v2);
     td_free(v3);
+    return MUNIT_OK;
+}
+
+/* ---- Cross-heap free --------------------------------------------------- */
+
+static MunitResult test_cross_heap_free(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* heap_a is the current heap (from buddy_setup) */
+    td_heap_t* heap_a = td_tl_heap;
+    uint16_t heap_a_id = heap_a->id;
+
+    /* Create heap_b by switching thread-local pointer */
+    td_tl_heap = NULL;
+    td_heap_init();
+    td_heap_t* heap_b = td_tl_heap;
+    munit_assert_ptr_not_null(heap_b);
+    munit_assert_uint(heap_b->id, !=, heap_a_id);
+
+    /* Allocate blocks on heap_b */
+    td_t* blk1 = td_alloc(0);
+    td_t* blk2 = td_alloc(128);
+    td_t* blk3 = td_alloc(4096);
+    munit_assert_ptr_not_null(blk1);
+    munit_assert_ptr_not_null(blk2);
+    munit_assert_ptr_not_null(blk3);
+
+    /* Pool headers should carry heap_b's ID */
+    munit_assert_uint(td_pool_of(blk1)->heap_id, ==, heap_b->id);
+    munit_assert_uint(td_pool_of(blk2)->heap_id, ==, heap_b->id);
+
+    /* Switch to heap_a and free blocks from the wrong heap */
+    td_tl_heap = heap_a;
+    td_free(blk1);  /* should go to heap_a->foreign */
+    td_free(blk2);
+    td_free(blk3);
+
+    /* Flush foreign blocks back to their owning heap */
+    td_heap_flush_foreign();
+
+    /* Cleanup: destroy heap_b */
+    td_tl_heap = heap_b;
+    td_heap_destroy();
+
+    /* Restore heap_a for teardown */
+    td_tl_heap = heap_a;
+    return MUNIT_OK;
+}
+
+/* ---- Pending merge ------------------------------------------------------ */
+
+static MunitResult test_heap_pending_merge(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* heap_a is the current heap (from buddy_setup) */
+    td_heap_t* heap_a = td_tl_heap;
+    uint32_t pools_before = heap_a->pool_count;
+
+    /* Create heap_b */
+    td_tl_heap = NULL;
+    td_heap_init();
+    td_heap_t* heap_b = td_tl_heap;
+    munit_assert_ptr_not_null(heap_b);
+
+    /* Allocate on heap_b to force pool creation */
+    td_t* blk = td_alloc(0);
+    munit_assert_ptr_not_null(blk);
+    uint32_t heap_b_pools = heap_b->pool_count;
+    munit_assert_uint(heap_b_pools, >, 0);
+
+    /* Push heap_b onto pending queue (simulating worker teardown) */
+    td_tl_heap = heap_a;
+    td_heap_push_pending(heap_b);
+
+    /* Drain pending — merges heap_b into heap_a, destroys heap_b */
+    td_heap_drain_pending();
+
+    /* heap_a should have gained heap_b's pools */
+    munit_assert_uint(heap_a->pool_count, ==, pools_before + heap_b_pools);
+
+    /* The block should still be accessible (pool transferred) */
+    munit_assert_uint(blk->mmod, ==, 0);
+
+    /* Free the block — goes via foreign path (heap_id mismatch)
+     * then flush reclaims it locally */
+    td_free(blk);
+    td_heap_flush_foreign();
+
     return MUNIT_OK;
 }
 
@@ -425,6 +510,8 @@ static MunitTest buddy_tests[] = {
     { "/order_for_size",    test_order_for_size,    buddy_setup, buddy_teardown, 0, NULL },
     { "/pool_alignment",    test_pool_alignment,    buddy_setup, buddy_teardown, 0, NULL },
     { "/heap_id_derivation", test_heap_id_derivation, buddy_setup, buddy_teardown, 0, NULL },
+    { "/cross_heap_free",   test_cross_heap_free,   buddy_setup, buddy_teardown, 0, NULL },
+    { "/pending_merge",     test_heap_pending_merge, buddy_setup, buddy_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

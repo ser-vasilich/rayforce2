@@ -39,10 +39,51 @@ TD_TLS td_heap_t*     td_tl_heap  = NULL;
 TD_TLS td_mem_stats_t td_tl_stats;
 
 /* --------------------------------------------------------------------------
- * Heap ID counter + global registry
+ * Bitmap-based heap ID allocator (atomic CAS, reusable IDs)
+ *
+ * Each bit in the bitmap represents one heap ID. Acquiring sets a bit,
+ * releasing clears it. IDs are reused after release (unlike a monotonic
+ * counter). Cursor rotates to spread contention across words.
  * -------------------------------------------------------------------------- */
-static _Atomic(uint16_t) g_heap_id_next = 1;
+static _Atomic(uint64_t) g_heap_id_bitmap[TD_HEAP_ID_WORDS];
+static _Atomic(uint64_t) g_heap_id_cursor = 0;
+
 td_heap_t* td_heap_registry[TD_HEAP_REGISTRY_SIZE];
+
+/* Pending-merge queue head (lock-free LIFO) */
+td_heap_t* td_heap_pending_merge = NULL;
+
+static int heap_id_acquire(void) {
+    uint64_t start = atomic_fetch_add_explicit(&g_heap_id_cursor, 1,
+                                                memory_order_relaxed);
+    for (uint64_t off = 0; off < TD_HEAP_ID_WORDS; off++) {
+        uint64_t idx = (start + off) % TD_HEAP_ID_WORDS;
+        uint64_t word = atomic_load_explicit(&g_heap_id_bitmap[idx],
+                                              memory_order_relaxed);
+        while (~word != 0ULL) {
+            uint64_t free_bits = ~word;
+            uint64_t bit = (uint64_t)__builtin_ctzll(free_bits);
+            uint64_t mask = 1ULL << bit;
+            uint64_t new_word = word | mask;
+            if (atomic_compare_exchange_weak_explicit(
+                    &g_heap_id_bitmap[idx], &word, new_word,
+                    memory_order_acq_rel, memory_order_relaxed)) {
+                return (int)(idx * 64 + bit);
+            }
+            /* CAS failed — word updated, retry with new value */
+        }
+    }
+    return -1;  /* pool exhausted */
+}
+
+static void heap_id_release(int id) {
+    if (id < 0 || id >= (int)TD_HEAP_ID_BITS) return;
+    uint64_t idx = (uint64_t)id >> 6;
+    uint64_t bit = (uint64_t)id & 63ULL;
+    uint64_t mask = ~(1ULL << bit);
+    atomic_fetch_and_explicit(&g_heap_id_bitmap[idx], mask,
+                               memory_order_release);
+}
 
 /* --------------------------------------------------------------------------
  * Parallel flag
@@ -605,10 +646,11 @@ void td_free(td_t* v) {
 
     size_t block_size = BSIZEOF(order);
 
-    /* Derive ownership via pool-list scan (cache-hot, avoids reading
-     * the remote pool header 32MB away). */
-    int pidx = heap_find_pool(h, v);
-    bool is_local = (pidx >= 0);
+    /* O(1) ownership check via pool header heap_id.
+     * td_pool_of() derives pool base in O(1) via self-aligned AND mask.
+     * Pool header stores heap_id stamped at pool creation. */
+    td_pool_hdr_t* phdr = td_pool_of(v);
+    bool is_local = (phdr->heap_id == h->id);
 
     /* Slab fast path (same heap only) */
     if (IS_SLAB_ORDER(order) && is_local) {
@@ -626,7 +668,7 @@ void td_free(td_t* v) {
         }
     }
 
-    /* Foreign: different heap */
+    /* Foreign: different heap — enqueue to foreign list */
     if (!is_local) {
         v->fl_next = h->foreign;
         h->foreign = v;
@@ -635,9 +677,8 @@ void td_free(td_t* v) {
         return;
     }
 
-    /* Coalescing — pass pool info from pools[] (already cache-hot) */
-    heap_coalesce(h, v, (uintptr_t)h->pools[pidx].base,
-                  h->pools[pidx].pool_order);
+    /* Local block — coalesce with buddy */
+    heap_coalesce(h, v, (uintptr_t)phdr, phdr->pool_order);
 
     td_tl_stats.free_count++;
     td_tl_stats.bytes_allocated -= block_size;
@@ -759,7 +800,13 @@ void td_heap_init(void) {
     if (!h) return;
     memset(h, 0, heap_sz);
 
-    h->id = atomic_fetch_add_explicit(&g_heap_id_next, 1, memory_order_relaxed);
+    /* Bitmap-based ID: acquire reusable ID via atomic CAS */
+    int id = heap_id_acquire();
+    if (id < 0) {
+        td_vm_free(h, heap_sz);
+        return;  /* ID pool exhausted */
+    }
+    h->id = (uint16_t)id;
 
     /* Register in global heap registry */
     td_heap_registry[h->id % TD_HEAP_REGISTRY_SIZE] = h;
@@ -775,6 +822,8 @@ void td_heap_init(void) {
 void td_heap_destroy(void) {
     td_heap_t* h = td_tl_heap;
     if (!h) return;
+
+    uint16_t saved_id = h->id;
 
     /* Unregister from global heap registry */
     td_heap_registry[h->id % TD_HEAP_REGISTRY_SIZE] = NULL;
@@ -794,6 +843,9 @@ void td_heap_destroy(void) {
     td_vm_free(h, heap_sz);
     td_tl_heap = NULL;
     memset(&td_tl_stats, 0, sizeof(td_tl_stats));
+
+    /* Release bitmap ID after all memory is freed */
+    heap_id_release(saved_id);
 }
 
 /* --------------------------------------------------------------------------
@@ -1071,6 +1123,56 @@ void td_heap_merge(td_heap_t* src) {
         }
     }
     src->pool_count = 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Public foreign-blocks flush
+ * -------------------------------------------------------------------------- */
+
+void td_heap_flush_foreign(void) {
+    td_heap_t* h = td_tl_heap;
+    if (!h) return;
+    bool safe = (atomic_load_explicit(&td_parallel_flag,
+                                       memory_order_relaxed) == 0);
+    heap_flush_foreign(h, safe);
+}
+
+/* --------------------------------------------------------------------------
+ * Pending-merge queue (lock-free LIFO)
+ *
+ * Workers that are torn down push their heap onto this queue instead of
+ * destroying it immediately. The main thread drains the queue, merging
+ * each pending heap into its own and then destroying it.
+ * -------------------------------------------------------------------------- */
+
+void td_heap_push_pending(td_heap_t* heap) {
+    if (!heap) return;
+    /* Unregister so no new foreign blocks target this heap */
+    td_heap_registry[heap->id % TD_HEAP_REGISTRY_SIZE] = NULL;
+    /* Lock-free push: CAS loop on global LIFO head */
+    heap->pending_next = td_heap_pending_merge;
+    while (!atomic_compare_exchange_weak_explicit(
+            (_Atomic(td_heap_t*)*)&td_heap_pending_merge,
+            &heap->pending_next, heap,
+            memory_order_release, memory_order_relaxed))
+        ;
+}
+
+void td_heap_drain_pending(void) {
+    /* Atomically steal the entire pending list */
+    td_heap_t* pending = atomic_exchange_explicit(
+        (_Atomic(td_heap_t*)*)&td_heap_pending_merge, NULL,
+        memory_order_acquire);
+    while (pending) {
+        td_heap_t* next = pending->pending_next;
+        td_heap_merge(pending);
+        /* Free the heap struct (pools already transferred by merge) */
+        uint16_t saved_id = pending->id;
+        size_t heap_sz = (sizeof(td_heap_t) + 4095) & ~(size_t)4095;
+        td_vm_free(pending, heap_sz);
+        heap_id_release(saved_id);
+        pending = next;
+    }
 }
 
 /* --------------------------------------------------------------------------
