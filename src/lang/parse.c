@@ -292,6 +292,7 @@ td_t* td_parse(const char* source) {
     do_list->len = count + 1;
     td_t** elems = (td_t**)td_data(do_list);
     elems[0] = td_env_get(td_sym_intern("do", 2));
+    if (elems[0]) td_retain(elems[0]);
     for (int32_t i = 0; i < count; i++)
         elems[i + 1] = exprs[i];
     return do_list;

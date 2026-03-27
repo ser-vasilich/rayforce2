@@ -14,6 +14,11 @@ static int run_file(const char* path) {
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (len < 0) {
+        fclose(f);
+        fprintf(stderr, "error: cannot determine size of '%s'\n", path);
+        return 1;
+    }
 
     td_t* block = td_alloc((int64_t)len + 1);
     if (!block) {

@@ -95,6 +95,7 @@ static int32_t add_constant(compiler_t *c, td_t *value) {
     if (c->n_consts >= c->consts_cap) {
         int32_t new_cap = c->consts_cap * 2;
         td_t *new_obj = td_alloc(new_cap * sizeof(td_t *));
+        if (!new_obj || TD_IS_ERR(new_obj)) { c->error = true; return c->n_consts; }
         new_obj->type = TD_LIST;
         new_obj->len = 0;
         td_t **new_arr = (td_t **)td_data(new_obj);
@@ -182,6 +183,7 @@ static void compile_list(compiler_t *c, td_t *ast) {
             emit(c, OP_DUP);
             int32_t slot = find_local(c, name_obj->i64);
             if (slot < 0) slot = add_local(c, name_obj->i64);
+            if (slot < 0) { c->error = true; return; }
             emit(c, OP_STOREENV);
             emit(c, (uint8_t)slot);
             return;

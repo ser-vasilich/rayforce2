@@ -106,11 +106,15 @@ static td_t* ray_lte(td_t* a, td_t* b) {
 
 static td_t* ray_eq(td_t* a, td_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (a->type == TD_ATOM_I64 && b->type == TD_ATOM_I64)
+        return make_bool(a->i64 == b->i64 ? 1 : 0);
     return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
 }
 
 static td_t* ray_neq(td_t* a, td_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (a->type == TD_ATOM_I64 && b->type == TD_ATOM_I64)
+        return make_bool(a->i64 != b->i64 ? 1 : 0);
     return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
 }
 
@@ -2397,6 +2401,10 @@ op_calld: {
     td_t *fn_obj = POP();
 
     td_t *call_list = td_alloc((n + 1) * sizeof(td_t *));
+    if (!call_list || TD_IS_ERR(call_list)) {
+        PUSH(TD_ERR_PTR(TD_ERR_OOM));
+        DISPATCH();
+    }
     call_list->type = TD_LIST;
     call_list->len = n + 1;
     td_t **elems = (td_t **)td_data(call_list);
