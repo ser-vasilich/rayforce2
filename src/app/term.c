@@ -1,4 +1,5 @@
 #include "app/term.h"
+#include "lang/env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -439,36 +440,6 @@ static int is_op_char(char c) {
            c == '<' || c == '>' || c == '=' || c == '!' || c == '&' || c == '|';
 }
 
-static const char* s_builtins[] = {
-    "abs", "acos", "add", "and", "asin", "atan",
-    "avg", "by", "ceil", "cols", "concat", "cos", "count",
-    "def", "delete", "desc", "distinct", "div", "do",
-    "drop", "each", "enlist", "eq", "eval", "false", "fill",
-    "filter", "first", "flip", "floor", "fn", "from",
-    "get", "group", "gt", "gte",
-    "head", "iasc", "idesc", "if", "in", "insert", "join",
-    "key", "keys", "last", "left", "len", "let", "list", "log", "lower",
-    "lt", "lte", "max", "meta", "min", "mod", "mul", "neg", "neq",
-    "not", "null", "or",
-    "parse", "pow", "print", "println",
-    "raise", "range", "read-csv", "rename", "replace", "reverse", "right",
-    "round", "save", "scan", "select", "set", "show", "sin", "sort", "sqrt",
-    "string", "sub", "substr", "sum",
-    "table", "tail", "take", "tan", "til", "time", "trim", "true", "try", "type",
-    "update", "upper", "upsert",
-    "val", "vals", "var", "where", "while", "xbar",
-    NULL
-};
-
-static int is_builtin(const char* word, int32_t wlen) {
-    for (const char** p = s_builtins; *p; p++) {
-        int32_t blen = (int32_t)strlen(*p);
-        if (blen == wlen && memcmp(*p, word, (size_t)wlen) == 0)
-            return 1;
-    }
-    return 0;
-}
-
 /* ===== Bracket matching ===== */
 
 static int is_open_bracket(char c) {
@@ -626,7 +597,10 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
                 while (j < buf_len && is_alphanum(buf[j])) j++;
                 int32_t wlen = j - i;
 
-                if (is_builtin(buf + i, wlen)) {
+                const char* match = NULL;
+                int64_t nmatches = td_env_lookup_prefix(buf + i, wlen,
+                                                         &match, 1);
+                if (nmatches == 1 && (int32_t)strlen(match) == wlen) {
                     HL_LIT(CLR_GREEN);
                     HL_APPEND(buf + i, wlen);
                     HL_LIT(CLR_RESET);

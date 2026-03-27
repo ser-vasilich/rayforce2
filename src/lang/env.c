@@ -1,5 +1,6 @@
 #include "lang/env.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- Function constructors ---- */
@@ -139,6 +140,57 @@ void td_env_pop_scope(void) {
         if (f->vals[i]) td_release(f->vals[i]);
     }
     f->count = 0;
+}
+
+/* ---- Prefix lookup ---- */
+
+static const char* s_keywords[] = {
+    "def", "do", "false", "fn", "if", "let", "set", "true", NULL
+};
+
+/* Compare helper for qsort on const char* */
+static int cmp_str_ptr(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+
+int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
+                              const char** results, int64_t max_results) {
+    int64_t count = 0;
+
+    /* Scan global env keys */
+    for (int32_t i = 0; i < g_env.count && count < max_results; i++) {
+        td_t* s = td_sym_str(g_env.keys[i]);
+        if (!s) continue;
+        const char* name = td_str_ptr(s);
+        if (!name) continue;
+        int64_t nlen = (int64_t)strlen(name);
+        if (nlen >= len && strncmp(name, prefix, (size_t)len) == 0) {
+            /* Deduplicate against what we already have */
+            int dup = 0;
+            for (int64_t j = 0; j < count; j++) {
+                if (strcmp(results[j], name) == 0) { dup = 1; break; }
+            }
+            if (!dup) results[count++] = name;
+        }
+    }
+
+    /* Scan static keyword list */
+    for (const char** kw = s_keywords; *kw && count < max_results; kw++) {
+        int64_t klen = (int64_t)strlen(*kw);
+        if (klen >= len && strncmp(*kw, prefix, (size_t)len) == 0) {
+            int dup = 0;
+            for (int64_t j = 0; j < count; j++) {
+                if (strcmp(results[j], *kw) == 0) { dup = 1; break; }
+            }
+            if (!dup) results[count++] = *kw;
+        }
+    }
+
+    /* Sort alphabetically */
+    if (count > 1) {
+        qsort((void*)results, (size_t)count, sizeof(const char*), cmp_str_ptr);
+    }
+    return count;
 }
 
 td_err_t td_env_set_local(int64_t sym_id, td_t* val) {

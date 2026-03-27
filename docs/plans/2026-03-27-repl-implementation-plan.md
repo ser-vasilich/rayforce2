@@ -211,20 +211,20 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/lang/env.h`, `src/lang/env.c`
 
-- [ ] Add to `env.h`:
+- [x] Add to `env.h`:
   ```c
   int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
                                 const char** results, int64_t max_results);
   ```
   Returns count of matches. Fills `results[]` with pointers to interned name strings.
-- [ ] Implement in `env.c`:
+- [x] Implement in `env.c`:
   - Scan `g_env` keys, resolve each symbol ID to string via `td_sym_str()`
   - Compare prefix with `strncmp`
   - Also scan a static keyword list: `fn`, `do`, `if`, `let`, `set`, `true`, `false`
   - Return matches sorted alphabetically
-- [ ] Wire into `term_redraw_highlighted()` for exact-match coloring (1 result, len == word len)
-- [ ] Build and test: highlighting uses live env data
-- [ ] Commit: `feat(repl): environment prefix lookup for highlighting and completion`
+- [x] Wire into `term_redraw_highlighted()` for exact-match coloring (1 result, len == word len)
+- [x] Build and test: highlighting uses live env data
+- [x] Commit: `feat(repl): environment prefix lookup for highlighting and completion`
 
 ---
 

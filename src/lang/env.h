@@ -15,6 +15,13 @@ void     td_env_destroy(void);
 td_t*    td_env_get(int64_t sym_id);
 td_err_t td_env_set(int64_t sym_id, td_t* val);
 
+/* Prefix lookup: scan global env + keywords for names starting with prefix.
+ * Fills results[] with pointers to interned name strings (valid until next
+ * sym table mutation).  Returns count of matches (up to max_results).
+ * Results are sorted alphabetically. */
+int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
+                              const char** results, int64_t max_results);
+
 /* Local scope stack for lexical binding (let, do, lambda) */
 td_err_t td_env_push_scope(void);
 void td_env_pop_scope(void);

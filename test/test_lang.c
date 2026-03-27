@@ -1241,6 +1241,53 @@ static MunitResult test_eval_type(const void* params, void* fixture) {
 }
 
 /* ---- Suite definition ---- */
+/* ---- Test: env prefix lookup ---- */
+static MunitResult test_env_lookup_prefix(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* After td_lang_init(), global env has builtins like "select", "sum", etc. */
+    const char* results[64];
+
+    /* Exact prefix match for "sum" — should find it */
+    int64_t n = td_env_lookup_prefix("sum", 3, results, 64);
+    munit_assert_int((int)n, >=, 1);
+    int found_sum = 0;
+    for (int64_t i = 0; i < n; i++) {
+        if (strcmp(results[i], "sum") == 0) { found_sum = 1; break; }
+    }
+    munit_assert_true(found_sum);
+
+    /* Prefix "sel" should match "select" */
+    n = td_env_lookup_prefix("sel", 3, results, 64);
+    munit_assert_int((int)n, >=, 1);
+    int found_select = 0;
+    for (int64_t i = 0; i < n; i++) {
+        if (strcmp(results[i], "select") == 0) { found_select = 1; break; }
+    }
+    munit_assert_true(found_select);
+
+    /* Keywords: prefix "fn" should match keyword "fn" */
+    n = td_env_lookup_prefix("fn", 2, results, 64);
+    munit_assert_int((int)n, >=, 1);
+    int found_fn = 0;
+    for (int64_t i = 0; i < n; i++) {
+        if (strcmp(results[i], "fn") == 0) { found_fn = 1; break; }
+    }
+    munit_assert_true(found_fn);
+
+    /* Nonsense prefix should return 0 */
+    n = td_env_lookup_prefix("zzzzz", 5, results, 64);
+    munit_assert_int((int)n, ==, 0);
+
+    /* Results should be sorted */
+    n = td_env_lookup_prefix("a", 1, results, 64);
+    for (int64_t i = 1; i < n; i++) {
+        munit_assert_int(strcmp(results[i - 1], results[i]), <=, 0);
+    }
+
+    return MUNIT_OK;
+}
+
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
     { "/fn_binary",  test_fn_binary,  lang_setup, lang_teardown, 0, NULL },
@@ -1324,6 +1371,7 @@ static MunitTest lang_tests[] = {
     { "/eval/read_write_csv",  test_eval_read_write_csv,  lang_setup, lang_teardown, 0, NULL },
     { "/eval/as_cast",         test_eval_as_cast,         lang_setup, lang_teardown, 0, NULL },
     { "/eval/type",            test_eval_type,            lang_setup, lang_teardown, 0, NULL },
+    { "/env/lookup_prefix",    test_env_lookup_prefix,    lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
