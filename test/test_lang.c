@@ -5,6 +5,7 @@
 /* Forward declarations for lang modules */
 #include "lang/env.h"
 #include "lang/parse.h"
+#include "lang/eval.h"
 
 /* ---- Setup / Teardown ---- */
 
@@ -12,11 +13,13 @@ static void* lang_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
     td_heap_init();
     (void)td_sym_init();
+    (void)td_lang_init();
     return NULL;
 }
 
 static void lang_teardown(void* fixture) {
     (void)fixture;
+    td_lang_destroy();
     td_sym_destroy();
     td_heap_destroy();
 }
@@ -185,6 +188,71 @@ static MunitResult test_parse_empty_list(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: eval literal passthrough ---- */
+static MunitResult test_eval_literal(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("42");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 42);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval addition ---- */
+static MunitResult test_eval_add(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(+ 1 2)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval nested arithmetic ---- */
+static MunitResult test_eval_nested_arith(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(+ (* 2 3) 4)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 10);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval subtraction ---- */
+static MunitResult test_eval_sub(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(- 10 3)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->i64, ==, 7);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval division ---- */
+static MunitResult test_eval_div(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(/ 10 3)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval comparison ---- */
+static MunitResult test_eval_cmp(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(> 5 3)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_BOOL);
+    munit_assert_uint(result->b8, ==, 1);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -200,6 +268,12 @@ static MunitTest lang_tests[] = {
     { "/parse/nested",     test_parse_nested,     lang_setup, lang_teardown, 0, NULL },
     { "/parse/vector",     test_parse_vector,     lang_setup, lang_teardown, 0, NULL },
     { "/parse/empty_list", test_parse_empty_list, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/literal",      test_eval_literal,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/add",          test_eval_add,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/nested_arith", test_eval_nested_arith, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/sub",          test_eval_sub,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/div",          test_eval_div,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/cmp",          test_eval_cmp,          lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
