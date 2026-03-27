@@ -87,27 +87,28 @@ td_t* td_env_get(int64_t sym_id) {
     return NULL;
 }
 
-void td_env_set(int64_t sym_id, td_t* val) {
+td_err_t td_env_set(int64_t sym_id, td_t* val) {
     for (int32_t i = 0; i < g_env.count; i++) {
         if (g_env.keys[i] == sym_id) {
             if (g_env.vals[i]) td_release(g_env.vals[i]);
             td_retain(val);
             g_env.vals[i] = val;
-            return;
+            return TD_OK;
         }
     }
-    if (g_env.count < ENV_CAP) {
-        g_env.keys[g_env.count] = sym_id;
-        td_retain(val);
-        g_env.vals[g_env.count] = val;
-        g_env.count++;
-    }
+    if (g_env.count >= ENV_CAP) return TD_ERR_OOM;
+    g_env.keys[g_env.count] = sym_id;
+    td_retain(val);
+    g_env.vals[g_env.count] = val;
+    g_env.count++;
+    return TD_OK;
 }
 
-void td_env_push_scope(void) {
-    if (scope_depth >= SCOPE_CAP) return;  /* scope stack full — no-op */
+td_err_t td_env_push_scope(void) {
+    if (scope_depth >= SCOPE_CAP) return TD_ERR_OOM;
     scope_stack[scope_depth].count = 0;
     scope_depth++;
+    return TD_OK;
 }
 
 void td_env_pop_scope(void) {
@@ -121,7 +122,7 @@ void td_env_pop_scope(void) {
 }
 
 void td_env_set_local(int64_t sym_id, td_t* val) {
-    if (scope_depth <= 0) { td_env_set(sym_id, val); return; }
+    if (scope_depth <= 0) { (void)td_env_set(sym_id, val); return; }
     td_scope_frame_t* f = &scope_stack[scope_depth - 1];
     /* Update existing in this frame */
     for (int32_t i = 0; i < f->count; i++) {

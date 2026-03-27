@@ -105,6 +105,10 @@ static td_t* ray_lte(td_t* a, td_t* b) {
 }
 
 static td_t* ray_eq(td_t* a, td_t* b) {
+    if (a->type == TD_ATOM_BOOL && b->type == TD_ATOM_BOOL)
+        return make_bool(a->b8 == b->b8 ? 1 : 0);
+    if (a->type == TD_ATOM_SYM && b->type == TD_ATOM_SYM)
+        return make_bool(a->i64 == b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return TD_ERR_PTR(TD_ERR_TYPE);
     if (a->type == TD_ATOM_I64 && b->type == TD_ATOM_I64)
         return make_bool(a->i64 == b->i64 ? 1 : 0);
@@ -112,6 +116,10 @@ static td_t* ray_eq(td_t* a, td_t* b) {
 }
 
 static td_t* ray_neq(td_t* a, td_t* b) {
+    if (a->type == TD_ATOM_BOOL && b->type == TD_ATOM_BOOL)
+        return make_bool(a->b8 != b->b8 ? 1 : 0);
+    if (a->type == TD_ATOM_SYM && b->type == TD_ATOM_SYM)
+        return make_bool(a->i64 != b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return TD_ERR_PTR(TD_ERR_TYPE);
     if (a->type == TD_ATOM_I64 && b->type == TD_ATOM_I64)
         return make_bool(a->i64 != b->i64 ? 1 : 0);
@@ -1084,6 +1092,10 @@ static td_op_t* compile_expr_dag(td_graph_t* g, td_t* expr) {
     if (expr->type == TD_ATOM_BOOL)
         return td_const_bool(g, expr->b8);
 
+    /* Symbol literal → const i64 (sym IDs are integer indices) */
+    if (expr->type == TD_ATOM_SYM && !(expr->attrs & TD_ATTR_NAME))
+        return td_const_i64(g, expr->i64);
+
     /* Name reference → column scan */
     if (expr->type == TD_ATOM_SYM && (expr->attrs & TD_ATTR_NAME)) {
         td_t* s = td_sym_str(expr->i64);
@@ -1910,7 +1922,10 @@ static td_t* ray_set(td_t* name_obj, td_t* val_expr) {
         return TD_ERR_PTR(TD_ERR_TYPE);
     td_t* val = td_eval(val_expr);
     if (TD_IS_ERR(val)) return val;
-    td_env_set(name_obj->i64, val);
+    if (td_env_set(name_obj->i64, val) != TD_OK) {
+        td_release(val);
+        return TD_ERR_PTR(TD_ERR_OOM);
+    }
     return val;  /* set returns the value */
 }
 
@@ -1943,7 +1958,7 @@ static td_t* ray_cond(td_t** args, int64_t n) {
 /* (do expr1 expr2 ...) — evaluate in sequence, return last. Pushes local scope. */
 static td_t* ray_do(td_t** args, int64_t n) {
     if (n == 0) return make_i64(0);
-    td_env_push_scope();
+    if (td_env_push_scope() != TD_OK) return TD_ERR_PTR(TD_ERR_OOM);
     td_t* result = NULL;
     for (int64_t i = 0; i < n; i++) {
         if (result) td_release(result);
@@ -2027,7 +2042,7 @@ static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
     int64_t param_count = td_len(params_list);
     td_t** param_syms = (td_t**)td_data(params_list);
 
-    td_env_push_scope();
+    if (td_env_push_scope() != TD_OK) return TD_ERR_PTR(TD_ERR_OOM);
 
     for (int64_t i = 0; i < param_count && i < argc; i++) {
         td_env_set_local(param_syms[i]->i64, call_args[i]);
@@ -2103,7 +2118,7 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
 
 #define DISPATCH() goto *dispatch[code[ip++]]
 #define PUSH(v)    do { if (vm.sp >= VM_STACK_SIZE) goto vm_error; vm.ps[vm.sp++] = (v); } while(0)
-#define POP()      (vm.ps[--vm.sp])
+#define POP()      (vm.sp > 0 ? vm.ps[--vm.sp] : (td_t*)NULL)
 #define PEEK()     (vm.ps[vm.sp - 1])
 #define LOCAL(s)   (vm.ps[vm.fp + (s)])
 

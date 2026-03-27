@@ -123,7 +123,9 @@ static td_t* parse_string(td_parser_t *p) {
     size_t out = 0;
     const char *r = start;
     const char *end = start + raw_len;
-    while (r < end && out < sizeof(buf) - 1) {
+    while (r < end) {
+        if (out >= sizeof(buf) - 2)
+            return TD_ERR_PTR(TD_ERR_DOMAIN);  /* string too long for escape buffer */
         if (*r == '\\' && r + 1 < end) {
             r++;
             switch (*r) {
@@ -299,7 +301,11 @@ td_t* td_parse(const char* source) {
     int32_t count = 0;
     exprs[count++] = first;
 
-    while (*p.pos && count < 256) {
+    while (*p.pos) {
+        if (count >= 256) {
+            for (int32_t i = 0; i < count; i++) td_release(exprs[i]);
+            return TD_ERR_PTR(TD_ERR_DOMAIN);  /* too many top-level expressions */
+        }
         td_t* expr = parse_expr(&p);
         if (TD_IS_ERR(expr)) {
             for (int32_t i = 0; i < count; i++) td_release(exprs[i]);

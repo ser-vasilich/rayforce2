@@ -144,7 +144,7 @@ static void patch_jump(compiler_t *c, int32_t pos) {
 }
 
 /* Cached sym IDs for special forms */
-static int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1;
+static _Thread_local int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1;
 
 static void init_sf_syms(void) {
     if (sf_set >= 0) return;
@@ -331,8 +331,9 @@ void td_compile(td_t *lambda) {
     td_t *params_list = LAMBDA_PARAMS(lambda);
     int64_t param_count = td_len(params_list);
     td_t **param_syms = (td_t **)td_data(params_list);
-    for (int64_t i = 0; i < param_count; i++)
-        add_local(&c, param_syms[i]->i64);
+    for (int64_t i = 0; i < param_count; i++) {
+        if (add_local(&c, param_syms[i]->i64) < 0) { c.error = true; break; }
+    }
 
     /* Compile body expressions */
     td_t *body = LAMBDA_BODY(lambda);
