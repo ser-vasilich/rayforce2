@@ -96,6 +96,9 @@ typedef struct td_term {
     int32_t     popup_scroll;
     const char** popup_items;     /* borrowed from comp_items */
     int32_t     popup_max_visible;
+    /* Multi-line input state */
+    char        multiline_buf[TERM_BUF_SIZE];
+    int32_t     multiline_len;
 } td_term_t;
 
 td_term_t* td_term_create(void);
@@ -142,6 +145,10 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
 /* Dropdown popup autocomplete menu */
 void td_term_popup_show(td_term_t* term);
 void td_term_popup_hide(td_term_t* term);
+
+/* Multi-line input: count unmatched opening brackets in multiline_buf + buf */
+int32_t td_term_count_unmatched(td_term_t* term);
+void    td_term_continuation_prompt(td_term_t* term);
 
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"

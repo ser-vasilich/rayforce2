@@ -978,14 +978,57 @@ void td_term_popup_hide(td_term_t* term) {
     fflush(stdout);
 }
 
+/* ===== Multi-line input ===== */
+
+int32_t td_term_count_unmatched(td_term_t* term) {
+    int32_t depth = 0;
+    int32_t in_string = 0;
+
+    /* Scan multiline_buf first */
+    for (int32_t i = 0; i < term->multiline_len; i++) {
+        char c = term->multiline_buf[i];
+        if (in_string) {
+            if (c == '\\' && i + 1 < term->multiline_len) { i++; continue; }
+            if (c == '"') in_string = 0;
+            continue;
+        }
+        if (c == '"') { in_string = 1; continue; }
+        if (c == '(' || c == '[' || c == '{') depth++;
+        else if (c == ')' || c == ']' || c == '}') { if (depth > 0) depth--; }
+    }
+
+    /* Then scan current buf */
+    for (int32_t i = 0; i < term->buf_len; i++) {
+        char c = term->buf[i];
+        if (in_string) {
+            if (c == '\\' && i + 1 < term->buf_len) { i++; continue; }
+            if (c == '"') in_string = 0;
+            continue;
+        }
+        if (c == '"') { in_string = 1; continue; }
+        if (c == '(' || c == '[' || c == '{') depth++;
+        else if (c == ')' || c == ']' || c == '}') { if (depth > 0) depth--; }
+    }
+
+    return depth;
+}
+
 /* ===== Prompt ===== */
 
 #define PROMPT_STR "teide> "
 #define PROMPT_LEN 7
+#define CONT_PROMPT_STR "  \xc2\xb7\xc2\xb7\xc2\xb7 "  /* "  ··· " in UTF-8 */
+#define CONT_PROMPT_LEN 8  /* 2 spaces + 3x2-byte dots + 1 space = 8 bytes */
+#define CONT_PROMPT_VISUAL 8  /* 2 + 3*1 + 1 space + 2 trailing = visual width matches */
 
 void td_term_prompt(td_term_t* term) {
     write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
     term->prompt_len = PROMPT_LEN;
+}
+
+void td_term_continuation_prompt(td_term_t* term) {
+    write(STDOUT_FILENO, CONT_PROMPT_STR, CONT_PROMPT_LEN);
+    term->prompt_len = 6; /* visual width: "  ··· " = 2+3+1 = 6 chars */
 }
 
 /* ===== Redraw ===== */
@@ -1016,8 +1059,13 @@ void td_term_redraw(td_term_t* term) {
         /* 8K should be enough for 4K buf + ANSI escapes */
         char hlbuf[8192];
         int32_t hlen = 0;
-        memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
-        hlen = PROMPT_LEN;
+        if (term->multiline_len > 0) {
+            memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);
+            hlen = CONT_PROMPT_LEN;
+        } else {
+            memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
+            hlen = PROMPT_LEN;
+        }
         if (term->buf_len > 0) {
             /* Find bracket match at cursor */
             int32_t match_pos1 = -1, match_pos2 = -1;
@@ -1160,6 +1208,7 @@ td_t* td_term_read(td_term_t* term) {
     fflush(stdout);
     term->buf_len = 0;
     term->buf_pos = 0;
+    term->multiline_len = 0;
 
     for (;;) {
         int64_t sz = td_term_getc(term);
@@ -1331,8 +1380,37 @@ td_t* td_term_read(td_term_t* term) {
         switch (key) {
         case KEYCODE_RETURN: {
             term->buf[term->buf_len] = '\0';
+            int32_t unmatched = td_term_count_unmatched(term);
+            if (unmatched > 0) {
+                /* Append buf + newline to multiline_buf, show continuation */
+                if (term->multiline_len + term->buf_len + 1 < TERM_BUF_SIZE) {
+                    memcpy(term->multiline_buf + term->multiline_len,
+                           term->buf, (size_t)term->buf_len);
+                    term->multiline_len += term->buf_len;
+                    term->multiline_buf[term->multiline_len++] = '\n';
+                }
+                term->buf_len = 0;
+                term->buf_pos = 0;
+                putchar('\n');
+                fflush(stdout);
+                td_term_continuation_prompt(term);
+                fflush(stdout);
+                continue;
+            }
             putchar('\n');
             fflush(stdout);
+            if (term->multiline_len > 0) {
+                /* Concatenate multiline_buf + buf */
+                if (term->multiline_len + term->buf_len < TERM_BUF_SIZE) {
+                    memcpy(term->multiline_buf + term->multiline_len,
+                           term->buf, (size_t)term->buf_len);
+                    term->multiline_len += term->buf_len;
+                }
+                td_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
+                td_t* result = td_str(term->multiline_buf, (size_t)term->multiline_len);
+                term->multiline_len = 0;
+                return result;
+            }
             td_hist_add(&term->hist, term->buf, term->buf_len);
             if (term->buf_len == 0) return td_str("", 0);
             return td_str(term->buf, (size_t)term->buf_len);
@@ -1360,6 +1438,7 @@ td_t* td_term_read(td_term_t* term) {
         case KEYCODE_CTRL_C: {
             term->buf_len = 0;
             term->buf_pos = 0;
+            term->multiline_len = 0;
             write(STDOUT_FILENO, "^C\n", 3);
             td_term_prompt(term);
             fflush(stdout);

@@ -307,19 +307,19 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/term.c`, `src/app/term.h`
 
-- [ ] Add `multiline_buf[TERM_BUF_SIZE]` and `multiline_len` to `td_term_t` (already in struct from design)
-- [ ] Implement `td_term_count_unmatched()`:
+- [x] Add `multiline_buf[TERM_BUF_SIZE]` and `multiline_len` to `td_term_t` (already in struct from design)
+- [x] Implement `td_term_count_unmatched()`:
   - Scan `multiline_buf + buf` for unmatched `(`, `[`, `{`
   - Skip brackets inside strings (`"..."`)
   - Return count of unmatched openers
-- [ ] Modify Enter handling in `td_term_read()`:
+- [x] Modify Enter handling in `td_term_read()`:
   - Call `td_term_count_unmatched()`
   - If count > 0: append `buf + \n` to `multiline_buf`, clear buf, show continuation prompt `  ··· `, continue reading
   - If count == 0 and `multiline_len > 0`: concatenate `multiline_buf + buf`, reset multiline state, return full string
   - If count == 0 and `multiline_len == 0`: return buf as normal
-- [ ] Implement `td_term_continuation_prompt()` — writes `"  ··· "` with correct prompt_len
-- [ ] Smoke test: type `(select {` Enter → continuation prompt → `from: t` Enter → continuation prompt → `})` Enter → evaluates full expression
-- [ ] Commit: `feat(repl): multi-line input with paren balancing and continuation prompt`
+- [x] Implement `td_term_continuation_prompt()` — writes `"  ··· "` with correct prompt_len
+- [x] Smoke test: type `(select {` Enter → continuation prompt → `from: t` Enter → continuation prompt → `})` Enter → evaluates full expression
+- [x] Commit: `feat(repl): multi-line input with paren balancing and continuation prompt`
 
 ---
 
