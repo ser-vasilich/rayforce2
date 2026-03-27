@@ -418,19 +418,19 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_println` — `(println "hello")` → null, outputs to stdout
   - `test_eval_read_write_csv` — write temp CSV, read it back, verify table matches
   - `test_eval_as_cast` — `(as 'I64 "42")` → i64 42
   - `test_eval_type` — `(type 42)` → type code
-- [ ] Implement `ray_println` (`TD_VARY`)
-- [ ] Implement `ray_read_csv` (`TD_VARY`) — wire to `td_csv_load`
-- [ ] Implement `ray_write_csv` (`TD_VARY`)
-- [ ] Implement `ray_read` / `ray_write` (`TD_UNARY` / `TD_BINARY`)
-- [ ] Implement `ray_cast_obj` / `as` (`TD_BINARY`)
-- [ ] Implement `ray_type` (`TD_UNARY`)
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): I/O builtins (read-csv, write-csv, println, as, type)`
+- [x] Implement `ray_println` (`TD_VARY`)
+- [x] Implement `ray_read_csv` (`TD_VARY`) — wire to `td_read_csv`
+- [x] Implement `ray_write_csv` (`TD_VARY`)
+- [x] Implement `ray_read` / `ray_write` (`TD_UNARY` / `TD_BINARY`)
+- [x] Implement `ray_cast_obj` / `as` (`TD_BINARY`)
+- [x] Implement `ray_type` (`TD_UNARY`)
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): I/O builtins (read-csv, write-csv, println, as, type)`
 
 ---
 

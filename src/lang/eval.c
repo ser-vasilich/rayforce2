@@ -1,7 +1,10 @@
 #include "lang/eval.h"
 #include "lang/env.h"
 #include "lang/parse.h"
+#include "io/csv.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* ══════════════════════════════════════════
  * Arithmetic builtins
@@ -1699,6 +1702,196 @@ static td_t* ray_window_join(td_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * I/O builtins: println, read-csv, write-csv, as, type
+ * ══════════════════════════════════════════ */
+
+/* Helper: print a td_t value to a file handle */
+static void print_value(FILE* fp, td_t* val) {
+    if (!val || TD_IS_ERR(val)) { fprintf(fp, "error"); return; }
+    switch (val->type) {
+    case TD_ATOM_I64:  fprintf(fp, "%ld", (long)val->i64); break;
+    case TD_ATOM_F64:  fprintf(fp, "%g", val->f64); break;
+    case TD_ATOM_BOOL: fprintf(fp, "%s", val->b8 ? "true" : "false"); break;
+    case TD_ATOM_SYM: {
+        td_t* s = td_sym_str(val->i64);
+        if (s) fprintf(fp, "'%.*s", (int)td_str_len(s), td_str_ptr(s));
+        else fprintf(fp, "'?");
+        break;
+    }
+    case TD_ATOM_STR: {
+        const char* s = td_str_ptr(val);
+        size_t slen = td_str_len(val);
+        fprintf(fp, "%.*s", (int)slen, s);
+        break;
+    }
+    case TD_LIST: {
+        fprintf(fp, "[");
+        int64_t len = td_len(val);
+        td_t** elems = (td_t**)td_data(val);
+        for (int64_t i = 0; i < len; i++) {
+            if (i > 0) fprintf(fp, " ");
+            print_value(fp, elems[i]);
+        }
+        fprintf(fp, "]");
+        break;
+    }
+    case TD_TABLE:
+        fprintf(fp, "<table %ldx%ld>",
+                (long)td_table_nrows(val), (long)td_table_ncols(val));
+        break;
+    default:
+        fprintf(fp, "<type:%d>", val->type);
+        break;
+    }
+}
+
+/* (println val1 val2 ...) — print values to stdout, newline at end */
+static td_t* ray_println(td_t** args, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) fputc(' ', stdout);
+        print_value(stdout, args[i]);
+    }
+    fputc('\n', stdout);
+    fflush(stdout);
+    return make_i64(0);
+}
+
+/* (read-csv path) — read CSV file, return TD_TABLE */
+static td_t* ray_read_csv(td_t** args, int64_t n) {
+    if (n < 1) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* path_obj = args[0];
+    const char* path = NULL;
+    if (path_obj->type == TD_ATOM_STR)
+        path = td_str_ptr(path_obj);
+    else
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    if (!path) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = td_read_csv(path);
+    if (!tbl || TD_IS_ERR(tbl)) return TD_ERR_PTR(TD_ERR_IO);
+    return tbl;
+}
+
+/* (write-csv table path) — write table to CSV file */
+static td_t* ray_write_csv(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = args[0];
+    td_t* path_obj = args[1];
+    if (tbl->type != TD_TABLE) return TD_ERR_PTR(TD_ERR_TYPE);
+    const char* path = NULL;
+    if (path_obj->type == TD_ATOM_STR)
+        path = td_str_ptr(path_obj);
+    else
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    if (!path) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_err_t err = td_write_csv(tbl, path);
+    if (err != TD_OK) return TD_ERR_PTR(err);
+    return make_i64(0);
+}
+
+/* (as 'TypeName value) — type cast */
+static td_t* ray_cast(td_t* type_sym, td_t* val) {
+    if (type_sym->type != TD_ATOM_SYM) return TD_ERR_PTR(TD_ERR_TYPE);
+    td_t* s = td_sym_str(type_sym->i64);
+    if (!s) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    const char* tname = td_str_ptr(s);
+    size_t tlen = td_str_len(s);
+
+    /* Cast to I64 */
+    if (tlen == 3 && memcmp(tname, "I64", 3) == 0) {
+        if (val->type == TD_ATOM_I64) { td_retain(val); return val; }
+        if (val->type == TD_ATOM_F64) return make_i64((int64_t)val->f64);
+        if (val->type == TD_ATOM_BOOL) return make_i64(val->b8 ? 1 : 0);
+        if (val->type == TD_ATOM_STR) {
+            const char* sp = td_str_ptr(val);
+            if (!sp) return TD_ERR_PTR(TD_ERR_DOMAIN);
+            char* end;
+            int64_t v = strtoll(sp, &end, 10);
+            if (end == sp) return TD_ERR_PTR(TD_ERR_DOMAIN);
+            return make_i64(v);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+    /* Cast to F64 */
+    if (tlen == 3 && memcmp(tname, "F64", 3) == 0) {
+        if (val->type == TD_ATOM_F64) { td_retain(val); return val; }
+        if (val->type == TD_ATOM_I64) return make_f64((double)val->i64);
+        if (val->type == TD_ATOM_STR) {
+            const char* sp = td_str_ptr(val);
+            if (!sp) return TD_ERR_PTR(TD_ERR_DOMAIN);
+            char* end;
+            double v = strtod(sp, &end);
+            if (end == sp) return TD_ERR_PTR(TD_ERR_DOMAIN);
+            return make_f64(v);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+    /* Cast to BOOL */
+    if (tlen == 4 && memcmp(tname, "BOOL", 4) == 0) {
+        if (val->type == TD_ATOM_BOOL) { td_retain(val); return val; }
+        if (val->type == TD_ATOM_I64) return make_bool(val->i64 != 0 ? 1 : 0);
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+    /* Cast to STR */
+    if (tlen == 3 && memcmp(tname, "STR", 3) == 0) {
+        if (val->type == TD_ATOM_STR) { td_retain(val); return val; }
+        if (val->type == TD_ATOM_I64) {
+            char buf[32];
+            int n2 = snprintf(buf, sizeof(buf), "%ld", (long)val->i64);
+            return td_str(buf, (size_t)n2);
+        }
+        if (val->type == TD_ATOM_F64) {
+            char buf[32];
+            int n2 = snprintf(buf, sizeof(buf), "%g", val->f64);
+            return td_str(buf, (size_t)n2);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+    return TD_ERR_PTR(TD_ERR_DOMAIN);
+}
+
+/* (type val) — return the type code of a value */
+static td_t* ray_type(td_t* val) {
+    return make_i64(val->type);
+}
+
+/* (read path) — read a file's contents as a string */
+static td_t* ray_read_file(td_t* path_obj) {
+    if (path_obj->type != TD_ATOM_STR) return TD_ERR_PTR(TD_ERR_TYPE);
+    const char* path = td_str_ptr(path_obj);
+    if (!path) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    FILE* fp = fopen(path, "rb");
+    if (!fp) return TD_ERR_PTR(TD_ERR_IO);
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz < 0) { fclose(fp); return TD_ERR_PTR(TD_ERR_IO); }
+    /* Use td_alloc for the buffer */
+    td_t* buf = td_alloc((size_t)sz + 1);
+    if (!buf || TD_IS_ERR(buf)) { fclose(fp); return TD_ERR_PTR(TD_ERR_OOM); }
+    char* data = (char*)td_data(buf);
+    size_t rd = fread(data, 1, (size_t)sz, fp);
+    fclose(fp);
+    data[rd] = '\0';
+    td_release(buf);
+    return td_str(data, rd);
+}
+
+/* (write path content) — write string to a file */
+static td_t* ray_write_file(td_t* path_obj, td_t* content) {
+    if (path_obj->type != TD_ATOM_STR) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (content->type != TD_ATOM_STR) return TD_ERR_PTR(TD_ERR_TYPE);
+    const char* path = td_str_ptr(path_obj);
+    const char* data = td_str_ptr(content);
+    size_t len = td_str_len(content);
+    if (!path || !data) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return TD_ERR_PTR(TD_ERR_IO);
+    fwrite(data, 1, len, fp);
+    fclose(fp);
+    return make_i64(0);
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -2404,6 +2597,15 @@ static void td_register_builtins(void) {
     register_vary("left-join",   TD_FN_NONE, ray_left_join);
     register_vary("inner-join",  TD_FN_NONE, ray_inner_join);
     register_vary("window-join", TD_FN_NONE, ray_window_join);
+
+    /* I/O builtins */
+    register_vary("println",    TD_FN_NONE, ray_println);
+    register_vary("read-csv",   TD_FN_NONE, ray_read_csv);
+    register_vary("write-csv",  TD_FN_NONE, ray_write_csv);
+    register_binary("as",       TD_FN_NONE, ray_cast);
+    register_unary("type",      TD_FN_NONE, ray_type);
+    register_unary("read",      TD_FN_NONE, ray_read_file);
+    register_binary("write",    TD_FN_NONE, ray_write_file);
 }
 
 /* ══════════════════════════════════════════

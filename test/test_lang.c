@@ -1035,6 +1035,71 @@ static MunitResult test_eval_window_join(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: println ---- */
+static MunitResult test_eval_println(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(println \"hello\")");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    /* println returns null (i64 0) */
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 0);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: read/write CSV roundtrip ---- */
+static MunitResult test_eval_read_write_csv(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Create a table, write it to CSV, read it back */
+    td_t* result = td_eval_str(
+        "(do (set t (table ['a 'b] (list [1 2 3] [10 20 30]))) "
+        "(write-csv t \"/tmp/test_rayfall.csv\") "
+        "(set t2 (read-csv \"/tmp/test_rayfall.csv\")) "
+        "(count t2))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: as (type cast) ---- */
+static MunitResult test_eval_as_cast(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(as 'I64 \"42\")");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 42);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: type introspection ---- */
+static MunitResult test_eval_type(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* type of i64 literal */
+    td_t* result = td_eval_str("(type 42)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, TD_ATOM_I64);
+    td_release(result);
+    /* type of f64 literal */
+    result = td_eval_str("(type 3.14)");
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->i64, ==, TD_ATOM_F64);
+    td_release(result);
+    /* type of boolean */
+    result = td_eval_str("(type true)");
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->i64, ==, TD_ATOM_BOOL);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -1107,6 +1172,10 @@ static MunitTest lang_tests[] = {
     { "/eval/left_join",       test_eval_left_join,       lang_setup, lang_teardown, 0, NULL },
     { "/eval/inner_join",      test_eval_inner_join,      lang_setup, lang_teardown, 0, NULL },
     { "/eval/window_join",     test_eval_window_join,     lang_setup, lang_teardown, 0, NULL },
+    { "/eval/println",         test_eval_println,         lang_setup, lang_teardown, 0, NULL },
+    { "/eval/read_write_csv",  test_eval_read_write_csv,  lang_setup, lang_teardown, 0, NULL },
+    { "/eval/as_cast",         test_eval_as_cast,         lang_setup, lang_teardown, 0, NULL },
+    { "/eval/type",            test_eval_type,            lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
