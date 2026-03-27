@@ -30,13 +30,13 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Create `src/app/term.h`, `src/app/term.c`; Modify `CMakeLists.txt`
 
-- [ ] Create `src/app/term.h` with:
+- [x] Create `src/app/term.h` with:
   - Key code defines: `KEYCODE_RETURN`, `KEYCODE_BACKSPACE`, `KEYCODE_DELETE`, `KEYCODE_TAB`, `KEYCODE_UP/DOWN/LEFT/RIGHT`, `KEYCODE_HOME/END`, `KEYCODE_ESCAPE`, `KEYCODE_CTRL_A` through `KEYCODE_CTRL_W`, bracket codes
   - `#define TERM_BUF_SIZE 4096`
   - `td_term_t` struct: termios backup, `input[8]` (escape buf), `buf[4096]` (line buf), `buf_len`, `buf_pos`, `term_width`, `term_height`, `prompt_len`, `last_total_rows`
   - API declarations: `td_term_create()`, `td_term_destroy()`, `td_term_getc()`, `td_term_get_size()`
   - Cursor helpers: `td_cursor_move_start/left/right/up/down()`, `td_line_clear/clear_below()`, `td_cursor_hide/show()`
-- [ ] Create `src/app/term.c` with:
+- [x] Create `src/app/term.c` with:
   - `td_term_create()` — `tcgetattr()` to save, set raw mode (no echo, no canonical, char-at-a-time), call `td_term_get_size()`
   - `td_term_destroy()` — `tcsetattr()` to restore original
   - `td_term_getc()` — `read(STDIN_FILENO, &c, 1)`, decode escape sequences (`\033[A` → UP, etc.)
@@ -45,9 +45,9 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
   - `td_term_visual_width()` — count visible chars, skip ANSI escapes, handle UTF-8
   - `td_term_goto_position()` — calculate row/col from position, emit cursor moves
   - Windows stubs (`#if defined(_WIN32)`) — Console API equivalents
-- [ ] Add `src/app/term.c` to CMakeLists.txt library sources (either add to `GLOB_RECURSE` path or explicit list)
-- [ ] Build: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build` — compiles clean
-- [ ] Commit: `feat(repl): terminal layer with raw mode and cursor helpers`
+- [x] Add `src/app/term.c` to CMakeLists.txt library sources (either add to `GLOB_RECURSE` path or explicit list)
+- [x] Build: `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build` — compiles clean
+- [x] Commit: `feat(repl): terminal layer with raw mode and cursor helpers`
 
 ---
 
