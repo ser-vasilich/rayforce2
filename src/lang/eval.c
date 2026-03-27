@@ -2683,6 +2683,7 @@ op_calls: {
             break;
         }
         td_release(fn_obj);
+        if (TD_IS_ERR(result)) goto vm_error;
         PUSH(result);
         DISPATCH();
     }
@@ -2696,6 +2697,7 @@ op_calld: {
         td_t *ast = POP();
         td_t *result = td_eval(ast);
         td_release(ast);
+        if (TD_IS_ERR(result)) goto vm_error;
         PUSH(result);
         DISPATCH();
     }
@@ -2719,6 +2721,7 @@ op_calld: {
 
     td_t *result = td_eval(call_list);
     td_release(call_list);
+    if (TD_IS_ERR(result)) goto vm_error;
     PUSH(result);
     DISPATCH();
 }

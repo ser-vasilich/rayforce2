@@ -330,7 +330,7 @@ td_t* td_parse(const char* source) {
         return TD_ERR_PTR(TD_ERR_OOM);
     }
     do_list->type = TD_LIST;
-    do_list->len = count + 1;
+    do_list->len = 0;
     td_t** elems = (td_t**)td_data(do_list);
     /* Build a name-reference atom for "do" so parsing is independent of runtime */
     td_t* do_sym = td_alloc(0);
@@ -345,5 +345,6 @@ td_t* td_parse(const char* source) {
     elems[0] = do_sym;
     for (int32_t i = 0; i < count; i++)
         elems[i + 1] = exprs[i];
+    do_list->len = count + 1;
     return do_list;
 }

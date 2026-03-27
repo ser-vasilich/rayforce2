@@ -157,6 +157,7 @@ static void init_sf_syms(void) {
 
 /* ── Compile a list (special form or function call) ── */
 static void compile_list(compiler_t *c, td_t *ast) {
+    if (c->error) return;
     td_t **elems = (td_t **)td_data(ast);
     int64_t n = td_len(ast);
     td_t *head = elems[0];
@@ -280,6 +281,7 @@ static void compile_list(compiler_t *c, td_t *ast) {
 
 /* ── Compile expression ── */
 static void compile_expr(compiler_t *c, td_t *ast) {
+    if (c->error) return;
     if (!ast || TD_IS_ERR(ast)) return;
 
     if (td_is_atom(ast)) {
