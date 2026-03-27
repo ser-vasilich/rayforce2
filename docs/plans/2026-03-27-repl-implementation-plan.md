@@ -254,16 +254,16 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/term.c`
 
-- [ ] Implement `td_term_collect_completions()`:
+- [x] Implement `td_term_collect_completions()`:
   - Source 1: `td_env_lookup_prefix()` — builtins + user variables
   - Source 2: static keyword array (binary search on prefix)
   - Source 3: column names — lightweight scan of current buffer for `(select {from: <name>`, resolve `<name>` from env, if it's a table, get column name symbols
   - Source 4: history words — scan history entries, tokenize by whitespace/parens, match prefix, deduplicate against sources 1-3
   - Merge all into a single sorted deduplicated array
   - Return count and array of `const char*` pointers
-- [ ] Store results in `td_term_t` for popup use
-- [ ] Smoke test: verify completion sources work (use ghost text to validate — type prefix, see correct suggestion)
-- [ ] Commit: `feat(repl): multi-source completion candidate collection`
+- [x] Store results in `td_term_t` for popup use
+- [x] Smoke test: verify completion sources work (use ghost text to validate — type prefix, see correct suggestion)
+- [x] Commit: `feat(repl): multi-source completion candidate collection`
 
 ---
 

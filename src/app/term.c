@@ -649,7 +649,8 @@ static int32_t find_word_start(const char* buf, int32_t pos) {
 
 /* Compute ghost text suggestion based on the word at cursor.
  * Sets term->ghost, ghost_len, ghost_word_start, ghost_word_len.
- * Ghost text is the REMAINING part of the best match (after the typed prefix). */
+ * Ghost text is the REMAINING part of the best match (after the typed prefix).
+ * Also populates term->comp_items/comp_count via collect_completions. */
 static void td_term_update_ghost(td_term_t* term) {
     term->ghost_len = 0;
 
@@ -665,15 +666,13 @@ static void td_term_update_ghost(td_term_t* term) {
     if (wlen <= 0)
         return;
 
-    /* Look up completions */
-    const char* results[64];
-    int64_t count = td_env_lookup_prefix(term->buf + ws, (int64_t)wlen,
-                                          results, 64);
-    if (count <= 0)
+    /* Collect completions from all sources */
+    td_term_collect_completions(term, term->buf + ws, wlen);
+    if (term->comp_count <= 0)
         return;
 
     /* Use the first (alphabetically) match */
-    const char* match = results[0];
+    const char* match = term->comp_items[0];
     int32_t mlen = (int32_t)strlen(match);
     if (mlen <= wlen)
         return; /* already fully typed */
@@ -699,6 +698,144 @@ static void td_term_accept_ghost(td_term_t* term) {
     term->buf_len += term->ghost_len;
     term->buf_pos = term->buf_len;
     term->ghost_len = 0;
+}
+
+/* ===== Multi-source completion collection ===== */
+
+/* Max completion candidates stored in td_term_t::comp_items */
+#define COMP_MAX 256
+
+static int comp_cmp_str(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+
+/* Check if name is already in results[0..count) */
+static int comp_has(const char** results, int32_t count, const char* name) {
+    for (int32_t i = 0; i < count; i++) {
+        if (strcmp(results[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Try to extract a table variable name from a `(select {from: NAME ...` pattern
+ * in the current buffer.  Returns the env value (a table) or NULL. */
+static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
+    /* Scan for "from:" followed by a name */
+    for (int32_t i = 0; i + 5 < buf_len; i++) {
+        if (memcmp(buf + i, "from:", 5) != 0) continue;
+        int32_t j = i + 5;
+        /* skip whitespace */
+        while (j < buf_len && (buf[j] == ' ' || buf[j] == '\t')) j++;
+        if (j >= buf_len || !is_alphanum(buf[j])) continue;
+        int32_t start = j;
+        while (j < buf_len && is_alphanum(buf[j])) j++;
+        int32_t nlen = j - start;
+        /* Intern the name and look it up in env */
+        int64_t sym = td_sym_intern(buf + start, (size_t)nlen);
+        if (sym < 0) continue;
+        td_t* val = td_env_get(sym);
+        if (val && val->type == TD_TABLE) return val;
+    }
+    return NULL;
+}
+
+void td_term_collect_completions(td_term_t* term, const char* prefix,
+                                 int32_t prefix_len) {
+    term->comp_count = 0;
+    if (prefix_len <= 0) return;
+
+    const char** out = term->comp_items;
+    int32_t cap = COMP_MAX;
+    int32_t n = 0;
+
+    /* Source 1: env builtins + user variables (already sorted) */
+    {
+        const char* env_results[128];
+        int64_t ec = td_env_lookup_prefix(prefix, (int64_t)prefix_len,
+                                           env_results, 128);
+        for (int64_t i = 0; i < ec && n < cap; i++) {
+            out[n++] = env_results[i];
+        }
+    }
+
+    /* Source 2: static keywords (s_keywords[] is in env.c and already scanned
+     * by td_env_lookup_prefix, so nothing extra needed here — they are included
+     * in source 1).  This is a no-op; the plan's "binary search on prefix" is
+     * satisfied by env_lookup_prefix which already scans the keyword list. */
+
+    /* Source 3: column names from a table referenced in the buffer */
+    {
+        td_t* tbl = comp_find_from_table(term->buf, term->buf_len);
+        if (tbl) {
+            int64_t ncols = td_table_ncols(tbl);
+            for (int64_t ci = 0; ci < ncols && n < cap; ci++) {
+                int64_t sym = td_table_col_name(tbl, ci);
+                if (sym < 0) continue;
+                td_t* s = td_sym_str(sym);
+                if (!s) continue;
+                const char* cname = td_str_ptr(s);
+                if (!cname) continue;
+                int64_t clen = (int64_t)strlen(cname);
+                if (clen >= prefix_len &&
+                    strncmp(cname, prefix, (size_t)prefix_len) == 0 &&
+                    !comp_has(out, n, cname)) {
+                    out[n++] = cname;
+                }
+            }
+        }
+    }
+
+    /* Source 4: history words — tokenize history entries, match prefix.
+     * We intern matching words via td_sym_intern to get stable null-terminated
+     * pointers (sym table strings live until program exit). */
+    {
+        td_hist_t* hist = &term->hist;
+        for (int32_t hi = hist->count - 1; hi >= 0 && n < cap; hi--) {
+            const char* entry = hist->entries[hi];
+            int32_t elen = (int32_t)strlen(entry);
+            int32_t wi = 0;
+            while (wi < elen && n < cap) {
+                /* skip non-alphanum */
+                while (wi < elen && !is_alphanum(entry[wi])) wi++;
+                if (wi >= elen) break;
+                int32_t ws = wi;
+                while (wi < elen && is_alphanum(entry[wi])) wi++;
+                int32_t wlen = wi - ws;
+                /* Must be longer than what's typed (otherwise not a useful completion) */
+                if (wlen > prefix_len &&
+                    strncmp(entry + ws, prefix, (size_t)prefix_len) == 0) {
+                    /* Length-aware dedup against existing candidates */
+                    int dup = 0;
+                    for (int32_t di = 0; di < n; di++) {
+                        int32_t olen = (int32_t)strlen(out[di]);
+                        if (olen == wlen &&
+                            strncmp(out[di], entry + ws, (size_t)wlen) == 0) {
+                            dup = 1;
+                            break;
+                        }
+                    }
+                    if (!dup) {
+                        /* Intern to get a stable null-terminated pointer */
+                        int64_t sym = td_sym_intern(entry + ws, (size_t)wlen);
+                        if (sym >= 0) {
+                            td_t* s = td_sym_str(sym);
+                            if (s) {
+                                const char* word = td_str_ptr(s);
+                                if (word) out[n++] = word;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Sort the merged results alphabetically */
+    if (n > 1) {
+        qsort((void*)out, (size_t)n, sizeof(const char*), comp_cmp_str);
+    }
+
+    term->comp_count = n;
 }
 
 /* ===== Prompt ===== */

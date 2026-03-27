@@ -86,6 +86,9 @@ typedef struct td_term {
     int32_t  ghost_len;
     int32_t  ghost_word_start; /* position in buf where the completed word starts */
     int32_t  ghost_word_len;   /* length of the prefix that was matched */
+    /* Multi-source completion candidates */
+    const char* comp_items[256];  /* borrowed pointers — valid until next collect */
+    int32_t     comp_count;
 } td_term_t;
 
 td_term_t* td_term_create(void);
@@ -122,6 +125,12 @@ int32_t td_hist_search(td_hist_t* hist, const char* needle, int32_t needle_len,
 
 int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
                                     int32_t cursor_pos);
+
+/* Collect completion candidates from all sources (env, keywords, columns,
+ * history words).  Stores results in term->comp_items / comp_count.
+ * prefix/prefix_len is the word being completed. */
+void td_term_collect_completions(td_term_t* term, const char* prefix,
+                                 int32_t prefix_len);
 
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
