@@ -15245,6 +15245,57 @@ static td_t* exec_hnsw_knn(td_graph_t* g, td_op_t* op) {
     return result;
 }
 
+/* Broadcast a scalar atom to a column vector of nrows elements.
+ * Returns a new vector (caller owns).  On failure returns TD_ERR_PTR. */
+static td_t* broadcast_scalar(td_t* atom, int64_t nrows) {
+    if (!atom) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    if (nrows <= 0) {
+        /* Empty table: return an empty vector of the matching type */
+        int8_t at = atom->type;
+        int8_t vt;
+        if      (at == TD_ATOM_STR)  vt = TD_STR;
+        else if (at == TD_ATOM_I64)  vt = TD_I64;
+        else if (at == TD_ATOM_F64)  vt = TD_F64;
+        else if (at == TD_ATOM_BOOL) vt = TD_BOOL;
+        else if (at == TD_ATOM_SYM)  vt = TD_SYM;
+        else return TD_ERR_PTR(TD_ERR_TYPE);
+        return td_vec_new(vt, 0);
+    }
+    int8_t at = atom->type;
+
+    /* TD_ATOM_STR → TD_STR column */
+    if (at == TD_ATOM_STR) {
+        const char* sp = td_str_ptr(atom);
+        size_t sl = td_str_len(atom);
+        td_t* vec = td_vec_new(TD_STR, nrows);
+        if (!vec || TD_IS_ERR(vec)) return vec;
+        for (int64_t r = 0; r < nrows; r++) {
+            vec = td_str_vec_append(vec, sp, sl);
+            if (TD_IS_ERR(vec)) return vec;
+        }
+        return vec;
+    }
+
+    /* Numeric / bool / sym scalars */
+    int8_t vt;
+    if      (at == TD_ATOM_I64)  vt = TD_I64;
+    else if (at == TD_ATOM_F64)  vt = TD_F64;
+    else if (at == TD_ATOM_BOOL) vt = TD_BOOL;
+    else if (at == TD_ATOM_SYM)  vt = TD_SYM;
+    else return TD_ERR_PTR(TD_ERR_TYPE);
+
+    size_t esz = (vt == TD_BOOL) ? 1 : 8;
+    td_t* vec = td_vec_new(vt, nrows);
+    if (!vec || TD_IS_ERR(vec)) return vec;
+    uint8_t elem[8] = {0};
+    memcpy(elem, &atom->i64, esz);
+    for (int64_t r = 0; r < nrows; r++) {
+        vec = td_vec_append(vec, elem);
+        if (TD_IS_ERR(vec)) return vec;
+    }
+    return vec;
+}
+
 /* ============================================================================
  * Recursive executor
  * ============================================================================ */
@@ -15909,18 +15960,35 @@ static td_t* exec_node(td_graph_t* g, td_op_t* op) {
                 } else {
                     /* Expression column — evaluate against input table */
                     td_t* vec = exec_node(g, columns[c]);
-                    if (vec && !TD_IS_ERR(vec)) {
-                        /* Synthetic name: _expr_0, _expr_1, ... */
-                        char name_buf[16];
-                        int n = 0;
-                        name_buf[n++] = '_'; name_buf[n++] = 'e';
-                        if (c >= 100) name_buf[n++] = '0' + (c / 100);
-                        if (c >= 10)  name_buf[n++] = '0' + ((c / 10) % 10);
-                        name_buf[n++] = '0' + (c % 10);
-                        int64_t name_id = td_sym_intern(name_buf, (size_t)n);
-                        result = td_table_add_col(result, name_id, vec);
-                        td_release(vec);
+                    if (!vec || TD_IS_ERR(vec)) {
+                        td_release(result);
+                        g->table = saved_table;
+                        td_release(input);
+                        return vec ? vec : TD_ERR_PTR(TD_ERR_NYI);
                     }
+                    /* Broadcast scalar atoms to full column vectors */
+                    if (vec->type < 0) {
+                        int64_t nr = td_table_nrows(input);
+                        td_t* col = broadcast_scalar(vec, nr);
+                        td_release(vec);
+                        vec = col;
+                        if (!vec || TD_IS_ERR(vec)) {
+                            td_release(result);
+                            g->table = saved_table;
+                            td_release(input);
+                            return vec ? vec : TD_ERR_PTR(TD_ERR_NYI);
+                        }
+                    }
+                    /* Synthetic name: _expr_0, _expr_1, ... */
+                    char name_buf[16];
+                    int n = 0;
+                    name_buf[n++] = '_'; name_buf[n++] = 'e';
+                    if (c >= 100) name_buf[n++] = '0' + (c / 100);
+                    if (c >= 10)  name_buf[n++] = '0' + ((c / 10) % 10);
+                    name_buf[n++] = '0' + (c % 10);
+                    int64_t name_id = td_sym_intern(name_buf, (size_t)n);
+                    result = td_table_add_col(result, name_id, vec);
+                    td_release(vec);
                 }
             }
 

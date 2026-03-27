@@ -113,7 +113,8 @@ static td_t* parse_string(td_parser_t *p) {
         scan++;
     }
     size_t raw_len = (size_t)(scan - start);
-    if (*scan == '"') scan++;
+    if (*scan != '"') return TD_ERR_PTR(TD_ERR_PARSE); /* unterminated string */
+    scan++;
     p->pos = (char *)scan;
 
     if (!has_escape) return td_str(start, raw_len);
@@ -168,6 +169,7 @@ static td_t* parse_name(td_parser_t *p) {
            || *p->pos == '&' || *p->pos == '|')
         p->pos++;
     size_t len = (size_t)(p->pos - start);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_PARSE);
 
     /* Check for true/false */
     if (len == 4 && memcmp(start, "true", 4) == 0)  return td_bool(true);
@@ -196,7 +198,8 @@ static td_t* parse_vector(td_parser_t *p) {
         if (TD_IS_ERR(list)) return list;
         skip_ws_and_comments(p);
     }
-    if (*p->pos == ']') p->pos++;
+    if (*p->pos != ']') { td_release(list); return TD_ERR_PTR(TD_ERR_PARSE); }
+    p->pos++;
     return list;
 }
 
@@ -241,7 +244,8 @@ static td_t* parse_dict(td_parser_t *p) {
 
         skip_ws_and_comments(p);
     }
-    if (*p->pos == '}') p->pos++;
+    if (*p->pos != '}') { td_release(list); return TD_ERR_PTR(TD_ERR_PARSE); }
+    p->pos++;
     return list;
 }
 
@@ -260,7 +264,8 @@ static td_t* parse_list(td_parser_t *p) {
         if (TD_IS_ERR(list)) return list;
         skip_ws_and_comments(p);
     }
-    if (*p->pos == ')') p->pos++;
+    if (*p->pos != ')') { td_release(list); return TD_ERR_PTR(TD_ERR_PARSE); }
+    p->pos++;
     return list;
 }
 
@@ -281,6 +286,9 @@ static td_t* parse_expr(td_parser_t *p) {
         case PA_LPAREN: return parse_list(p);
         case PA_LBRACK: return parse_vector(p);
         case PA_LBRACE: return parse_dict(p);
+        case PA_RPAREN: return TD_ERR_PTR(TD_ERR_PARSE);
+        case PA_RBRACK: return TD_ERR_PTR(TD_ERR_PARSE);
+        case PA_RBRACE: return TD_ERR_PTR(TD_ERR_PARSE);
         default:        return parse_name(p);  /* operators like +, *, etc. */
     }
 }

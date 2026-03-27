@@ -318,14 +318,14 @@ td_op_t* td_const_bool(td_graph_t* g, bool val) {
     return &g->nodes[ext->base.id];
 }
 
-td_op_t* td_const_str(td_graph_t* g, const char* s) {
+td_op_t* td_const_str(td_graph_t* g, const char* s, size_t len) {
     td_op_ext_t* ext = graph_alloc_ext_node(g);
     if (!ext) return NULL;
 
     ext->base.opcode = OP_CONST;
     ext->base.arity = 0;
     ext->base.out_type = TD_SYM;   /* string constants resolve to SYM at exec time */
-    ext->literal = td_str(s, strlen(s));
+    ext->literal = td_str(s, len);
     /* L4: null/error check on allocation result */
     if (!ext->literal || TD_IS_ERR(ext->literal)) ext->literal = NULL;
 

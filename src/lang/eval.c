@@ -852,6 +852,10 @@ static td_t* ray_at(td_t* vec, td_t* idx) {
                 s->type = TD_ATOM_SYM;
                 s->i64 = ((int64_t*)td_data(col))[i];
                 out[i] = s;
+            } else if (ctype == TD_STR) {
+                size_t slen;
+                const char *sptr = td_str_vec_get(col, i, &slen);
+                out[i] = td_str(sptr ? sptr : "", sptr ? slen : 0);
             } else {
                 out[i] = make_i64(0);
             }
@@ -943,14 +947,30 @@ static td_t* ray_table(td_t* names, td_t* cols) {
         if (!is_list(col_list))
             { td_release(tbl); return TD_ERR_PTR(TD_ERR_TYPE); }
         int64_t nrows = td_len(col_list);
+
+        /* Validate all columns have consistent row count */
+        if (i == 0) {
+            /* first column sets the expected row count */
+        } else {
+            int64_t expected = td_len(col_elems[0]);
+            if (nrows != expected)
+                { td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        }
         td_t** row_elems = (td_t**)td_data(col_list);
 
-        /* Determine column type from first element */
+        /* Determine column type from elements (scan for mixed I64/F64 → F64) */
         int8_t col_type = TD_I64;
         if (nrows > 0) {
             if (row_elems[0]->type == TD_ATOM_F64) col_type = TD_F64;
             else if (row_elems[0]->type == TD_ATOM_BOOL) col_type = TD_BOOL;
             else if (row_elems[0]->type == TD_ATOM_SYM) col_type = TD_SYM;
+            else if (row_elems[0]->type == TD_ATOM_STR) col_type = TD_STR;
+        }
+        /* Promote I64 → F64 if any element is F64 */
+        if (col_type == TD_I64) {
+            for (int64_t j = 0; j < nrows; j++) {
+                if (row_elems[j]->type == TD_ATOM_F64) { col_type = TD_F64; break; }
+            }
         }
 
         td_t* col_vec = td_vec_new(col_type, nrows);
@@ -958,12 +978,33 @@ static td_t* ray_table(td_t* names, td_t* cols) {
             { td_release(tbl); return col_vec; }
 
         for (int64_t j = 0; j < nrows; j++) {
-            void* val_ptr;
-            if (col_type == TD_I64) val_ptr = &row_elems[j]->i64;
-            else if (col_type == TD_F64) val_ptr = &row_elems[j]->f64;
-            else if (col_type == TD_BOOL) val_ptr = &row_elems[j]->b8;
-            else val_ptr = &row_elems[j]->i64; /* SYM stored as i64 */
-            col_vec = td_vec_append(col_vec, val_ptr);
+            if (col_type == TD_STR) {
+                if (row_elems[j]->type != TD_ATOM_STR) {
+                    td_release(col_vec); td_release(tbl);
+                    return TD_ERR_PTR(TD_ERR_TYPE);
+                }
+                const char *sptr = td_str_ptr(row_elems[j]);
+                size_t slen = td_str_len(row_elems[j]);
+                col_vec = td_str_vec_append(col_vec, sptr, slen);
+            } else {
+                /* Validate each element matches the column type (allow I64→F64 promotion) */
+                int type_ok = (row_elems[j]->type == -col_type);
+                if (!type_ok && col_type == TD_F64 && row_elems[j]->type == TD_ATOM_I64) type_ok = 1;
+                if (!type_ok) {
+                    td_release(col_vec); td_release(tbl);
+                    return TD_ERR_PTR(TD_ERR_TYPE);
+                }
+                void* val_ptr;
+                double promoted;
+                if (col_type == TD_F64 && row_elems[j]->type == TD_ATOM_I64) {
+                    promoted = (double)row_elems[j]->i64;
+                    val_ptr = &promoted;
+                } else if (col_type == TD_I64) val_ptr = &row_elems[j]->i64;
+                else if (col_type == TD_F64) val_ptr = &row_elems[j]->f64;
+                else if (col_type == TD_BOOL) val_ptr = &row_elems[j]->b8;
+                else val_ptr = &row_elems[j]->i64; /* SYM stored as i64 */
+                col_vec = td_vec_append(col_vec, val_ptr);
+            }
             if (TD_IS_ERR(col_vec))
                 { td_release(tbl); return col_vec; }
         }
@@ -1091,6 +1132,11 @@ static td_op_t* compile_expr_dag(td_graph_t* g, td_t* expr) {
         return td_const_f64(g, expr->f64);
     if (expr->type == TD_ATOM_BOOL)
         return td_const_bool(g, expr->b8);
+    if (expr->type == TD_ATOM_STR) {
+        const char *ptr = td_str_ptr(expr);
+        size_t len = td_str_len(expr);
+        return td_const_str(g, ptr, len);
+    }
 
     /* Symbol literal → const i64 (sym IDs are integer indices) */
     if (expr->type == TD_ATOM_SYM && !(expr->attrs & TD_ATTR_NAME))
@@ -1328,15 +1374,30 @@ static td_t* ray_xbar(td_t* col, td_t* bucket) {
  * appending to an existing column (for insert/upsert). */
 static td_t* append_atom_to_col(td_t* col_vec, td_t* atom) {
     int8_t ct = col_vec->type;
-    if (ct == TD_I64 || ct == TD_SYM) {
+    if (ct == TD_I64) {
+        if (atom->type != TD_ATOM_I64)
+            return TD_ERR_PTR(TD_ERR_TYPE);
+        int64_t v = atom->i64;
+        return td_vec_append(col_vec, &v);
+    } else if (ct == TD_SYM) {
+        if (atom->type != TD_ATOM_SYM)
+            return TD_ERR_PTR(TD_ERR_TYPE);
         int64_t v = atom->i64;
         return td_vec_append(col_vec, &v);
     } else if (ct == TD_F64) {
+        if (atom->type != TD_ATOM_F64 && atom->type != TD_ATOM_I64)
+            return TD_ERR_PTR(TD_ERR_TYPE);
         double v = (atom->type == TD_ATOM_F64) ? atom->f64 : (double)atom->i64;
         return td_vec_append(col_vec, &v);
     } else if (ct == TD_BOOL) {
+        if (atom->type != TD_ATOM_BOOL)
+            return TD_ERR_PTR(TD_ERR_TYPE);
         uint8_t v = atom->b8;
         return td_vec_append(col_vec, &v);
+    } else if (ct == TD_STR && atom->type == TD_ATOM_STR) {
+        const char *sptr = td_str_ptr(atom);
+        size_t slen = td_str_len(atom);
+        return td_str_vec_append(col_vec, sptr, slen);
     }
     return TD_ERR_PTR(TD_ERR_TYPE);
 }
@@ -1425,14 +1486,88 @@ static td_t* ray_update(td_t** args, int64_t n) {
 
                 if (TD_IS_ERR(expr_vec)) { td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return expr_vec; }
 
+                /* Broadcast scalar atom to full column vector if needed */
+                if (expr_vec->type < 0) {
+                    /* Type check atom against column type BEFORE broadcast */
+                    int ok = (expr_vec->type == -ct);
+                    if (!ok && ct == TD_F64 && expr_vec->type == TD_ATOM_I64) ok = 1; /* allow I64→F64 promotion */
+                    if (!ok) {
+                        td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl);
+                        return TD_ERR_PTR(TD_ERR_TYPE);
+                    }
+                    td_t* bcast = td_vec_new(ct, nrows);
+                    if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return bcast; }
+                    if (ct == TD_STR && expr_vec->type == TD_ATOM_STR) {
+                        const char* sp = td_str_ptr(expr_vec);
+                        size_t sl = td_str_len(expr_vec);
+                        for (int64_t r = 0; r < nrows; r++) {
+                            bcast = td_str_vec_append(bcast, sp, sl);
+                            if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return bcast; }
+                        }
+                    } else {
+                        size_t esz = (ct == TD_BOOL) ? 1 : 8;
+                        uint8_t elem[8] = {0};
+                        if (ct == TD_F64 && expr_vec->type == TD_ATOM_I64) {
+                            double promoted = (double)expr_vec->i64;
+                            memcpy(elem, &promoted, 8);
+                        } else {
+                            memcpy(elem, &expr_vec->i64, esz);
+                        }
+                        for (int64_t r = 0; r < nrows; r++) {
+                            bcast = td_vec_append(bcast, elem);
+                            if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return bcast; }
+                        }
+                    }
+                    td_release(expr_vec);
+                    expr_vec = bcast;
+                }
+
+                /* Promote I64 vector to F64 if column is F64 */
+                if (expr_vec->type == TD_I64 && ct == TD_F64) {
+                    int64_t nr = td_len(expr_vec);
+                    td_t* promoted = td_vec_new(TD_F64, nr);
+                    if (TD_IS_ERR(promoted)) { td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return promoted; }
+                    int64_t* src_data = (int64_t*)td_data(expr_vec);
+                    for (int64_t r = 0; r < nr; r++) {
+                        double v = (double)src_data[r];
+                        promoted = td_vec_append(promoted, &v);
+                        if (TD_IS_ERR(promoted)) { td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl); return promoted; }
+                    }
+                    td_release(expr_vec);
+                    expr_vec = promoted;
+                }
+
+                /* Type check: expr_vec must match original column type */
+                if (expr_vec->type != ct) {
+                    td_release(expr_vec); td_release(new_col); td_release(result); td_release(mask_vec); td_release(tbl);
+                    return TD_ERR_PTR(TD_ERR_TYPE);
+                }
+
                 /* Merge: use expr_vec for matching rows, orig_col for non-matching */
-                size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
-                uint8_t* orig_data = (uint8_t*)td_data(orig_col);
-                uint8_t* expr_data = (uint8_t*)td_data(expr_vec);
-                for (int64_t r = 0; r < nrows; r++) {
-                    void* src = mask[r] ? (expr_data + r * elem_sz) : (orig_data + r * elem_sz);
-                    new_col = td_vec_append(new_col, src);
-                    if (TD_IS_ERR(new_col)) { td_release(expr_vec); td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+                if (ct == TD_STR) {
+                    for (int64_t r = 0; r < nrows; r++) {
+                        td_t* src_vec = mask[r] ? expr_vec : orig_col;
+                        size_t slen = 0;
+                        const char* sp = td_str_vec_get(src_vec, r, &slen);
+                        new_col = td_str_vec_append(new_col, sp ? sp : "", sp ? slen : 0);
+                        if (TD_IS_ERR(new_col)) { td_release(expr_vec); td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+                    }
+                } else if (ct == TD_SYM) {
+                    for (int64_t r = 0; r < nrows; r++) {
+                        td_t* src_vec = mask[r] ? expr_vec : orig_col;
+                        int64_t sym_val = td_read_sym(td_data(src_vec), r, src_vec->type, src_vec->attrs);
+                        new_col = td_vec_append(new_col, &sym_val);
+                        if (TD_IS_ERR(new_col)) { td_release(expr_vec); td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+                    }
+                } else {
+                    size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+                    uint8_t* orig_data = (uint8_t*)td_data(orig_col);
+                    uint8_t* expr_data = (uint8_t*)td_data(expr_vec);
+                    for (int64_t r = 0; r < nrows; r++) {
+                        void* src = mask[r] ? (expr_data + r * elem_sz) : (orig_data + r * elem_sz);
+                        new_col = td_vec_append(new_col, src);
+                        if (TD_IS_ERR(new_col)) { td_release(expr_vec); td_release(result); td_release(mask_vec); td_release(tbl); return new_col; }
+                    }
                 }
                 result = td_table_add_col(result, col_name, new_col);
                 td_release(new_col);
@@ -1478,6 +1613,66 @@ static td_t* ray_update(td_t** args, int64_t n) {
             td_t* expr_vec = td_execute(ug, expr_op);
             td_graph_free(ug);
             if (TD_IS_ERR(expr_vec)) { td_release(result); td_release(tbl); return expr_vec; }
+
+            /* Broadcast scalar atom to full column vector if needed */
+            if (expr_vec->type < 0) {
+                int64_t nrows = td_table_nrows(tbl);
+                int8_t ct = orig_col->type;
+                /* Type check atom against column type BEFORE broadcast */
+                int ok = (expr_vec->type == -ct);
+                if (!ok && ct == TD_F64 && expr_vec->type == TD_ATOM_I64) ok = 1;
+                if (!ok) {
+                    td_release(expr_vec); td_release(result); td_release(tbl);
+                    return TD_ERR_PTR(TD_ERR_TYPE);
+                }
+                td_t* bcast = td_vec_new(ct, nrows);
+                if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(result); td_release(tbl); return bcast; }
+                if (ct == TD_STR && expr_vec->type == TD_ATOM_STR) {
+                    const char* sp = td_str_ptr(expr_vec);
+                    size_t sl = td_str_len(expr_vec);
+                    for (int64_t r = 0; r < nrows; r++) {
+                        bcast = td_str_vec_append(bcast, sp, sl);
+                        if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(result); td_release(tbl); return bcast; }
+                    }
+                } else {
+                    size_t esz = (ct == TD_BOOL) ? 1 : 8;
+                    uint8_t elem[8] = {0};
+                    if (ct == TD_F64 && expr_vec->type == TD_ATOM_I64) {
+                        double promoted = (double)expr_vec->i64;
+                        memcpy(elem, &promoted, 8);
+                    } else {
+                        memcpy(elem, &expr_vec->i64, esz);
+                    }
+                    for (int64_t r = 0; r < nrows; r++) {
+                        bcast = td_vec_append(bcast, elem);
+                        if (TD_IS_ERR(bcast)) { td_release(expr_vec); td_release(result); td_release(tbl); return bcast; }
+                    }
+                }
+                td_release(expr_vec);
+                expr_vec = bcast;
+            }
+
+            /* Promote I64 vector to F64 if column is F64 */
+            if (expr_vec->type == TD_I64 && orig_col->type == TD_F64) {
+                int64_t nr = td_len(expr_vec);
+                td_t* promoted = td_vec_new(TD_F64, nr);
+                if (TD_IS_ERR(promoted)) { td_release(expr_vec); td_release(result); td_release(tbl); return promoted; }
+                int64_t* src_data = (int64_t*)td_data(expr_vec);
+                for (int64_t r = 0; r < nr; r++) {
+                    double v = (double)src_data[r];
+                    promoted = td_vec_append(promoted, &v);
+                    if (TD_IS_ERR(promoted)) { td_release(expr_vec); td_release(result); td_release(tbl); return promoted; }
+                }
+                td_release(expr_vec);
+                expr_vec = promoted;
+            }
+
+            /* Type check: expr_vec must match original column type */
+            if (expr_vec->type != orig_col->type) {
+                td_release(expr_vec); td_release(result); td_release(tbl);
+                return TD_ERR_PTR(TD_ERR_TYPE);
+            }
+
             result = td_table_add_col(result, col_name, expr_vec);
             td_release(expr_vec);
         }
@@ -1515,11 +1710,26 @@ static td_t* ray_insert(td_t** args, int64_t n) {
         if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
 
         /* Copy existing data */
-        size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
-        uint8_t* src = (uint8_t*)td_data(orig_col);
-        for (int64_t r = 0; r < nrows; r++) {
-            new_col = td_vec_append(new_col, src + r * elem_sz);
-            if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+        if (ct == TD_STR) {
+            for (int64_t r = 0; r < nrows; r++) {
+                size_t slen = 0;
+                const char* sp = td_str_vec_get(orig_col, r, &slen);
+                new_col = td_str_vec_append(new_col, sp ? sp : "", sp ? slen : 0);
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+            }
+        } else if (ct == TD_SYM) {
+            for (int64_t r = 0; r < nrows; r++) {
+                int64_t sym_val = td_read_sym(td_data(orig_col), r, orig_col->type, orig_col->attrs);
+                new_col = td_vec_append(new_col, &sym_val);
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+            }
+        } else {
+            size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+            uint8_t* src = (uint8_t*)td_data(orig_col);
+            for (int64_t r = 0; r < nrows; r++) {
+                new_col = td_vec_append(new_col, src + r * elem_sz);
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+            }
         }
 
         /* Append new row value */
@@ -1565,12 +1775,49 @@ static td_t* ray_upsert(td_t** args, int64_t n) {
     td_t* key_col = td_table_get_col_idx(tbl, key_col_idx);
     int64_t match_row = -1;
     int8_t kt = key_col->type;
-    int64_t key_val = row_elems[key_col_idx]->i64;
+    td_t* key_atom = row_elems[key_col_idx];
 
-    if (kt == TD_I64 || kt == TD_SYM) {
+    if (kt == TD_I64) {
+        if (key_atom->type != TD_ATOM_I64) return TD_ERR_PTR(TD_ERR_TYPE);
+        int64_t key_val = key_atom->i64;
         int64_t* kdata = (int64_t*)td_data(key_col);
         for (int64_t r = 0; r < nrows; r++) {
             if (kdata[r] == key_val) { match_row = r; break; }
+        }
+    } else if (kt == TD_SYM) {
+        if (key_atom->type != TD_ATOM_SYM) return TD_ERR_PTR(TD_ERR_TYPE);
+        int64_t key_val = key_atom->i64;
+        for (int64_t r = 0; r < nrows; r++) {
+            if (td_read_sym(td_data(key_col), r, key_col->type, key_col->attrs) == key_val) { match_row = r; break; }
+        }
+    } else if (kt == TD_F64) {
+        if (key_atom->type != TD_ATOM_F64 && key_atom->type != TD_ATOM_I64)
+            return TD_ERR_PTR(TD_ERR_TYPE);
+        double needle = (key_atom->type == TD_ATOM_F64) ? key_atom->f64
+                                                        : (double)key_atom->i64;
+        double* kdata = (double*)td_data(key_col);
+        for (int64_t r = 0; r < nrows; r++) {
+            if (kdata[r] == needle) { match_row = r; break; }
+        }
+    } else if (kt == TD_BOOL) {
+        if (key_atom->type != TD_ATOM_BOOL) return TD_ERR_PTR(TD_ERR_TYPE);
+        uint8_t needle = key_atom->b8;
+        uint8_t* kdata = (uint8_t*)td_data(key_col);
+        for (int64_t r = 0; r < nrows; r++) {
+            if (kdata[r] == needle) { match_row = r; break; }
+        }
+    } else if (kt == TD_STR) {
+        if (key_atom->type != TD_ATOM_STR) return TD_ERR_PTR(TD_ERR_TYPE);
+        const char* needle_s = td_str_ptr(key_atom);
+        size_t needle_len = td_str_len(key_atom);
+        for (int64_t r = 0; r < nrows; r++) {
+            size_t rlen = 0;
+            const char* rs = td_str_vec_get(key_col, r, &rlen);
+            if (rlen == needle_len && (needle_len == 0 ||
+                (rs && needle_s && memcmp(rs, needle_s, rlen) == 0))) {
+                match_row = r;
+                break;
+            }
         }
     }
 
@@ -1588,19 +1835,42 @@ static td_t* ray_upsert(td_t** args, int64_t n) {
         int64_t col_name = td_table_col_name(tbl, c);
         td_t* orig_col = td_table_get_col_idx(tbl, c);
         int8_t ct = orig_col->type;
-        size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
 
         td_t* new_col = td_vec_new(ct, nrows);
         if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
 
-        uint8_t* src = (uint8_t*)td_data(orig_col);
-        for (int64_t r = 0; r < nrows; r++) {
-            if (r == match_row) {
-                new_col = append_atom_to_col(new_col, row_elems[c]);
-            } else {
-                new_col = td_vec_append(new_col, src + r * elem_sz);
+        if (ct == TD_STR) {
+            for (int64_t r = 0; r < nrows; r++) {
+                if (r == match_row) {
+                    new_col = append_atom_to_col(new_col, row_elems[c]);
+                } else {
+                    size_t slen = 0;
+                    const char* sp = td_str_vec_get(orig_col, r, &slen);
+                    new_col = td_str_vec_append(new_col, sp ? sp : "", sp ? slen : 0);
+                }
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
             }
-            if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+        } else if (ct == TD_SYM) {
+            for (int64_t r = 0; r < nrows; r++) {
+                if (r == match_row) {
+                    new_col = append_atom_to_col(new_col, row_elems[c]);
+                } else {
+                    int64_t sym_val = td_read_sym(td_data(orig_col), r, orig_col->type, orig_col->attrs);
+                    new_col = td_vec_append(new_col, &sym_val);
+                }
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+            }
+        } else {
+            size_t elem_sz = (ct == TD_BOOL) ? 1 : 8;
+            uint8_t* src = (uint8_t*)td_data(orig_col);
+            for (int64_t r = 0; r < nrows; r++) {
+                if (r == match_row) {
+                    new_col = append_atom_to_col(new_col, row_elems[c]);
+                } else {
+                    new_col = td_vec_append(new_col, src + r * elem_sz);
+                }
+                if (TD_IS_ERR(new_col)) { td_release(result); return new_col; }
+            }
         }
 
         result = td_table_add_col(result, col_name, new_col);

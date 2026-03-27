@@ -937,7 +937,7 @@ td_op_t* td_scan(td_graph_t* g, const char* col_name);
 td_op_t* td_const_f64(td_graph_t* g, double val);
 td_op_t* td_const_i64(td_graph_t* g, int64_t val);
 td_op_t* td_const_bool(td_graph_t* g, bool val);
-td_op_t* td_const_str(td_graph_t* g, const char* s);
+td_op_t* td_const_str(td_graph_t* g, const char* s, size_t len);
 td_op_t* td_const_vec(td_graph_t* g, td_t* vec);
 td_op_t* td_const_table(td_graph_t* g, td_t* table);
 

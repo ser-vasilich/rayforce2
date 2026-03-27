@@ -923,6 +923,97 @@ static MunitResult test_eval_update(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: update without where broadcasts scalar ---- */
+static MunitResult test_eval_update_no_where(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['x 'y] (list [1 2 3] [10 20 30]))) "
+        "(update {x: 99 from: t}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    int64_t x_id = td_sym_intern("x", 1);
+    td_t* x_col = td_table_get_col(result, x_id);
+    munit_assert_ptr_not_null(x_col);
+    munit_assert_int(x_col->type, ==, TD_I64);
+    munit_assert_int(x_col->len, ==, 3);
+    int64_t* xd = (int64_t*)td_data(x_col);
+    munit_assert_int(xd[0], ==, 99);
+    munit_assert_int(xd[1], ==, 99);
+    munit_assert_int(xd[2], ==, 99);
+    /* y column should be unchanged */
+    int64_t y_id = td_sym_intern("y", 1);
+    td_t* y_col = td_table_get_col(result, y_id);
+    int64_t* yd = (int64_t*)td_data(y_col);
+    munit_assert_int(yd[0], ==, 10);
+    munit_assert_int(yd[1], ==, 20);
+    munit_assert_int(yd[2], ==, 30);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: masked update on string column ---- */
+static MunitResult test_eval_update_str_masked(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['id 'name] (list [1 2 3] [\"alice\" \"bob\" \"carol\"]))) "
+        "(update {name: \"REPLACED\" from: t where: (== id 2)}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    int64_t name_id = td_sym_intern("name", 4);
+    td_t* name_col = td_table_get_col(result, name_id);
+    munit_assert_ptr_not_null(name_col);
+    munit_assert_int(name_col->type, ==, TD_STR);
+    size_t slen;
+    const char* s0 = td_str_vec_get(name_col, 0, &slen);
+    munit_assert_int(slen, ==, 5);
+    munit_assert_memory_equal(5, s0, "alice");
+    const char* s1 = td_str_vec_get(name_col, 1, &slen);
+    munit_assert_int(slen, ==, 8);
+    munit_assert_memory_equal(8, s1, "REPLACED");
+    const char* s2 = td_str_vec_get(name_col, 2, &slen);
+    munit_assert_int(slen, ==, 5);
+    munit_assert_memory_equal(5, s2, "carol");
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: table with mixed types rejects non-string in string column ---- */
+static MunitResult test_eval_table_mixed_type_error(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(table ['s] (list [\"ok\" 42]))");
+    munit_assert_true(TD_IS_ERR(result));
+    return MUNIT_OK;
+}
+
+/* ---- Test: update string column with non-string expr returns error ---- */
+static MunitResult test_eval_update_str_type_mismatch(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['id 'name] (list [1 2 3] [\"alice\" \"bob\" \"carol\"]))) "
+        "(update {name: id from: t where: (== id 2)}))");
+    munit_assert_true(TD_IS_ERR(result));
+    return MUNIT_OK;
+}
+
+/* ---- Test: select constant over empty table ---- */
+static MunitResult test_eval_select_empty_const(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Create table then filter all rows to get empty table */
+    td_t* result = td_eval_str(
+        "(do (set t (select {x: x from: (table ['x] (list [1])) where: (== x 0)})) "
+        "(select {y: 1 from: t}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 0);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Test: insert ---- */
 static MunitResult test_eval_insert(const void* params, void* fixture) {
     (void)params; (void)fixture;
@@ -960,6 +1051,55 @@ static MunitResult test_eval_upsert(const void* params, void* fixture) {
     td_t* sal_col = td_table_get_col(result, sal_id);
     munit_assert_int(((int64_t*)td_data(sal_col))[1], ==, 99000);
     td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: upsert with F64 key and I64 promotion ---- */
+static MunitResult test_eval_upsert_f64_key(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Table has F64 key column; upsert with integer literal should promote */
+    td_t* result = td_eval_str(
+        "(do (set t (table ['k 'v] (list [1.0 2.0] [10 20]))) "
+        "(upsert t 'k (list 2 99)))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* Should update, not insert — still 2 rows */
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    int64_t v_id = td_sym_intern("v", 1);
+    td_t* v_col = td_table_get_col(result, v_id);
+    munit_assert_int(((int64_t*)td_data(v_col))[1], ==, 99);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: upsert with string key ---- */
+static MunitResult test_eval_upsert_str_key(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['k 'v] (list [\"a\" \"b\"] [1 2]))) "
+        "(upsert t 'k (list \"b\" 99)))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* Should update row with key "b", not insert */
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    int64_t v_id = td_sym_intern("v", 1);
+    td_t* v_col = td_table_get_col(result, v_id);
+    munit_assert_int(((int64_t*)td_data(v_col))[1], ==, 99);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: upsert type mismatch returns error ---- */
+static MunitResult test_eval_upsert_type_mismatch(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Passing integer key to string key column should return error, not crash */
+    td_t* result = td_eval_str(
+        "(do (set t (table ['k 'v] (list [\"a\" \"b\"] [1 2]))) "
+        "(upsert t 'k (list 42 99)))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_true(TD_IS_ERR(result));
     return MUNIT_OK;
 }
 
@@ -1167,8 +1307,16 @@ static MunitTest lang_tests[] = {
     { "/eval/select_groupby",  test_eval_select_groupby,  lang_setup, lang_teardown, 0, NULL },
     { "/eval/select_xbar",     test_eval_select_xbar,     lang_setup, lang_teardown, 0, NULL },
     { "/eval/update",          test_eval_update,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/update_no_where", test_eval_update_no_where, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/update_str_masked", test_eval_update_str_masked, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/table_mixed_type_error", test_eval_table_mixed_type_error, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/update_str_type_mismatch", test_eval_update_str_type_mismatch, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_empty_const", test_eval_select_empty_const, lang_setup, lang_teardown, 0, NULL },
     { "/eval/insert",          test_eval_insert,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/upsert",          test_eval_upsert,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/upsert_f64_key",  test_eval_upsert_f64_key,  lang_setup, lang_teardown, 0, NULL },
+    { "/eval/upsert_str_key",  test_eval_upsert_str_key,  lang_setup, lang_teardown, 0, NULL },
+    { "/eval/upsert_type_mismatch", test_eval_upsert_type_mismatch, lang_setup, lang_teardown, 0, NULL },
     { "/eval/left_join",       test_eval_left_join,       lang_setup, lang_teardown, 0, NULL },
     { "/eval/inner_join",      test_eval_inner_join,      lang_setup, lang_teardown, 0, NULL },
     { "/eval/window_join",     test_eval_window_join,     lang_setup, lang_teardown, 0, NULL },

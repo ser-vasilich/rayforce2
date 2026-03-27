@@ -1904,7 +1904,7 @@ static MunitResult test_exec_like(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name_col = td_scan(g, "name");
-    td_op_t* pat = td_const_str(g, "bar%");
+    td_op_t* pat = td_const_str(g, "bar%", 4);
     td_op_t* lk = td_like(g, name_col, pat);
     td_op_t* cnt = td_count(g, td_filter(g, name_col, lk));
 
@@ -2110,7 +2110,7 @@ static MunitResult test_exec_str_eq(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* eq = td_eq(g, name, lit);
 
     td_t* result = td_execute(g, eq);
@@ -2142,7 +2142,7 @@ static MunitResult test_exec_str_ne(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* ne = td_ne(g, name, lit);
 
     td_t* result = td_execute(g, ne);
@@ -2174,7 +2174,7 @@ static MunitResult test_exec_str_lt(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* lt = td_lt(g, name, lit);
 
     td_t* result = td_execute(g, lt);
@@ -2208,7 +2208,7 @@ static MunitResult test_exec_str_le(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* cmp = td_le(g, name, lit);
     td_t* result = td_execute(g, cmp);
 
@@ -2239,7 +2239,7 @@ static MunitResult test_exec_str_gt(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* cmp = td_gt(g, name, lit);
     td_t* result = td_execute(g, cmp);
 
@@ -2270,7 +2270,7 @@ static MunitResult test_exec_str_ge(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* cmp = td_ge(g, name, lit);
     td_t* result = td_execute(g, cmp);
 
@@ -2525,8 +2525,8 @@ static MunitResult test_exec_str_replace(const void* params, void* data) {
     td_graph_t* g = td_graph_new(tbl);
 
     td_op_t* name = td_scan(g, "name");
-    td_op_t* from = td_const_str(g, "o");
-    td_op_t* to = td_const_str(g, "0");
+    td_op_t* from = td_const_str(g, "o", 1);
+    td_op_t* to = td_const_str(g, "0", 1);
     td_op_t* rep = td_replace(g, name, from, to);
     td_t* result = td_execute(g, rep);
 
@@ -2629,7 +2629,7 @@ static MunitResult test_exec_str_if(const void* params, void* data) {
 
     /* IF(name == "hello", name, UPPER(name)) — both branches are TD_STR */
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* cond = td_eq(g, name, lit);
 
     td_op_t* then_col = td_scan(g, "name");
@@ -2674,10 +2674,10 @@ static MunitResult test_exec_str_if_scalar(const void* params, void* data) {
 
     /* IF(name == "hello", "YES", "NO") — scalar SYM branches, STR condition column */
     td_op_t* name = td_scan(g, "name");
-    td_op_t* lit = td_const_str(g, "hello");
+    td_op_t* lit = td_const_str(g, "hello", 5);
     td_op_t* cond = td_eq(g, name, lit);
-    td_op_t* then_v = td_const_str(g, "YES");
-    td_op_t* else_v = td_const_str(g, "NO");
+    td_op_t* then_v = td_const_str(g, "YES", 3);
+    td_op_t* else_v = td_const_str(g, "NO", 2);
     td_op_t* if_op = td_if(g, cond, then_v, else_v);
     td_t* result = td_execute(g, if_op);
 
@@ -2954,8 +2954,8 @@ static MunitResult test_exec_str_replace_null(const void* params, void* data) {
 
     td_graph_t* g = td_graph_new(tbl);
     td_op_t* name = td_scan(g, "name");
-    td_op_t* from = td_const_str(g, "o");
-    td_op_t* to = td_const_str(g, "0");
+    td_op_t* from = td_const_str(g, "o", 1);
+    td_op_t* to = td_const_str(g, "0", 1);
     td_op_t* rep = td_replace(g, name, from, to);
     td_t* result = td_execute(g, rep);
 

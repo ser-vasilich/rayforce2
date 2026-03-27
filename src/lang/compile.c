@@ -249,6 +249,7 @@ static void compile_list(compiler_t *c, td_t *ast) {
     /* General function call: compile head, args, then dispatch */
     compile_expr(c, head);
     int64_t argc = n - 1;
+    if (argc > 64) { c->error = true; return; }
     for (int64_t i = 1; i < n; i++)
         compile_expr(c, elems[i]);
 
