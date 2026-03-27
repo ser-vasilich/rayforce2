@@ -271,11 +271,11 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/term.c`, `src/app/term.h`
 
-- [ ] Add popup state to `td_term_t`:
+- [x] Add popup state to `td_term_t`:
   - `popup_visible` (bool), `popup_selected` (int), `popup_count`, `popup_scroll`
   - `popup_items` (const char** — borrowed pointers from completion results)
   - `popup_max_visible` — min of candidate count and (term_height - 3)
-- [ ] Implement `td_term_popup_show()`:
+- [x] Implement `td_term_popup_show()`:
   - Save cursor position
   - Calculate box position (below current line, or above if not enough space)
   - Box width = max item length + 4 (border + padding)
@@ -283,9 +283,9 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
   - Render each visible item: `│ item  │` (selected item gets reverse video `\033[7m`)
   - Render bottom border: `└──...──┘`
   - Restore cursor position
-- [ ] Implement `td_term_popup_hide()`:
+- [x] Implement `td_term_popup_hide()`:
   - Move cursor below prompt line, clear with `\033[J`, restore cursor
-- [ ] Implement popup navigation in `td_term_read()`:
+- [x] Implement popup navigation in `td_term_read()`:
   - When `popup_visible`:
     - Up: decrement `popup_selected` (scroll if needed), redraw popup
     - Down: increment `popup_selected`, redraw popup
@@ -293,11 +293,11 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
     - Escape: hide popup, continue editing
     - Tab: cycle to next item
     - Any printable char: hide popup, insert char normally
-- [ ] Wire into Tab handling:
+- [x] Wire into Tab handling:
   - Tab pressed, 1 match → accept directly
   - Tab pressed, 2+ matches → show popup
-- [ ] Smoke test: type `s`, Tab → popup shows `scan`, `select`, `set`, `sum`, etc. Arrow to navigate, Enter to accept
-- [ ] Commit: `feat(repl): dropdown popup autocomplete menu`
+- [x] Smoke test: type `s`, Tab → popup shows `scan`, `select`, `set`, `sum`, etc. Arrow to navigate, Enter to accept
+- [x] Commit: `feat(repl): dropdown popup autocomplete menu`
 
 ---
 

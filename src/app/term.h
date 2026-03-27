@@ -89,6 +89,13 @@ typedef struct td_term {
     /* Multi-source completion candidates */
     const char* comp_items[256];  /* borrowed pointers — valid until next collect */
     int32_t     comp_count;
+    /* Dropdown popup menu state */
+    int32_t     popup_visible;
+    int32_t     popup_selected;
+    int32_t     popup_count;
+    int32_t     popup_scroll;
+    const char** popup_items;     /* borrowed from comp_items */
+    int32_t     popup_max_visible;
 } td_term_t;
 
 td_term_t* td_term_create(void);
@@ -131,6 +138,10 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
  * prefix/prefix_len is the word being completed. */
 void td_term_collect_completions(td_term_t* term, const char* prefix,
                                  int32_t prefix_len);
+
+/* Dropdown popup autocomplete menu */
+void td_term_popup_show(td_term_t* term);
+void td_term_popup_hide(td_term_t* term);
 
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
