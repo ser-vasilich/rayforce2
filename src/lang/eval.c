@@ -1935,7 +1935,8 @@ static td_t* ray_let(td_t* name_obj, td_t* val_expr) {
         return TD_ERR_PTR(TD_ERR_TYPE);
     td_t* val = td_eval(val_expr);
     if (TD_IS_ERR(val)) return val;
-    td_env_set_local(name_obj->i64, val);
+    td_err_t err = td_env_set_local(name_obj->i64, val);
+    if (err != TD_OK) { td_release(val); return TD_ERR_PTR(err); }
     return val;
 }
 
@@ -2045,7 +2046,7 @@ static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
     if (td_env_push_scope() != TD_OK) return TD_ERR_PTR(TD_ERR_OOM);
 
     for (int64_t i = 0; i < param_count && i < argc; i++) {
-        td_env_set_local(param_syms[i]->i64, call_args[i]);
+        (void)td_env_set_local(param_syms[i]->i64, call_args[i]);
     }
 
     int64_t body_count = td_len(body);
@@ -2284,6 +2285,7 @@ op_callf: {
             vm.fn = fn_obj;  /* takes ownership of stack ref */
             vm.fp = vm.sp;
             int32_t callee_locals = LAMBDA_NLOCALS(fn_obj);
+            if (vm.sp + callee_locals >= VM_STACK_SIZE) goto vm_error;
             vm.sp += callee_locals;
             n_locals = callee_locals;
 
@@ -2362,6 +2364,7 @@ op_calls: {
             td_release(vm.fn);
             vm.fn = fn_obj;  /* takes ownership */
             int32_t callee_locals = LAMBDA_NLOCALS(fn_obj);
+            if (vm.sp + callee_locals >= VM_STACK_SIZE) goto vm_error;
             vm.sp += callee_locals;
             n_locals = callee_locals;
 

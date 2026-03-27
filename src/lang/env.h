@@ -18,6 +18,6 @@ td_err_t td_env_set(int64_t sym_id, td_t* val);
 /* Local scope stack for lexical binding (let, do, lambda) */
 td_err_t td_env_push_scope(void);
 void td_env_pop_scope(void);
-void td_env_set_local(int64_t sym_id, td_t* val);
+td_err_t td_env_set_local(int64_t sym_id, td_t* val);
 
 #endif /* TD_ENV_H */

@@ -45,7 +45,7 @@ TD_TLS td_mem_stats_t td_tl_stats;
  * releasing clears it. IDs are reused after release (unlike a monotonic
  * counter). Cursor rotates to spread contention across words.
  * -------------------------------------------------------------------------- */
-static _Atomic(uint64_t) g_heap_id_bitmap[TD_HEAP_ID_WORDS];
+static _Atomic(uint64_t) g_heap_id_bitmap[TD_HEAP_ID_WORDS] = { [0] = 1ULL };
 static _Atomic(uint64_t) g_heap_id_cursor = 0;
 
 td_heap_t* td_heap_registry[TD_HEAP_REGISTRY_SIZE];

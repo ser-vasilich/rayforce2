@@ -121,8 +121,8 @@ void td_env_pop_scope(void) {
     f->count = 0;
 }
 
-void td_env_set_local(int64_t sym_id, td_t* val) {
-    if (scope_depth <= 0) { (void)td_env_set(sym_id, val); return; }
+td_err_t td_env_set_local(int64_t sym_id, td_t* val) {
+    if (scope_depth <= 0) return td_env_set(sym_id, val);
     td_scope_frame_t* f = &scope_stack[scope_depth - 1];
     /* Update existing in this frame */
     for (int32_t i = 0; i < f->count; i++) {
@@ -130,13 +130,13 @@ void td_env_set_local(int64_t sym_id, td_t* val) {
             if (f->vals[i]) td_release(f->vals[i]);
             td_retain(val);
             f->vals[i] = val;
-            return;
+            return TD_OK;
         }
     }
-    if (f->count < FRAME_CAP) {
-        f->keys[f->count] = sym_id;
-        td_retain(val);
-        f->vals[f->count] = val;
-        f->count++;
-    }
+    if (f->count >= FRAME_CAP) return TD_ERR_OOM;
+    f->keys[f->count] = sym_id;
+    td_retain(val);
+    f->vals[f->count] = val;
+    f->count++;
+    return TD_OK;
 }
