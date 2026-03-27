@@ -177,9 +177,7 @@ int32_t td_term_visual_width(const char* str, int32_t len) {
         if (str[i] == '\033') {
             in_escape = 1;
         } else if (in_escape) {
-            if (str[i] == 'm' || str[i] == 'K' || str[i] == 'H' ||
-                str[i] == 'A' || str[i] == 'B' || str[i] == 'C' ||
-                str[i] == 'D') {
+            if (str[i] >= 0x40 && str[i] <= 0x7E) {
                 in_escape = 0;
             }
         } else {
@@ -442,6 +440,7 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
         /* Restore saved current input */
         if (hist->curr_saved) {
             memcpy(buf, hist->curr, (size_t)hist->curr_len);
+            buf[hist->curr_len] = '\0';
             hist->curr_saved = 0;
             return hist->curr_len;
         }
@@ -1253,7 +1252,7 @@ void td_term_redraw(td_term_t* term) {
     /* Write prompt + highlighted buffer into temp buf, then single write */
     {
         /* Each char can expand to ~15 bytes with ANSI escapes */
-        char hlbuf[TERM_BUF_SIZE * 16];
+        char hlbuf[TERM_BUF_SIZE * 8];
         int32_t hlen = 0;
         if (term->multiline_len > 0) {
             memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);
