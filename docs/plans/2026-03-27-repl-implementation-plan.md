@@ -352,14 +352,14 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/repl.c`
 
-- [ ] Implement command detection: if line starts with `:`, handle as command
+- [x] Implement command detection: if line starts with `:`, handle as command
   - `:?` or `:help` — print help text
   - `:t` or `:timeit` — toggle expression timing
   - `:q` or `:quit` — exit with code 0
   - `:env` — list all defined variables
   - `:clear` — clear screen (`\033[2J\033[H`)
-- [ ] Smoke test: type `:?` → see help, `:q` → exits
-- [ ] Commit: `feat(repl): REPL commands (:help, :timeit, :quit, :env, :clear)`
+- [x] Smoke test: type `:?` → see help, `:q` → exits
+- [x] Commit: `feat(repl): REPL commands (:help, :timeit, :quit, :env, :clear)`
 
 ---
 

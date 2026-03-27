@@ -142,6 +142,17 @@ void td_env_pop_scope(void) {
     f->count = 0;
 }
 
+/* ---- Iteration ---- */
+
+int32_t td_env_list(int64_t* sym_ids, td_t** vals, int32_t max_entries) {
+    int32_t n = g_env.count < max_entries ? g_env.count : max_entries;
+    for (int32_t i = 0; i < n; i++) {
+        sym_ids[i] = g_env.keys[i];
+        vals[i] = g_env.vals[i];
+    }
+    return n;
+}
+
 /* ---- Prefix lookup ---- */
 
 static const char* s_keywords[] = {

@@ -22,6 +22,11 @@ td_err_t td_env_set(int64_t sym_id, td_t* val);
 int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
                               const char** results, int64_t max_results);
 
+/* Iterate global environment entries.
+ * Fills sym_ids[] and vals[] with up to max_entries items.
+ * Returns count of entries written. */
+int32_t td_env_list(int64_t* sym_ids, td_t** vals, int32_t max_entries);
+
 /* Local scope stack for lexical binding (let, do, lambda) */
 td_err_t td_env_push_scope(void);
 void td_env_pop_scope(void);

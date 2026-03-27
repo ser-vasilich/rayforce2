@@ -6,6 +6,7 @@
 typedef struct td_repl {
     td_t*  _block;
     void*  term;    /* td_term_t* — NULL if piped/non-tty */
+    bool   timeit;  /* :timeit toggle — print expression timing */
 } td_repl_t;
 
 td_repl_t* td_repl_create(void);

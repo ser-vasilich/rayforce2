@@ -1,8 +1,14 @@
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "app/repl.h"
 #include "app/term.h"
+#include "lang/env.h"
 #include "lang/eval.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -267,8 +273,14 @@ void td_repl_destroy(td_repl_t* repl) {
     td_free(repl->_block);
 }
 
-static void eval_and_print(const char* input, bool use_color) {
+static void eval_and_print(const char* input, bool use_color, bool timeit) {
+    struct timespec t0, t1;
+    if (timeit) clock_gettime(CLOCK_MONOTONIC, &t0);
+
     td_t* result = td_eval_str(input);
+
+    if (timeit) clock_gettime(CLOCK_MONOTONIC, &t1);
+
     if (TD_IS_ERR(result)) {
         repl_print_result(stdout, result, use_color);
     } else if (result) {
@@ -276,6 +288,87 @@ static void eval_and_print(const char* input, bool use_color) {
         fflush(stdout);
         td_release(result);
     }
+
+    if (timeit) {
+        double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                   + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+        if (use_color) fprintf(stdout, "\033[90m");
+        fprintf(stdout, "%.3f ms\n", ms);
+        if (use_color) fprintf(stdout, "\033[0m");
+        fflush(stdout);
+    }
+}
+
+static const char* type_label(td_t* val) {
+    if (!val) return "nil";
+    switch (val->type) {
+    case TD_ATOM_UNARY:  return "builtin/1";
+    case TD_ATOM_BINARY: return "builtin/2";
+    case TD_ATOM_VARY:   return "builtin/n";
+    case TD_ATOM_LAMBDA: return "lambda";
+    case TD_TABLE:       return "table";
+    case TD_LIST:        return "list";
+    default:
+        if (td_is_vec(val)) return "vector";
+        if (td_is_atom(val)) return "atom";
+        return "?";
+    }
+}
+
+static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
+    if (len == 0 || str[0] != ':') return false;
+
+    const char* cmd = str + 1;
+    size_t clen = len - 1;
+
+    if ((clen == 1 && cmd[0] == '?') ||
+        (clen == 4 && memcmp(cmd, "help", 4) == 0)) {
+        fprintf(stdout,
+            "Commands:\n"
+            "  :help, :?     Show this help\n"
+            "  :timeit, :t   Toggle expression timing\n"
+            "  :env          List defined variables\n"
+            "  :clear        Clear screen\n"
+            "  :quit, :q     Exit REPL\n");
+        return true;
+    }
+
+    if ((clen == 1 && cmd[0] == 'q') ||
+        (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
+        /* Signal exit by setting term to a sentinel — caller checks */
+        repl->timeit = false; /* reuse: signal quit via special return */
+        return false; /* let caller handle :q as exit */
+    }
+
+    if ((clen == 1 && cmd[0] == 't') ||
+        (clen == 6 && memcmp(cmd, "timeit", 6) == 0)) {
+        repl->timeit = !repl->timeit;
+        fprintf(stdout, "timing %s\n", repl->timeit ? "on" : "off");
+        return true;
+    }
+
+    if (clen == 3 && memcmp(cmd, "env", 3) == 0) {
+        int64_t sym_ids[512];
+        td_t* vals[512];
+        int32_t n = td_env_list(sym_ids, vals, 512);
+        for (int32_t i = 0; i < n; i++) {
+            td_t* s = td_sym_str(sym_ids[i]);
+            const char* name = s ? td_str_ptr(s) : "?";
+            fprintf(stdout, "  %-20s %s\n", name, type_label(vals[i]));
+        }
+        fprintf(stdout, "(%d entries)\n", n);
+        return true;
+    }
+
+    if (clen == 5 && memcmp(cmd, "clear", 5) == 0) {
+        fprintf(stdout, "\033[2J\033[H");
+        fflush(stdout);
+        return true;
+    }
+
+    fprintf(stdout, "unknown command: %.*s\n", (int)len, str);
+    fprintf(stdout, "type :? for help\n");
+    return true;
 }
 
 static void run_interactive(td_repl_t* repl) {
@@ -300,27 +393,55 @@ static void run_interactive(td_repl_t* repl) {
             break;
         }
 
-        eval_and_print(str, true);
+        /* REPL commands starting with ':' */
+        if (str[0] == ':') {
+            /* :q / :quit need special handling — they signal exit */
+            size_t clen = len - 1;
+            const char* cmd = str + 1;
+            if ((clen == 1 && cmd[0] == 'q') ||
+                (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
+                td_release(line);
+                break;
+            }
+            handle_command(repl, str, len);
+            td_release(line);
+            continue;
+        }
+
+        eval_and_print(str, true, repl->timeit);
         td_release(line);
     }
 }
 
-static void run_piped(void) {
+static void run_piped(td_repl_t* repl) {
     char buf[PIPE_BUF_SIZE];
     fprintf(stdout, "teide> ");
     fflush(stdout);
 
     while (fgets(buf, PIPE_BUF_SIZE, stdin)) {
         size_t len = strlen(buf);
-        if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
-        if (buf[0] == '\0') {
+        if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
+        if (len == 0) {
             fprintf(stdout, "teide> ");
             fflush(stdout);
             continue;
         }
         if (strcmp(buf, "\\\\") == 0 || strcmp(buf, "exit") == 0) break;
 
-        eval_and_print(buf, false);
+        /* REPL commands */
+        if (buf[0] == ':') {
+            size_t clen = len - 1;
+            const char* cmd = buf + 1;
+            if ((clen == 1 && cmd[0] == 'q') ||
+                (clen == 4 && memcmp(cmd, "quit", 4) == 0))
+                break;
+            handle_command(repl, buf, len);
+            fprintf(stdout, "teide> ");
+            fflush(stdout);
+            continue;
+        }
+
+        eval_and_print(buf, false, repl->timeit);
         fprintf(stdout, "teide> ");
         fflush(stdout);
     }
@@ -330,7 +451,7 @@ void td_repl_run(td_repl_t* repl) {
     if (repl->term) {
         run_interactive(repl);
     } else {
-        run_piped();
+        run_piped(repl);
     }
 }
 
