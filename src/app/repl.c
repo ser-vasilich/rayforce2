@@ -14,6 +14,237 @@
 #endif
 
 #define PIPE_BUF_SIZE 4096
+#define MAX_PRINT_ROWS 40
+#define MAX_COL_WIDTH 40
+
+/* ===== Pretty-print helpers ===== */
+
+/* Check if vector element at idx is null */
+static bool vec_is_null(td_t* vec, int64_t idx) {
+    if (!(vec->attrs & TD_ATTR_HAS_NULLS)) return false;
+    const uint8_t* bm;
+    if (vec->attrs & TD_ATTR_NULLMAP_EXT) {
+        td_t* ext = vec->ext_nullmap;
+        if (!ext) return false;
+        bm = (const uint8_t*)td_data(ext);
+    } else {
+        if (idx >= 128) return false;
+        bm = vec->nullmap;
+    }
+    return (bm[idx / 8] >> (idx % 8)) & 1;
+}
+
+/* Format a single vector element into buf, return chars written */
+static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
+    if (vec_is_null(vec, idx))
+        return snprintf(out, (size_t)max, "null");
+
+    switch (vec->type) {
+    case TD_BOOL: {
+        bool* data = (bool*)td_data(vec);
+        return snprintf(out, (size_t)max, "%s", data[idx] ? "true" : "false");
+    }
+    case TD_I64: {
+        int64_t* data = (int64_t*)td_data(vec);
+        return snprintf(out, (size_t)max, "%ld", (long)data[idx]);
+    }
+    case TD_F64: {
+        double* data = (double*)td_data(vec);
+        return snprintf(out, (size_t)max, "%g", data[idx]);
+    }
+    case TD_I32: {
+        int32_t* data = (int32_t*)td_data(vec);
+        return snprintf(out, (size_t)max, "%d", data[idx]);
+    }
+    case TD_I16: {
+        int16_t* data = (int16_t*)td_data(vec);
+        return snprintf(out, (size_t)max, "%d", (int)data[idx]);
+    }
+    case TD_SYM: {
+        uint8_t esz = (uint8_t)TD_SYM_ELEM(vec->attrs);
+        const uint8_t* base = (const uint8_t*)td_data(vec);
+        int64_t sym_id = 0;
+        memcpy(&sym_id, base + idx * esz, esz);
+        td_t* s = td_sym_str(sym_id);
+        if (s) return snprintf(out, (size_t)max, "%.*s",
+                               (int)td_str_len(s), td_str_ptr(s));
+        return snprintf(out, (size_t)max, "?sym%ld", (long)sym_id);
+    }
+    case TD_STR: {
+        size_t slen = 0;
+        const char* s = td_str_vec_get(vec, idx, &slen);
+        if (s) return snprintf(out, (size_t)max, "%.*s", (int)slen, s);
+        return snprintf(out, (size_t)max, "null");
+    }
+    case TD_DATE: {
+        int64_t* data = (int64_t*)td_data(vec);
+        int64_t d = data[idx];
+        /* Teide date = days since 2000-01-01 */
+        return snprintf(out, (size_t)max, "%ld", (long)d);
+    }
+    default:
+        return snprintf(out, (size_t)max, "?");
+    }
+}
+
+/* Print an atom (scalar) value */
+static void print_atom(FILE* fp, td_t* val) {
+    td_lang_print(fp, val);
+}
+
+/* Print a vector in [1 2 3 ...] format */
+static void print_vector(FILE* fp, td_t* val) {
+    int64_t len = td_len(val);
+    td_t** elems = (td_t**)td_data(val);
+    bool is_dict = (val->attrs & TD_ATTR_DICT) != 0;
+
+    if (is_dict) {
+        fprintf(fp, "{");
+        for (int64_t i = 0; i + 1 < len; i += 2) {
+            if (i > 0) fprintf(fp, " ");
+            td_lang_print(fp, elems[i]);
+            fprintf(fp, ": ");
+            td_lang_print(fp, elems[i + 1]);
+        }
+        fprintf(fp, "}");
+        return;
+    }
+
+    fprintf(fp, "[");
+    for (int64_t i = 0; i < len; i++) {
+        if (i > 0) fprintf(fp, " ");
+        td_lang_print(fp, elems[i]);
+    }
+    fprintf(fp, "]");
+}
+
+/* Print a typed vector (TD_I64, TD_F64, TD_SYM, TD_STR, etc.) */
+static void print_typed_vector(FILE* fp, td_t* vec) {
+    int64_t len = td_len(vec);
+    char elem_buf[256];
+    fprintf(fp, "[");
+    int64_t show = len > 100 ? 100 : len;
+    for (int64_t i = 0; i < show; i++) {
+        if (i > 0) fprintf(fp, " ");
+        fmt_vec_elem(vec, i, elem_buf, (int)sizeof(elem_buf));
+        fprintf(fp, "%s", elem_buf);
+    }
+    if (len > show) fprintf(fp, " ...(+%ld)", (long)(len - show));
+    fprintf(fp, "]");
+}
+
+/* Print a table in columnar format */
+static void print_table(FILE* fp, td_t* tbl) {
+    int64_t ncols = td_table_ncols(tbl);
+    int64_t nrows = td_table_nrows(tbl);
+
+    if (ncols == 0) {
+        fprintf(fp, "(empty table)\n");
+        return;
+    }
+
+    /* Collect column names and vectors */
+    td_t* cols[256];
+    const char* names[256];
+    int name_lens[256];
+    int col_widths[256];
+    int actual_ncols = ncols > 256 ? 256 : (int)ncols;
+
+    for (int c = 0; c < actual_ncols; c++) {
+        cols[c] = td_table_get_col_idx(tbl, c);
+        int64_t name_id = td_table_col_name(tbl, c);
+        td_t* ns = td_sym_str(name_id);
+        if (ns) {
+            names[c] = td_str_ptr(ns);
+            name_lens[c] = (int)td_str_len(ns);
+        } else {
+            names[c] = "?";
+            name_lens[c] = 1;
+        }
+        col_widths[c] = name_lens[c];
+    }
+
+    /* Determine column widths by sampling rows */
+    int64_t sample = nrows > MAX_PRINT_ROWS ? MAX_PRINT_ROWS : nrows;
+    char elem_buf[256];
+    for (int64_t r = 0; r < sample; r++) {
+        for (int c = 0; c < actual_ncols; c++) {
+            if (!cols[c]) continue;
+            int w = fmt_vec_elem(cols[c], r, elem_buf, (int)sizeof(elem_buf));
+            if (w > MAX_COL_WIDTH) w = MAX_COL_WIDTH;
+            if (w > col_widths[c]) col_widths[c] = w;
+        }
+    }
+
+    /* Print header */
+    for (int c = 0; c < actual_ncols; c++) {
+        if (c > 0) fprintf(fp, " | ");
+        fprintf(fp, "%-*.*s", col_widths[c], name_lens[c], names[c]);
+    }
+    fprintf(fp, "\n");
+
+    /* Print separator */
+    for (int c = 0; c < actual_ncols; c++) {
+        if (c > 0) fprintf(fp, "-+-");
+        for (int i = 0; i < col_widths[c]; i++) fputc('-', fp);
+    }
+    fprintf(fp, "\n");
+
+    /* Print rows */
+    for (int64_t r = 0; r < sample; r++) {
+        for (int c = 0; c < actual_ncols; c++) {
+            if (c > 0) fprintf(fp, " | ");
+            if (cols[c]) {
+                int w = fmt_vec_elem(cols[c], r, elem_buf, (int)sizeof(elem_buf));
+                (void)w;
+                fprintf(fp, "%-*s", col_widths[c], elem_buf);
+            } else {
+                fprintf(fp, "%-*s", col_widths[c], "null");
+            }
+        }
+        fprintf(fp, "\n");
+    }
+
+    if (nrows > sample)
+        fprintf(fp, "... %ld more rows\n", (long)(nrows - sample));
+
+    fprintf(fp, "(%ld row%s)\n", (long)nrows, nrows == 1 ? "" : "s");
+}
+
+/* Pretty-print a result value */
+static void repl_print_result(FILE* fp, td_t* val, bool use_color) {
+    if (!val) return;
+    if (TD_IS_ERR(val)) {
+        td_err_t code = TD_ERR_CODE(val);
+        if (use_color) fprintf(fp, "\033[31m");
+        fprintf(fp, "error: %s", td_err_str(code));
+        if (use_color) fprintf(fp, "\033[0m");
+        fprintf(fp, "\n");
+        return;
+    }
+
+    switch (val->type) {
+    case TD_TABLE:
+        print_table(fp, val);
+        break;
+    case TD_LIST:
+        print_vector(fp, val);
+        fprintf(fp, "\n");
+        break;
+    default:
+        if (td_is_atom(val)) {
+            print_atom(fp, val);
+            fprintf(fp, "\n");
+        } else if (td_is_vec(val)) {
+            print_typed_vector(fp, val);
+            fprintf(fp, "\n");
+        } else {
+            td_lang_print(fp, val);
+            fprintf(fp, "\n");
+        }
+        break;
+    }
+}
 
 td_repl_t* td_repl_create(void) {
     td_t* block = td_alloc(sizeof(td_repl_t));
@@ -36,15 +267,14 @@ void td_repl_destroy(td_repl_t* repl) {
     td_free(repl->_block);
 }
 
-static void eval_and_print(const char* input) {
+static void eval_and_print(const char* input, bool use_color) {
     td_t* result = td_eval_str(input);
-    if (result && !TD_IS_ERR(result)) {
-        td_lang_print(stdout, result);
-        fputc('\n', stdout);
+    if (TD_IS_ERR(result)) {
+        repl_print_result(stdout, result, use_color);
+    } else if (result) {
+        repl_print_result(stdout, result, use_color);
         fflush(stdout);
         td_release(result);
-    } else if (TD_IS_ERR(result)) {
-        fprintf(stderr, "error\n");
     }
 }
 
@@ -70,7 +300,7 @@ static void run_interactive(td_repl_t* repl) {
             break;
         }
 
-        eval_and_print(str);
+        eval_and_print(str, true);
         td_release(line);
     }
 }
@@ -90,7 +320,7 @@ static void run_piped(void) {
         }
         if (strcmp(buf, "\\\\") == 0 || strcmp(buf, "exit") == 0) break;
 
-        eval_and_print(buf);
+        eval_and_print(buf, false);
         fprintf(stdout, "teide> ");
         fflush(stdout);
     }
@@ -132,13 +362,12 @@ int td_repl_run_file(const char* path) {
 
     td_t* result = td_eval_str(buf);
     td_release(block);
-    if (result && !TD_IS_ERR(result)) {
-        td_lang_print(stdout, result);
-        fputc('\n', stdout);
-        td_release(result);
-    } else if (TD_IS_ERR(result)) {
-        fprintf(stderr, "error: evaluation failed\n");
+    if (TD_IS_ERR(result)) {
+        repl_print_result(stderr, result, false);
         return 1;
+    } else if (result) {
+        repl_print_result(stdout, result, false);
+        td_release(result);
     }
     return 0;
 }

@@ -329,7 +329,7 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/repl.c`
 
-- [ ] Implement `td_repl_print_result()`:
+- [x] Implement `td_repl_print_result()`:
   - Scalars: print value directly
   - Vectors: `[1 2 3 4 5]` format, truncate at terminal width
   - Tables: columnar format with headers, aligned columns, row count
@@ -342,9 +342,9 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
     ```
   - Dicts: `{key: val ...}` format
   - Errors: red color `\033[31m`
-- [ ] Wire into REPL eval loop instead of raw `td_lang_print()`
-- [ ] Smoke test: eval a table expression, see formatted output
-- [ ] Commit: `feat(repl): pretty-print tables, vectors, and errors`
+- [x] Wire into REPL eval loop instead of raw `td_lang_print()`
+- [x] Smoke test: eval a table expression, see formatted output
+- [x] Commit: `feat(repl): pretty-print tables, vectors, and errors`
 
 ---
 
