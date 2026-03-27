@@ -171,17 +171,49 @@ static td_t* parse_vector(td_parser_t *p) {
     return list;
 }
 
-/* ── Dict literal: {key: val key: val} ── */
+/* ── Dict literal: {key: val key: val ...} ── */
 static td_t* parse_dict(td_parser_t *p) {
-    /* Skip over dict content for now — td_dict not yet implemented */
     p->pos++; /* skip { */
-    int depth = 1;
-    while (*p->pos && depth > 0) {
-        if (*p->pos == '{') depth++;
-        else if (*p->pos == '}') depth--;
-        p->pos++;
+    td_t* list = td_list_new(8);
+    if (TD_IS_ERR(list)) return list;
+    list->attrs |= TD_ATTR_DICT;
+
+    skip_ws_and_comments(p);
+    while (*p->pos && *p->pos != '}') {
+        /* Parse key: must be a name (alpha start) */
+        const char *kstart = p->pos;
+        while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT
+               || *p->pos == '_' || *p->pos == '-')
+            p->pos++;
+        size_t klen = (size_t)(p->pos - kstart);
+        if (klen == 0) { td_release(list); return TD_ERR_PTR(TD_ERR_PARSE); }
+
+        int64_t kid = td_sym_intern(kstart, klen);
+        td_t* key = td_sym(kid);
+        if (TD_IS_ERR(key)) { td_release(list); return key; }
+
+        /* Expect colon */
+        skip_ws_and_comments(p);
+        if (*p->pos != ':') { td_release(key); td_release(list); return TD_ERR_PTR(TD_ERR_PARSE); }
+        p->pos++; /* skip : */
+        skip_ws_and_comments(p);
+
+        /* Parse value expression */
+        td_t* val = parse_expr(p);
+        if (TD_IS_ERR(val)) { td_release(key); td_release(list); return val; }
+
+        /* Append key then value */
+        list = td_list_append(list, key);
+        td_release(key);
+        if (TD_IS_ERR(list)) { td_release(val); return list; }
+        list = td_list_append(list, val);
+        td_release(val);
+        if (TD_IS_ERR(list)) return list;
+
+        skip_ws_and_comments(p);
     }
-    return TD_ERR_PTR(TD_ERR_NYI);
+    if (*p->pos == '}') p->pos++;
+    return list;
 }
 
 /* ── List (s-expression): (fn arg1 arg2 ...) ── */

@@ -980,6 +980,307 @@ static td_t* ray_value(td_t* x) {
 }
 
 /* ══════════════════════════════════════════
+ * Select query — DAG bridge
+ * ══════════════════════════════════════════ */
+
+/* Helper: look up a key in a dict (TD_LIST with ATTR_DICT).
+ * Returns the value expression (unevaluated), or NULL if not found. */
+static td_t* dict_get(td_t* dict, const char* key) {
+    if (!dict || dict->type != TD_LIST) return NULL;
+    int64_t n = td_len(dict);
+    td_t** elems = (td_t**)td_data(dict);
+    int64_t key_id = td_sym_intern(key, strlen(key));
+    for (int64_t i = 0; i + 1 < n; i += 2) {
+        if (elems[i]->type == TD_ATOM_SYM && elems[i]->i64 == key_id)
+            return elems[i + 1];
+    }
+    return NULL;
+}
+
+/* Map a Rayfall builtin name to a DAG binary op constructor */
+typedef td_op_t* (*dag_binary_ctor)(td_graph_t*, td_op_t*, td_op_t*);
+typedef td_op_t* (*dag_unary_ctor)(td_graph_t*, td_op_t*);
+
+static dag_binary_ctor resolve_binary_dag(int64_t sym_id) {
+    td_t* s = td_sym_str(sym_id);
+    if (!s) return NULL;
+    const char* name = td_str_ptr(s);
+    size_t len = td_str_len(s);
+    if (len == 1) {
+        switch (name[0]) {
+            case '+': return td_add;
+            case '-': return td_sub;
+            case '*': return td_mul;
+            case '/': return td_div;
+            case '%': return td_mod;
+            case '>': return td_gt;
+            case '<': return td_lt;
+        }
+    } else if (len == 2) {
+        if (name[0] == '>' && name[1] == '=') return td_ge;
+        if (name[0] == '<' && name[1] == '=') return td_le;
+        if (name[0] == '=' && name[1] == '=') return td_eq;
+        if (name[0] == '!' && name[1] == '=') return td_ne;
+        if (name[0] == 'o' && name[1] == 'r') return td_or;
+    } else if (len == 3 && name[0] == 'a' && name[1] == 'n' && name[2] == 'd') {
+        return td_and;
+    }
+    return NULL;
+}
+
+/* Map Rayfall aggregation name to DAG opcode */
+static uint16_t resolve_agg_opcode(int64_t sym_id) {
+    td_t* s = td_sym_str(sym_id);
+    if (!s) return 0;
+    const char* name = td_str_ptr(s);
+    size_t len = td_str_len(s);
+    if (len == 3 && memcmp(name, "sum", 3) == 0) return OP_SUM;
+    if (len == 3 && memcmp(name, "avg", 3) == 0) return OP_AVG;
+    if (len == 3 && memcmp(name, "min", 3) == 0) return OP_MIN;
+    if (len == 3 && memcmp(name, "max", 3) == 0) return OP_MAX;
+    if (len == 5 && memcmp(name, "count", 5) == 0) return OP_COUNT;
+    if (len == 5 && memcmp(name, "first", 5) == 0) return OP_FIRST;
+    if (len == 4 && memcmp(name, "last", 4) == 0) return OP_LAST;
+    return 0;
+}
+
+/* Compile a Rayfall AST expression into a DAG node */
+static td_op_t* compile_expr_dag(td_graph_t* g, td_t* expr) {
+    if (!expr) return NULL;
+
+    /* Atom literal → const node */
+    if (expr->type == TD_ATOM_I64)
+        return td_const_i64(g, expr->i64);
+    if (expr->type == TD_ATOM_F64)
+        return td_const_f64(g, expr->f64);
+    if (expr->type == TD_ATOM_BOOL)
+        return td_const_bool(g, expr->b8);
+
+    /* Name reference → column scan */
+    if (expr->type == TD_ATOM_SYM && (expr->attrs & TD_ATTR_NAME)) {
+        td_t* s = td_sym_str(expr->i64);
+        if (!s) return NULL;
+        return td_scan(g, td_str_ptr(s));
+    }
+
+    /* List → function call: (fn arg1 arg2 ...) */
+    if (expr->type == TD_LIST && !(expr->attrs & (TD_ATTR_VECTOR | TD_ATTR_DICT))) {
+        int64_t n = td_len(expr);
+        if (n == 0) return NULL;
+        td_t** elems = (td_t**)td_data(expr);
+        td_t* head = elems[0];
+
+        /* Head must be a name referencing a builtin */
+        if (head->type != TD_ATOM_SYM) return NULL;
+        int64_t fn_sym = head->i64;
+
+        /* Check for xbar */
+        td_t* fn_name_str = td_sym_str(fn_sym);
+        if (fn_name_str && td_str_len(fn_name_str) == 4
+            && memcmp(td_str_ptr(fn_name_str), "xbar", 4) == 0) {
+            if (n != 3) return NULL;
+            td_op_t* col = compile_expr_dag(g, elems[1]);
+            td_op_t* bucket = compile_expr_dag(g, elems[2]);
+            if (!col || !bucket) return NULL;
+            /* xbar(x, b) = x - (x % b)  (stays in integer domain) */
+            return td_sub(g, col, td_mod(g, col, bucket));
+        }
+
+        /* Binary op? */
+        if (n == 3) {
+            dag_binary_ctor ctor = resolve_binary_dag(fn_sym);
+            if (ctor) {
+                td_op_t* left = compile_expr_dag(g, elems[1]);
+                td_op_t* right = compile_expr_dag(g, elems[2]);
+                if (!left || !right) return NULL;
+                return ctor(g, left, right);
+            }
+        }
+
+        /* Unary aggregation? */
+        if (n == 2) {
+            /* Check if it's a unary DAG op like neg, not, etc. */
+            if (fn_name_str && td_str_len(fn_name_str) == 3
+                && memcmp(td_str_ptr(fn_name_str), "not", 3) == 0) {
+                td_op_t* arg = compile_expr_dag(g, elems[1]);
+                return arg ? td_not(g, arg) : NULL;
+            }
+            if (fn_name_str && td_str_len(fn_name_str) == 3
+                && memcmp(td_str_ptr(fn_name_str), "neg", 3) == 0) {
+                td_op_t* arg = compile_expr_dag(g, elems[1]);
+                return arg ? td_neg(g, arg) : NULL;
+            }
+            /* Aggregation functions return DAG agg nodes */
+            uint16_t agg_op = resolve_agg_opcode(fn_sym);
+            if (agg_op) {
+                td_op_t* arg = compile_expr_dag(g, elems[1]);
+                if (!arg) return NULL;
+                switch (agg_op) {
+                    case OP_SUM:   return td_sum(g, arg);
+                    case OP_AVG:   return td_avg(g, arg);
+                    case OP_MIN:   return td_min_op(g, arg);
+                    case OP_MAX:   return td_max_op(g, arg);
+                    case OP_COUNT: return td_count(g, arg);
+                    case OP_FIRST: return td_first(g, arg);
+                    case OP_LAST:  return td_last(g, arg);
+                    default: return NULL;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/* Check if an expression is an aggregation call (head is an agg function) */
+static int is_agg_expr(td_t* expr) {
+    if (!expr || expr->type != TD_LIST) return 0;
+    if (expr->attrs & (TD_ATTR_VECTOR | TD_ATTR_DICT)) return 0;
+    int64_t n = td_len(expr);
+    if (n < 2) return 0;
+    td_t** elems = (td_t**)td_data(expr);
+    if (elems[0]->type != TD_ATOM_SYM) return 0;
+    return resolve_agg_opcode(elems[0]->i64) != 0;
+}
+
+/* (select {from: t [where: pred] [by: key] [col: expr ...]})
+ * Special form — receives unevaluated dict arg. */
+static td_t* ray_select(td_t** args, int64_t n) {
+    if (n < 1) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* dict = args[0];
+    if (!dict || dict->type != TD_LIST || !(dict->attrs & TD_ATTR_DICT))
+        return TD_ERR_PTR(TD_ERR_TYPE);
+
+    /* Evaluate 'from:' to get the source table */
+    td_t* from_expr = dict_get(dict, "from");
+    if (!from_expr) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* tbl = td_eval(from_expr);
+    if (TD_IS_ERR(tbl)) return tbl;
+    if (tbl->type != TD_TABLE) { td_release(tbl); return TD_ERR_PTR(TD_ERR_TYPE); }
+
+    td_t* where_expr = dict_get(dict, "where");
+    td_t* by_expr = dict_get(dict, "by");
+
+    /* Collect output columns (keys that are not from/where/by) */
+    int64_t dict_n = td_len(dict);
+    td_t** dict_elems = (td_t**)td_data(dict);
+    int64_t from_id  = td_sym_intern("from",  4);
+    int64_t where_id = td_sym_intern("where", 5);
+    int64_t by_id    = td_sym_intern("by",    2);
+
+    /* Count output columns */
+    int n_out = 0;
+    for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+        int64_t kid = dict_elems[i]->i64;
+        if (kid != from_id && kid != where_id && kid != by_id)
+            n_out++;
+    }
+
+    /* Simple case: no output cols, no where, no by → return table as-is */
+    if (n_out == 0 && !where_expr && !by_expr)
+        return tbl;
+
+    /* Build DAG */
+    td_graph_t* g = td_graph_new(tbl);
+    if (!g) { td_release(tbl); return TD_ERR_PTR(TD_ERR_OOM); }
+
+    td_op_t* root = td_const_table(g, tbl);
+
+    /* Apply WHERE filter */
+    if (where_expr) {
+        td_op_t* pred = compile_expr_dag(g, where_expr);
+        if (!pred) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        root = td_filter(g, root, pred);
+    }
+
+    /* GROUP BY */
+    if (by_expr) {
+        /* Compile group key(s) */
+        td_op_t* key_ops[16];
+        uint8_t n_keys = 0;
+
+        if (by_expr->type == TD_LIST && (by_expr->attrs & TD_ATTR_VECTOR)) {
+            /* Multiple keys: [key1 key2 ...] */
+            int64_t nk = td_len(by_expr);
+            td_t** key_elems = (td_t**)td_data(by_expr);
+            for (int64_t i = 0; i < nk && n_keys < 16; i++) {
+                key_ops[n_keys] = compile_expr_dag(g, key_elems[i]);
+                if (!key_ops[n_keys]) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+                n_keys++;
+            }
+        } else {
+            /* Single key expression */
+            key_ops[0] = compile_expr_dag(g, by_expr);
+            if (!key_ops[0]) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+            n_keys = 1;
+        }
+
+        /* Collect aggregation expressions from output columns */
+        uint16_t agg_ops[16];
+        td_op_t* agg_ins[16];
+        uint8_t n_aggs = 0;
+
+        for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+            int64_t kid = dict_elems[i]->i64;
+            if (kid == from_id || kid == where_id || kid == by_id) continue;
+
+            td_t* val_expr = dict_elems[i + 1];
+            if (is_agg_expr(val_expr) && n_aggs < 16) {
+                td_t** agg_elems = (td_t**)td_data(val_expr);
+                agg_ops[n_aggs] = resolve_agg_opcode(agg_elems[0]->i64);
+                /* Compile the aggregation input (the column reference) */
+                agg_ins[n_aggs] = compile_expr_dag(g, agg_elems[1]);
+                if (!agg_ins[n_aggs]) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+                n_aggs++;
+            }
+        }
+
+        if (n_aggs > 0)
+            root = td_group(g, key_ops, n_keys, agg_ops, agg_ins, n_aggs);
+    } else if (n_out > 0) {
+        /* Projection only (no group by) — select specific columns */
+        td_op_t* col_ops[16];
+        uint8_t nc = 0;
+        for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+            int64_t kid = dict_elems[i]->i64;
+            if (kid == from_id || kid == where_id || kid == by_id) continue;
+            if (nc < 16) {
+                col_ops[nc] = compile_expr_dag(g, dict_elems[i + 1]);
+                if (!col_ops[nc]) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+                nc++;
+            }
+        }
+        root = td_select(g, root, col_ops, nc);
+    }
+
+    /* Optimize and execute */
+    root = td_optimize(g, root);
+    td_t* result = td_execute(g, root);
+
+    td_graph_free(g);
+    td_release(tbl);
+    return result;
+}
+
+/* (xbar col bucket) — time/value bucketing: floor(col/bucket)*bucket */
+static td_t* ray_xbar(td_t* col, td_t* bucket) {
+    if (col->type == TD_ATOM_I64 && bucket->type == TD_ATOM_I64) {
+        int64_t b = bucket->i64;
+        if (b == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        return make_i64((col->i64 / b) * b);
+    }
+    if ((col->type == TD_ATOM_F64 || col->type == TD_ATOM_I64) &&
+        (bucket->type == TD_ATOM_F64 || bucket->type == TD_ATOM_I64)) {
+        double c = col->type == TD_ATOM_F64 ? col->f64 : (double)col->i64;
+        double b = bucket->type == TD_ATOM_F64 ? bucket->f64 : (double)bucket->i64;
+        if (b == 0.0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        double r = ((int64_t)(c / b)) * b;
+        return make_f64(r);
+    }
+    return TD_ERR_PTR(TD_ERR_TYPE);
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -1673,6 +1974,10 @@ static void td_register_builtins(void) {
     register_binary("table",   TD_FN_NONE, ray_table);
     register_unary("key",      TD_FN_NONE, ray_key);
     register_unary("value",    TD_FN_NONE, ray_value);
+
+    /* Query operations */
+    register_vary("select",    TD_FN_SPECIAL_FORM, ray_select);
+    register_binary("xbar",    TD_FN_ATOMIC, ray_xbar);
 }
 
 /* ══════════════════════════════════════════

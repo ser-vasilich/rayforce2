@@ -361,23 +361,23 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_select_all` — `(select {from: t})` → same table
   - `test_eval_select_where` — `(select {from: t where: (> salary 55000)})` → filtered table
   - `test_eval_select_cols` — `(select {name: name salary: salary from: t})` → projected table
   - `test_eval_select_groupby` — `(select {avg_sal: (avg salary) from: t by: dept})` → grouped table
   - `test_eval_select_xbar` — `(select {... by: (xbar timestamp 60000000000)})` → time-bucketed
-- [ ] Implement `ray_select` (`TD_UNARY`):
-  - Receive evaluated dict arg
+- [x] Implement `ray_select` (`TD_VARY, FN_SPECIAL_FORM`):
+  - Receive unevaluated dict arg, eval `from:` to get table
   - Extract `from:`, `where:`, `by:`, output column expressions
   - When `from:` is a table:
     1. `td_graph_new(table)`
     2. Walk where/by/output expressions, emit DAG nodes (`td_scan`, `td_filter`, `td_group`, etc.)
     3. `td_optimize(g, root)` → `td_execute(g, root)`
   - Return result table
-- [ ] Implement `ray_xbar` (`TD_BINARY, FN_ATOMIC`) — time bucketing
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): select queries bridging to Teide DAG executor`
+- [x] Implement `ray_xbar` (`TD_BINARY, FN_ATOMIC`) — time bucketing
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): select queries bridging to Teide DAG executor`
 
 ---
 

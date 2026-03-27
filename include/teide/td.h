@@ -152,6 +152,7 @@ extern "C" {
 
 /* Vector literal flag (distinguishes [x y z] data from (f x y) calls in TD_LIST) */
 #define TD_ATTR_VECTOR      0x01  /* TD_LIST with this flag = data vector, not call */
+#define TD_ATTR_DICT        0x02  /* TD_LIST with this flag = dict {k: v ...} */
 
 /* Function type signatures (use union td_t since td_t typedef comes later) */
 typedef union td_t* (*td_unary_fn)(union td_t*);

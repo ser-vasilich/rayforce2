@@ -823,6 +823,82 @@ static MunitResult test_eval_count_table(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: select all ---- */
+static MunitResult test_eval_select_all(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'salary] (list [1 2 3] [50000 60000 70000]))) "
+        "(select {from: t}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    munit_assert_int(td_table_ncols(result), ==, 2);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: select where ---- */
+static MunitResult test_eval_select_where(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'salary] (list [1 2 3] [50000 60000 70000]))) "
+        "(select {from: t where: (> salary 55000)}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: select cols (projection) ---- */
+static MunitResult test_eval_select_cols(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['name 'salary 'dept] "
+        "(list [1 2 3] [50000 60000 70000] [10 20 10]))) "
+        "(select {name: name salary: salary from: t}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_ncols(result), ==, 2);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: select groupby ---- */
+static MunitResult test_eval_select_groupby(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['dept 'salary] "
+        "(list [1 2 1 2] [50000 60000 70000 80000]))) "
+        "(select {avg_sal: (avg salary) from: t by: dept}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: select xbar (time bucket) ---- */
+static MunitResult test_eval_select_xbar(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['ts 'val] "
+        "(list [100 250 300 450 500] [1 2 3 4 5]))) "
+        "(select {total: (sum val) from: t by: (xbar ts 200)}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* Buckets: 0(100), 200(250,300), 400(450,500) → 3 groups */
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -884,6 +960,11 @@ static MunitTest lang_tests[] = {
     { "/eval/at_table",        test_eval_at_table,        lang_setup, lang_teardown, 0, NULL },
     { "/eval/key_table",       test_eval_key_table,       lang_setup, lang_teardown, 0, NULL },
     { "/eval/count_table",     test_eval_count_table,     lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_all",      test_eval_select_all,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_where",    test_eval_select_where,    lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_cols",     test_eval_select_cols,     lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_groupby",  test_eval_select_groupby,  lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_xbar",     test_eval_select_xbar,     lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
