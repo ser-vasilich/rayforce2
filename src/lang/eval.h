@@ -100,6 +100,9 @@ td_t* td_eval_str(const char* source);
 /* Compile a lambda's body to bytecode. Called lazily on first invocation. */
 void td_compile(td_t* lambda);
 
+/* Reset compiler cached state (call from td_lang_destroy). */
+void td_compile_reset(void);
+
 /* Print a td_t value to a FILE stream. */
 void td_lang_print(FILE* fp, td_t* val);
 

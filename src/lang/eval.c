@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* ══════════════════════════════════════════
  * Arithmetic builtins
@@ -411,13 +412,7 @@ static td_t* ray_dev(td_t* x) {
         double d = as_f64(elems[i]) - mean;
         var += d * d;
     }
-    /* Use sqrt approximation — no math.h dependency */
-    double s = var / (double)len;
-    /* Newton's method for sqrt */
-    if (s == 0.0) return make_f64(0.0);
-    double g = s;
-    for (int i = 0; i < 50; i++) g = (g + s / g) * 0.5;
-    return make_f64(g);
+    return make_f64(sqrt(var / (double)len));
 }
 
 /* ══════════════════════════════════════════
@@ -1351,17 +1346,22 @@ static td_t* ray_select(td_t** args, int64_t n) {
 /* (xbar col bucket) — time/value bucketing: floor(col/bucket)*bucket */
 static td_t* ray_xbar(td_t* col, td_t* bucket) {
     if (col->type == TD_ATOM_I64 && bucket->type == TD_ATOM_I64) {
-        int64_t b = bucket->i64;
+        int64_t a = col->i64, b = bucket->i64;
         if (b == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
-        return make_i64((col->i64 / b) * b);
+        /* Floor division: truncate toward negative infinity */
+        int64_t q = a / b;
+        if ((a ^ b) < 0 && q * b != a) q--;
+        return make_i64(q * b);
     }
     if ((col->type == TD_ATOM_F64 || col->type == TD_ATOM_I64) &&
         (bucket->type == TD_ATOM_F64 || bucket->type == TD_ATOM_I64)) {
         double c = col->type == TD_ATOM_F64 ? col->f64 : (double)col->i64;
         double b = bucket->type == TD_ATOM_F64 ? bucket->f64 : (double)bucket->i64;
         if (b == 0.0) return TD_ERR_PTR(TD_ERR_DOMAIN);
-        double r = ((int64_t)(c / b)) * b;
-        return make_f64(r);
+        /* Floor division for correct negative bucketing */
+        double q = c / b;
+        double fq = q >= 0 ? (double)(int64_t)q : (q == (double)(int64_t)q ? q : (double)((int64_t)q - 1));
+        return make_f64(fq * b);
     }
     return TD_ERR_PTR(TD_ERR_TYPE);
 }
@@ -2496,6 +2496,7 @@ op_call1: {
         result = fn(arg);
     td_release(arg);
     td_release(fn_obj);
+    if (TD_IS_ERR(result)) goto vm_error;
     PUSH(result);
     DISPATCH();
 }
@@ -2513,6 +2514,7 @@ op_call2: {
     td_release(left);
     td_release(right);
     td_release(fn_obj);
+    if (TD_IS_ERR(result)) goto vm_error;
     PUSH(result);
     DISPATCH();
 }
@@ -2529,6 +2531,7 @@ op_calln: {
     for (int32_t i = 0; i < n; i++)
         td_release(fn_args[i]);
     td_release(fn_obj);
+    if (TD_IS_ERR(result)) goto vm_error;
     PUSH(result);
     DISPATCH();
 }
@@ -2606,6 +2609,7 @@ op_callf: {
             break;
         }
         td_release(fn_obj);
+        if (TD_IS_ERR(result)) goto vm_error;
         PUSH(result);
         DISPATCH();
     }
@@ -2953,6 +2957,7 @@ td_err_t td_lang_init(void) {
 
 void td_lang_destroy(void) {
     td_env_destroy();
+    td_compile_reset();
 }
 
 /* ══════════════════════════════════════════

@@ -373,3 +373,7 @@ void td_compile(td_t *lambda) {
 
     compiler_destroy(&c);
 }
+
+void td_compile_reset(void) {
+    sf_set = sf_let = sf_if = sf_do = sf_fn = -1;
+}
