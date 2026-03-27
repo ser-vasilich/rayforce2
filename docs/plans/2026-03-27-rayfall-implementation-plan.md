@@ -728,7 +728,7 @@ git commit -m "feat(lang): lexer with ASCII dispatch table and recursive descent
 
 ### Task 2.2: Parse s-expressions and vector literals
 
-- [ ] Implement s-expression and vector literal parsing
+- [x] Implement s-expression and vector literal parsing
 
 **Files:**
 - Modify: `test/test_lang.c`

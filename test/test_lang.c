@@ -134,6 +134,57 @@ static MunitResult test_lex_bool(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: parse s-expression ---- */
+static MunitResult test_parse_sexpr(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("(+ 1 2)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    /* Should be a list of 3 elements: [name:"+", 1, 2] */
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: parse nested s-expressions ---- */
+static MunitResult test_parse_nested(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("(+ (* 2 3) 4)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    /* Second element should be a list (the nested (* 2 3)) */
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[1]->type, ==, TD_LIST);
+    munit_assert_int(td_len(elems[1]), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: parse vector literal ---- */
+static MunitResult test_parse_vector(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("[1 2 3]");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    /* Should be a list of 3 i64 elements */
+    munit_assert_int(td_len(result), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: parse empty list ---- */
+static MunitResult test_parse_empty_list(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("()");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 0);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -145,6 +196,10 @@ static MunitTest lang_tests[] = {
     { "/lex/string", test_lex_string, lang_setup, lang_teardown, 0, NULL },
     { "/lex/symbol", test_lex_symbol, lang_setup, lang_teardown, 0, NULL },
     { "/lex/bool",   test_lex_bool,   lang_setup, lang_teardown, 0, NULL },
+    { "/parse/sexpr",      test_parse_sexpr,      lang_setup, lang_teardown, 0, NULL },
+    { "/parse/nested",     test_parse_nested,     lang_setup, lang_teardown, 0, NULL },
+    { "/parse/vector",     test_parse_vector,     lang_setup, lang_teardown, 0, NULL },
+    { "/parse/empty_list", test_parse_empty_list, lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
