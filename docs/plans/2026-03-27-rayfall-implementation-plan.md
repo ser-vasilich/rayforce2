@@ -401,14 +401,14 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_left_join` — `(left-join t1 t2 [key])` → joined table, all left rows kept
   - `test_eval_inner_join` — `(inner-join t1 t2 [key])` → only matching rows
   - `test_eval_window_join` — `(window-join t1 t2 [key] [time] window)` → time window join
-- [ ] Implement `ray_left_join`, `ray_inner_join`, `ray_window_join` (`TD_VARY`):
+- [x] Implement `ray_left_join`, `ray_inner_join`, `ray_window_join` (`TD_VARY`):
   - Bridge to Teide's `td_join()` / `td_asof_join()` DAG nodes
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): join operations (left-join, inner-join, window-join)`
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): join operations (left-join, inner-join, window-join)`
 
 ---
 

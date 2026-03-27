@@ -1589,6 +1589,116 @@ static td_t* ray_upsert(td_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * Join operations
+ * ══════════════════════════════════════════ */
+
+/* Shared implementation for left-join (join_type=1) and inner-join (join_type=0).
+ * (left-join t1 t2 [key ...]) / (inner-join t1 t2 [key ...]) */
+static td_t* join_impl(td_t** args, int64_t n, uint8_t join_type) {
+    if (n < 3) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* left_tbl  = args[0];
+    td_t* right_tbl = args[1];
+    td_t* keys      = args[2];
+
+    if (left_tbl->type != TD_TABLE || right_tbl->type != TD_TABLE)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    if (keys->type != TD_LIST || !(keys->attrs & TD_ATTR_VECTOR))
+        return TD_ERR_PTR(TD_ERR_TYPE);
+
+    int64_t nk = td_len(keys);
+    if (nk == 0 || nk > 16) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** key_elems = (td_t**)td_data(keys);
+
+    td_graph_t* g = td_graph_new(left_tbl);
+    if (!g) return TD_ERR_PTR(TD_ERR_OOM);
+
+    td_op_t* left_node  = td_const_table(g, left_tbl);
+    td_op_t* right_node = td_const_table(g, right_tbl);
+
+    td_op_t* lk[16], *rk[16];
+    for (int64_t i = 0; i < nk; i++) {
+        if (key_elems[i]->type != TD_ATOM_SYM) {
+            td_graph_free(g);
+            return TD_ERR_PTR(TD_ERR_TYPE);
+        }
+        td_t* name_str = td_sym_str(key_elems[i]->i64);
+        if (!name_str) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        lk[i] = td_scan(g, td_str_ptr(name_str));
+        rk[i] = td_scan(g, td_str_ptr(name_str));
+        if (!lk[i] || !rk[i]) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+    }
+
+    td_op_t* jn = td_join(g, left_node, lk, right_node, rk,
+                           (uint8_t)nk, join_type);
+    if (!jn) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_OOM); }
+
+    jn = td_optimize(g, jn);
+    td_t* result = td_execute(g, jn);
+    td_graph_free(g);
+    return result;
+}
+
+static td_t* ray_left_join(td_t** args, int64_t n)  { return join_impl(args, n, 1); }
+static td_t* ray_inner_join(td_t** args, int64_t n) { return join_impl(args, n, 0); }
+
+/* (window-join t1 t2 [eq-keys] time-col)
+ * ASOF join: for each left row, find closest right row with time <= left.time
+ * within the same equality partition. */
+static td_t* ray_window_join(td_t** args, int64_t n) {
+    if (n < 4) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* left_tbl  = args[0];
+    td_t* right_tbl = args[1];
+    td_t* eq_keys   = args[2];
+    td_t* time_sym  = args[3];
+
+    if (left_tbl->type != TD_TABLE || right_tbl->type != TD_TABLE)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    if (time_sym->type != TD_ATOM_SYM)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+
+    uint8_t n_eq = 0;
+    td_t** eq_elems = NULL;
+    if (eq_keys->type == TD_LIST && (eq_keys->attrs & TD_ATTR_VECTOR)) {
+        n_eq = (uint8_t)td_len(eq_keys);
+        eq_elems = (td_t**)td_data(eq_keys);
+    }
+
+    td_graph_t* g = td_graph_new(left_tbl);
+    if (!g) return TD_ERR_PTR(TD_ERR_OOM);
+
+    td_op_t* left_node  = td_const_table(g, left_tbl);
+    td_op_t* right_node = td_const_table(g, right_tbl);
+
+    td_t* tname = td_sym_str(time_sym->i64);
+    if (!tname) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+    td_op_t* time_op = td_scan(g, td_str_ptr(tname));
+    if (!time_op) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+
+    td_op_t* eq_ops[16];
+    for (uint8_t i = 0; i < n_eq; i++) {
+        if (eq_elems[i]->type != TD_ATOM_SYM) {
+            td_graph_free(g);
+            return TD_ERR_PTR(TD_ERR_TYPE);
+        }
+        td_t* nm = td_sym_str(eq_elems[i]->i64);
+        if (!nm) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+        eq_ops[i] = td_scan(g, td_str_ptr(nm));
+        if (!eq_ops[i]) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_DOMAIN); }
+    }
+
+    td_op_t* jn = td_asof_join(g, left_node, right_node,
+                                time_op, eq_ops, n_eq, 1);
+    if (!jn) { td_graph_free(g); return TD_ERR_PTR(TD_ERR_OOM); }
+
+    jn = td_optimize(g, jn);
+    td_t* result = td_execute(g, jn);
+    td_graph_free(g);
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -2289,6 +2399,11 @@ static void td_register_builtins(void) {
     register_vary("insert",    TD_FN_NONE, ray_insert);
     register_vary("upsert",    TD_FN_NONE, ray_upsert);
     register_binary("xbar",    TD_FN_ATOMIC, ray_xbar);
+
+    /* Join operations */
+    register_vary("left-join",   TD_FN_NONE, ray_left_join);
+    register_vary("inner-join",  TD_FN_NONE, ray_inner_join);
+    register_vary("window-join", TD_FN_NONE, ray_window_join);
 }
 
 /* ══════════════════════════════════════════

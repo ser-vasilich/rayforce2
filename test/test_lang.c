@@ -963,6 +963,78 @@ static MunitResult test_eval_upsert(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: left join ---- */
+static MunitResult test_eval_left_join(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t1 (table ['id 'name] (list [1 2 3] [10 20 30]))) "
+        "(set t2 (table ['id 'val] (list [1 3 4] [100 300 400]))) "
+        "(left-join t1 t2 ['id]))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* All 3 left rows kept */
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    /* Should have columns: id, name, val */
+    int64_t val_id = td_sym_intern("val", 3);
+    td_t* val_col = td_table_get_col(result, val_id);
+    munit_assert_ptr_not_null(val_col);
+    int64_t* val_data = (int64_t*)td_data(val_col);
+    munit_assert_int(val_data[0], ==, 100);  /* id=1 matched */
+    munit_assert_int(val_data[2], ==, 300);  /* id=3 matched */
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: inner join ---- */
+static MunitResult test_eval_inner_join(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t1 (table ['id 'name] (list [1 2 3] [10 20 30]))) "
+        "(set t2 (table ['id 'val] (list [1 3 4] [100 300 400]))) "
+        "(inner-join t1 t2 ['id]))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* Only matching rows: id=1 and id=3 */
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    int64_t val_id = td_sym_intern("val", 3);
+    td_t* val_col = td_table_get_col(result, val_id);
+    munit_assert_ptr_not_null(val_col);
+    int64_t* val_data = (int64_t*)td_data(val_col);
+    munit_assert_int(val_data[0], ==, 100);
+    munit_assert_int(val_data[1], ==, 300);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: window join (ASOF) ---- */
+static MunitResult test_eval_window_join(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* ASOF join: for each left row, find closest right row with ts <= left.ts
+     * within same sym partition */
+    td_t* result = td_eval_str(
+        "(do (set trades (table ['sym 'ts 'price] "
+        "(list [1 1] [100 200] [10 20]))) "
+        "(set quotes (table ['sym 'ts 'bid] "
+        "(list [1 1 1] [50 150 250] [5 15 25]))) "
+        "(window-join trades quotes ['sym] 'ts))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    /* 2 left rows, each matched to closest quote */
+    munit_assert_int(td_table_nrows(result), ==, 2);
+    /* bid column from right: ts=100→bid=5 (closest ts=50), ts=200→bid=15 (closest ts=150) */
+    int64_t bid_id = td_sym_intern("bid", 3);
+    td_t* bid_col = td_table_get_col(result, bid_id);
+    munit_assert_ptr_not_null(bid_col);
+    int64_t* bid_data = (int64_t*)td_data(bid_col);
+    munit_assert_int(bid_data[0], ==, 5);
+    munit_assert_int(bid_data[1], ==, 15);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -1032,6 +1104,9 @@ static MunitTest lang_tests[] = {
     { "/eval/update",          test_eval_update,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/insert",          test_eval_insert,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/upsert",          test_eval_upsert,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/left_join",       test_eval_left_join,       lang_setup, lang_teardown, 0, NULL },
+    { "/eval/inner_join",      test_eval_inner_join,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/window_join",     test_eval_window_join,     lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
