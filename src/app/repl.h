@@ -3,9 +3,11 @@
 
 #include <teide/td.h>
 
+typedef struct td_term td_term_t;
+
 typedef struct td_repl {
-    td_t*  _block;
-    void*  term;    /* td_term_t* — NULL if piped/non-tty */
+    td_t*        _block;
+    td_term_t*   term;    /* NULL if piped/non-tty */
     bool   timeit;  /* :timeit toggle — print expression timing */
 } td_repl_t;
 

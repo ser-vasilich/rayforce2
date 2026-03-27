@@ -33,14 +33,6 @@
 #define KEYCODE_CTRL_R    0x12
 #define KEYCODE_CTRL_U    0x15
 #define KEYCODE_CTRL_W    0x17
-#define KEYCODE_LPAREN    '('
-#define KEYCODE_RPAREN    ')'
-#define KEYCODE_LCURLY    '{'
-#define KEYCODE_RCURLY    '}'
-#define KEYCODE_SQUOTE    '\''
-#define KEYCODE_DQUOTE    '"'
-#define KEYCODE_LBRACKET  '['
-#define KEYCODE_RBRACKET  ']'
 
 #define TERM_BUF_SIZE 4096
 #define HIST_DEFAULT_CAP 256
@@ -126,7 +118,7 @@ void   td_term_prompt(td_term_t* term);
 void    td_hist_create(td_hist_t* hist);
 void    td_hist_destroy(td_hist_t* hist);
 void    td_hist_add(td_hist_t* hist, const char* buf, int32_t len);
-int32_t td_hist_prev(td_hist_t* hist, char* buf);
+int32_t td_hist_prev(td_hist_t* hist, char* buf, int32_t buf_len);
 int32_t td_hist_next(td_hist_t* hist, char* buf);
 void    td_hist_load(td_hist_t* hist, const char* path);
 void    td_hist_save(td_hist_t* hist, const char* path);

@@ -18,6 +18,10 @@
 #include <sys/stat.h>
 #endif
 
+/* Recover td_t* block pointer from a td_data() result pointer.
+ * td_data() returns bytes immediately after the 32-byte td_t header. */
+#define TD_BLOCK_FROM_DATA(ptr) ((td_t*)((char*)(ptr) - sizeof(td_t)))
+
 /* ===== Signal handling ===== */
 
 static volatile sig_atomic_t g_interrupted = 0;
@@ -228,7 +232,7 @@ int64_t td_term_getc(td_term_t* term) {
     DWORD n;
     if (!ReadFile(term->h_stdin, &c, 1, &n, NULL))
         return -1;
-    term->input[term->input_len++ % 8] = c;
+    term->input[0] = c;
     return (int64_t)n;
 }
 
@@ -268,8 +272,7 @@ void td_term_destroy(td_term_t* term) {
 }
 
 int64_t td_term_getc(td_term_t* term) {
-    int64_t sz = (int64_t)read(STDIN_FILENO,
-                               term->input + (term->input_len++ % 8), 1);
+    int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
     return sz;
 }
 
@@ -280,7 +283,12 @@ int64_t td_term_getc(td_term_t* term) {
 void td_hist_create(td_hist_t* hist) {
     hist->capacity = HIST_DEFAULT_CAP;
     td_t* block = td_alloc((int64_t)(hist->capacity * (int64_t)sizeof(char*)));
-    hist->entries = (char**)td_data(block);
+    if (!block) {
+        hist->entries = NULL;
+        hist->capacity = 0;
+    } else {
+        hist->entries = (char**)td_data(block);
+    }
     hist->count = 0;
     hist->index = 0;
     hist->curr_saved = 0;
@@ -290,10 +298,10 @@ void td_hist_create(td_hist_t* hist) {
 void td_hist_destroy(td_hist_t* hist) {
     if (!hist->entries) return;
     for (int32_t i = 0; i < hist->count; i++) {
-        td_t* block = (td_t*)((char*)hist->entries[i] - 32);
+        td_t* block = TD_BLOCK_FROM_DATA(hist->entries[i]);
         td_free(block);
     }
-    td_t* block = (td_t*)((char*)hist->entries - 32);
+    td_t* block = TD_BLOCK_FROM_DATA(hist->entries);
     td_free(block);
     hist->entries = NULL;
     hist->count = 0;
@@ -311,15 +319,17 @@ void td_hist_add(td_hist_t* hist, const char* buf, int32_t len) {
     if (hist->count >= hist->capacity) {
         int32_t new_cap = hist->capacity * 2;
         td_t* new_block = td_alloc((int64_t)(new_cap * (int64_t)sizeof(char*)));
+        if (!new_block) goto reset;
         char** new_entries = (char**)td_data(new_block);
         memcpy(new_entries, hist->entries, (size_t)(hist->count) * sizeof(char*));
-        td_t* old_block = (td_t*)((char*)hist->entries - 32);
+        td_t* old_block = TD_BLOCK_FROM_DATA(hist->entries);
         td_free(old_block);
         hist->entries = new_entries;
         hist->capacity = new_cap;
     }
     /* Allocate and copy the entry */
     td_t* entry_block = td_alloc((int64_t)(len + 1));
+    if (!entry_block) goto reset;
     char* entry = (char*)td_data(entry_block);
     memcpy(entry, buf, (size_t)len);
     entry[len] = '\0';
@@ -330,16 +340,19 @@ reset:
     hist->curr_saved = 0;
 }
 
-int32_t td_hist_prev(td_hist_t* hist, char* buf) {
+int32_t td_hist_prev(td_hist_t* hist, char* buf, int32_t buf_len) {
     if (hist->count == 0 || hist->index <= 0) return -1;
     /* Save current input on first navigation */
     if (!hist->curr_saved) {
+        if (buf_len > TERM_BUF_SIZE - 1) buf_len = TERM_BUF_SIZE - 1;
+        memcpy(hist->curr, buf, (size_t)buf_len);
+        hist->curr_len = buf_len;
         hist->curr_saved = 1;
-        /* caller's buf is the term buf — copy it */
     }
     hist->index--;
     const char* entry = hist->entries[hist->index];
     int32_t len = (int32_t)strlen(entry);
+    if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
     memcpy(buf, entry, (size_t)len);
     return len;
 }
@@ -358,6 +371,7 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
     }
     const char* entry = hist->entries[hist->index];
     int32_t len = (int32_t)strlen(entry);
+    if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
     memcpy(buf, entry, (size_t)len);
     return len;
 }
@@ -462,13 +476,13 @@ void td_hist_save(td_hist_t* hist, const char* path) {
     for (int32_t i = start; i < hist->count; i++) {
         const char* entry = hist->entries[i];
         int32_t len = (int32_t)strlen(entry);
-        write(fd, entry, (size_t)len);
+        (void)write(fd, entry, (size_t)len);
         if (i < hist->count - 1) {
-            write(fd, "\0", 1);
+            (void)write(fd, "\0", 1);
         }
     }
     /* Write trailing null so load knows where last entry ends */
-    write(fd, "\0", 1);
+    (void)write(fd, "\0", 1);
 
     close(fd);
 }
@@ -951,7 +965,7 @@ void td_term_popup_show(td_term_t* term) {
      * then down one line, then to start */
     int32_t total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
     int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? term->ghost_len : 0;
+                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
     total_width += ghost_vis;
     int32_t content_rows = 1;
     if (term->term_width > 0)
@@ -1029,7 +1043,7 @@ void td_term_popup_hide(td_term_t* term) {
     /* Move to end of content area */
     int32_t total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
     int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? term->ghost_len : 0;
+                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
     total_width += ghost_vis;
     int32_t content_rows = 1;
     if (term->term_width > 0)
@@ -1092,8 +1106,7 @@ int32_t td_term_count_unmatched(td_term_t* term) {
 #define PROMPT_STR "teide> "
 #define PROMPT_LEN 7
 #define CONT_PROMPT_STR "  \xc2\xb7\xc2\xb7\xc2\xb7 "  /* "  ··· " in UTF-8 */
-#define CONT_PROMPT_LEN 8  /* 2 spaces + 3x2-byte dots + 1 space = 8 bytes */
-#define CONT_PROMPT_VISUAL 8  /* 2 + 3*1 + 1 space + 2 trailing = visual width matches */
+#define CONT_PROMPT_LEN 9  /* 2 spaces + 3x2-byte dots + 1 space = 9 bytes */
 
 void td_term_prompt(td_term_t* term) {
     write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
@@ -1178,7 +1191,7 @@ void td_term_redraw(td_term_t* term) {
 
     /* Track rows used — include ghost text width for row calculation */
     int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? term->ghost_len : 0;
+                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
     total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len) + ghost_vis;
     if (term->term_width > 0) {
         term->last_total_rows = (total_width + term->term_width - 1) / term->term_width;
@@ -1230,7 +1243,7 @@ static void td_term_search_redraw(td_term_t* term) {
 
         /* Find match position within entry */
         int32_t match_pos = -1;
-        if (term->search_len > 0) {
+        if (term->search_len > 0 && elen >= term->search_len) {
             for (int32_t j = 0; j <= elen - term->search_len; j++) {
                 if (memcmp(entry + j, term->search_buf, (size_t)term->search_len) == 0) {
                     match_pos = j;
@@ -1288,7 +1301,7 @@ td_t* td_term_read(td_term_t* term) {
         int64_t sz = td_term_getc(term);
         if (sz <= 0) return NULL;
 
-        char key = term->input[0];
+        int key = (unsigned char)term->input[0];
 
         if (key == KEYCODE_ESCAPE) {
             /* Read escape sequence */
@@ -1316,7 +1329,16 @@ td_t* td_term_read(td_term_t* term) {
                             }
                         }
                         continue;
-                    default: continue;
+                    default:
+                        /* Consume remaining bytes of unknown CSI sequence */
+                        { char discard;
+                          if (!((seq[1] >= 0x40 && seq[1] <= 0x7E))) {
+                              while (read(STDIN_FILENO, &discard, 1) == 1) {
+                                  if (discard >= 0x40 && discard <= 0x7E) break;
+                              }
+                          }
+                        }
+                        continue;
                 }
             } else if (seq[0] == 'O') {
                 if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
@@ -1389,12 +1411,7 @@ td_t* td_term_read(td_term_t* term) {
 
         /* Arrow keys are encoded as negative to distinguish from printable chars */
         if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
-            /* Save current input before first navigation */
-            if (!term->hist.curr_saved) {
-                memcpy(term->hist.curr, term->buf, (size_t)term->buf_len);
-                term->hist.curr_len = term->buf_len;
-            }
-            int32_t len = td_hist_prev(&term->hist, term->buf);
+            int32_t len = td_hist_prev(&term->hist, term->buf, term->buf_len);
             if (len >= 0) {
                 term->buf_len = len;
                 term->buf_pos = len;
@@ -1551,16 +1568,10 @@ td_t* td_term_read(td_term_t* term) {
             if (term->buf_pos > 0) {
                 int32_t end = term->buf_pos;
                 /* Skip non-alphanum */
-                while (term->buf_pos > 0 && !((term->buf[term->buf_pos - 1] >= 'a' && term->buf[term->buf_pos - 1] <= 'z') ||
-                       (term->buf[term->buf_pos - 1] >= 'A' && term->buf[term->buf_pos - 1] <= 'Z') ||
-                       (term->buf[term->buf_pos - 1] >= '0' && term->buf[term->buf_pos - 1] <= '9') ||
-                       term->buf[term->buf_pos - 1] == '_' || term->buf[term->buf_pos - 1] == '-'))
+                while (term->buf_pos > 0 && !is_alphanum(term->buf[term->buf_pos - 1]))
                     term->buf_pos--;
                 /* Skip alphanum */
-                while (term->buf_pos > 0 && ((term->buf[term->buf_pos - 1] >= 'a' && term->buf[term->buf_pos - 1] <= 'z') ||
-                       (term->buf[term->buf_pos - 1] >= 'A' && term->buf[term->buf_pos - 1] <= 'Z') ||
-                       (term->buf[term->buf_pos - 1] >= '0' && term->buf[term->buf_pos - 1] <= '9') ||
-                       term->buf[term->buf_pos - 1] == '_' || term->buf[term->buf_pos - 1] == '-'))
+                while (term->buf_pos > 0 && is_alphanum(term->buf[term->buf_pos - 1]))
                     term->buf_pos--;
                 memmove(term->buf + term->buf_pos,
                         term->buf + end,
@@ -1586,13 +1597,14 @@ td_t* td_term_read(td_term_t* term) {
                     break;
                 }
 
-                char skey = term->input[0];
+                int skey = (unsigned char)term->input[0];
 
                 if (skey == KEYCODE_RETURN) {
                     /* Accept match into buffer */
                     if (term->search_match_idx >= 0) {
                         const char* entry = term->hist.entries[term->search_match_idx];
                         int32_t len = (int32_t)strlen(entry);
+                        if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
                         memcpy(term->buf, entry, (size_t)len);
                         term->buf_len = len;
                         term->buf_pos = len;

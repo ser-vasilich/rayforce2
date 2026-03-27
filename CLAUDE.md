@@ -88,8 +88,10 @@ src/io/csv.{h,c}           CSV loader — mmap, parallel parse, null handling, s
 src/lang/parse.{h,c}       Rayfall lexer (ASCII dispatch table) and recursive descent parser
 src/lang/eval.{h,c}        Tree-walking evaluator, bytecode VM (computed goto), all builtins
 src/lang/compile.c          Bytecode compiler (AST → opcodes for lambda functions)
-src/lang/env.{h,c}         Global environment and local scope stack for variable binding
-src/lang/repl.c             Rayfall REPL binary (interactive + file mode)
+src/lang/env.{h,c}         Global environment and local scope stack for variable binding; prefix lookup for completion/highlighting
+src/lang/repl.c             Rayfall REPL binary — main() entry point, delegates to app/repl module
+src/app/term.{h,c}         Terminal layer — raw mode, line editing, history, syntax highlighting, bracket matching, autocomplete, multi-line input
+src/app/repl.{h,c}         REPL module — eval loop, pretty-print (tables/vectors/errors), REPL commands (:help, :timeit, :quit, :env, :clear), signal handling
 test/test_lang.c            Rayfall language tests (lexer, parser, eval, VM, tables, joins)
 bench/bench_csv*.c          CSV loading benchmarks (build with -DTEIDE_BENCH=ON)
 ```

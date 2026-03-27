@@ -93,11 +93,6 @@ static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
     }
 }
 
-/* Print an atom (scalar) value */
-static void print_atom(FILE* fp, td_t* val) {
-    td_lang_print(fp, val);
-}
-
 /* Print a vector in [1 2 3 ...] format */
 static void print_vector(FILE* fp, td_t* val) {
     int64_t len = td_len(val);
@@ -239,7 +234,7 @@ static void repl_print_result(FILE* fp, td_t* val, bool use_color) {
         break;
     default:
         if (td_is_atom(val)) {
-            print_atom(fp, val);
+            td_lang_print(fp, val);
             fprintf(fp, "\n");
         } else if (td_is_vec(val)) {
             print_typed_vector(fp, val);
@@ -262,7 +257,7 @@ td_repl_t* td_repl_create(void) {
     if (isatty(STDIN_FD)) {
         repl->term = td_term_create();
         if (repl->term)
-            td_term_install_signals((td_term_t*)repl->term);
+            td_term_install_signals(repl->term);
     }
     return repl;
 }
@@ -270,7 +265,7 @@ td_repl_t* td_repl_create(void) {
 void td_repl_destroy(td_repl_t* repl) {
     if (!repl) return;
     if (repl->term) {
-        td_term_destroy((td_term_t*)repl->term);
+        td_term_destroy(repl->term);
     }
     td_free(repl->_block);
 }
@@ -344,13 +339,6 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
         return true;
     }
 
-    if ((clen == 1 && cmd[0] == 'q') ||
-        (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
-        /* Signal exit by setting term to a sentinel — caller checks */
-        repl->timeit = false; /* reuse: signal quit via special return */
-        return false; /* let caller handle :q as exit */
-    }
-
     if ((clen == 1 && cmd[0] == 't') ||
         (clen == 6 && memcmp(cmd, "timeit", 6) == 0)) {
         repl->timeit = !repl->timeit;
@@ -383,7 +371,7 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
 }
 
 static void run_interactive(td_repl_t* repl) {
-    td_term_t* term = (td_term_t*)repl->term;
+    td_term_t* term = repl->term;
 
     for (;;) {
         td_t* line = td_term_read(term);
