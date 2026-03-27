@@ -278,6 +278,13 @@ int64_t td_term_getc(td_term_t* term) {
 
 #endif /* _WIN32 */
 
+/* Read a single byte via the platform-abstracted td_term_getc.
+ * Returns the byte (0..255) on success, -1 on failure. */
+static int term_read_byte(td_term_t* term) {
+    if (td_term_getc(term) <= 0) return -1;
+    return (unsigned char)term->input[0];
+}
+
 /* ===== History ===== */
 
 void td_hist_create(td_hist_t* hist) {
@@ -1202,7 +1209,12 @@ void td_term_redraw(td_term_t* term) {
             term->last_total_rows = 1;
     }
 
-    /* Position cursor at buf_pos */
+    /* Position cursor at buf_pos.
+     * After writing hlbuf the physical cursor sits at prompt + buf + ghost.
+     * td_term_goto_position assumes cursor is at prompt + visual_width(buf, from_pos),
+     * so we must first move back past any ghost text. */
+    if (ghost_vis > 0)
+        td_cursor_move_left(ghost_vis);
     td_term_goto_position(term, term->buf_len, term->buf_pos);
 
     /* Redraw popup if visible */
@@ -1299,6 +1311,7 @@ td_t* td_term_read(td_term_t* term) {
     term->buf_len = 0;
     term->buf_pos = 0;
     term->multiline_len = 0;
+    term->last_total_rows = 1;
 
     for (;;) {
         int64_t sz = td_term_getc(term);
@@ -1307,12 +1320,13 @@ td_t* td_term_read(td_term_t* term) {
         int key = (unsigned char)term->input[0];
 
         if (key == KEYCODE_ESCAPE) {
-            /* Read escape sequence */
-            char seq[3];
-            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
-            if (seq[0] == '[') {
-                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
-                switch (seq[1]) {
+            /* Read escape sequence via platform-abstracted helper */
+            int seq0 = term_read_byte(term);
+            if (seq0 < 0) continue;
+            if (seq0 == '[') {
+                int seq1 = term_read_byte(term);
+                if (seq1 < 0) continue;
+                switch (seq1) {
                     case 'A': key = -KEYCODE_UP;    goto handle; /* Up */
                     case 'B': key = -KEYCODE_DOWN;  goto handle; /* Down */
                     case 'C': key = -KEYCODE_RIGHT; goto handle; /* Right */
@@ -1320,7 +1334,8 @@ td_t* td_term_read(td_term_t* term) {
                     case 'H': key = -KEYCODE_HOME;  goto handle; /* Home */
                     case 'F': key = -KEYCODE_END;   goto handle; /* End */
                     case '3': /* Delete key: \033[3~ */
-                        if (read(STDIN_FILENO, &seq[2], 1) == 1 && seq[2] == '~') {
+                        { int seq2 = term_read_byte(term);
+                          if (seq2 == '~') {
                             if (term->buf_pos < term->buf_len) {
                                 int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
                                 int32_t bytes = next - term->buf_pos;
@@ -1330,23 +1345,23 @@ td_t* td_term_read(td_term_t* term) {
                                 term->buf_len -= bytes;
                                 td_term_redraw(term);
                             }
+                          }
                         }
                         continue;
                     default:
                         /* Consume remaining bytes of unknown CSI sequence (max 8) */
-                        { char discard;
-                          if (!((seq[1] >= 0x40 && seq[1] <= 0x7E))) {
-                              for (int csi_i = 0; csi_i < 8; csi_i++) {
-                                  if (read(STDIN_FILENO, &discard, 1) != 1) break;
-                                  if (discard >= 0x40 && discard <= 0x7E) break;
-                              }
-                          }
+                        if (!(seq1 >= 0x40 && seq1 <= 0x7E)) {
+                            for (int csi_i = 0; csi_i < 8; csi_i++) {
+                                int d = term_read_byte(term);
+                                if (d < 0 || (d >= 0x40 && d <= 0x7E)) break;
+                            }
                         }
                         continue;
                 }
-            } else if (seq[0] == 'O') {
-                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
-                switch (seq[1]) {
+            } else if (seq0 == 'O') {
+                int seq1 = term_read_byte(term);
+                if (seq1 < 0) continue;
+                switch (seq1) {
                     case 'H': key = -KEYCODE_HOME; goto handle;
                     case 'F': key = -KEYCODE_END;  goto handle;
                     default: continue;

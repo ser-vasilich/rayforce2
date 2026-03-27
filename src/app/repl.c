@@ -12,12 +12,27 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <windows.h>
 #define isatty _isatty
 #define STDIN_FD 0
 #else
 #include <unistd.h>
 #define STDIN_FD STDIN_FILENO
 #endif
+
+/* Cross-platform monotonic time in nanoseconds */
+static int64_t time_now_ns(void) {
+#if defined(_WIN32)
+    LARGE_INTEGER freq, cnt;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&cnt);
+    return (int64_t)((double)cnt.QuadPart / (double)freq.QuadPart * 1e9);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#endif
+}
 
 #define PIPE_BUF_SIZE 4096
 #define MAX_PRINT_ROWS 40
@@ -271,13 +286,13 @@ void td_repl_destroy(td_repl_t* repl) {
 }
 
 static void eval_and_print(const char* input, bool use_color, bool timeit) {
-    struct timespec t0, t1;
-    if (timeit) clock_gettime(CLOCK_MONOTONIC, &t0);
+    int64_t t0 = 0, t1 = 0;
+    if (timeit) t0 = time_now_ns();
 
     td_term_clear_interrupt();
     td_t* result = td_eval_str(input);
 
-    if (timeit) clock_gettime(CLOCK_MONOTONIC, &t1);
+    if (timeit) t1 = time_now_ns();
 
     if (td_term_interrupted()) {
         td_term_clear_interrupt();
@@ -296,8 +311,7 @@ static void eval_and_print(const char* input, bool use_color, bool timeit) {
     }
 
     if (timeit) {
-        double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
-                   + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+        double ms = (double)(t1 - t0) / 1e6;
         if (use_color) fprintf(stdout, "\033[90m");
         fprintf(stdout, "%.3f ms\n", ms);
         if (use_color) fprintf(stdout, "\033[0m");
