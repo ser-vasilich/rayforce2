@@ -287,6 +287,27 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
     return len;
 }
 
+/* ===== History search ===== */
+
+int32_t td_hist_search(td_hist_t* hist, const char* needle, int32_t needle_len,
+                       int32_t start_idx) {
+    if (needle_len <= 0 || hist->count == 0) return -1;
+    if (start_idx < 0) return -1;
+    if (start_idx >= hist->count) start_idx = hist->count - 1;
+
+    for (int32_t i = start_idx; i >= 0; i--) {
+        const char* entry = hist->entries[i];
+        int32_t elen = (int32_t)strlen(entry);
+        if (elen < needle_len) continue;
+        /* Substring search */
+        for (int32_t j = 0; j <= elen - needle_len; j++) {
+            if (memcmp(entry + j, needle, (size_t)needle_len) == 0)
+                return i;
+        }
+    }
+    return -1;
+}
+
 /* ===== History persistence ===== */
 
 static void hist_build_path(char* out, int32_t out_size) {
@@ -440,6 +461,84 @@ void td_term_redraw(td_term_t* term) {
 
     /* Position cursor at buf_pos */
     td_term_goto_position(term, term->buf_len, term->buf_pos);
+
+    td_cursor_show();
+    fflush(stdout);
+}
+
+/* ===== Search mode redraw ===== */
+
+#define SEARCH_PROMPT     "(search) `"
+#define SEARCH_PROMPT_LEN 10
+#define SEARCH_HIGHLIGHT  "\033[7m"
+#define SEARCH_RESET      "\033[0m"
+
+static void td_term_search_redraw(td_term_t* term) {
+    td_cursor_hide();
+
+    /* Move to start */
+    printf("\r");
+    if (term->last_total_rows > 1) {
+        for (int32_t i = 1; i < term->last_total_rows; i++) {
+            td_cursor_move_up(1);
+            printf("\r");
+        }
+    }
+    printf("\033[J");
+
+    /* Write search prompt: (search) `query`: matched_entry */
+    write(STDOUT_FILENO, SEARCH_PROMPT, SEARCH_PROMPT_LEN);
+    if (term->search_len > 0)
+        write(STDOUT_FILENO, term->search_buf, (size_t)term->search_len);
+    write(STDOUT_FILENO, "': ", 3);
+
+    /* Show matching entry with highlighted match substring */
+    if (term->search_match_idx >= 0) {
+        const char* entry = term->hist.entries[term->search_match_idx];
+        int32_t elen = (int32_t)strlen(entry);
+
+        /* Find match position within entry */
+        int32_t match_pos = -1;
+        if (term->search_len > 0) {
+            for (int32_t j = 0; j <= elen - term->search_len; j++) {
+                if (memcmp(entry + j, term->search_buf, (size_t)term->search_len) == 0) {
+                    match_pos = j;
+                    break;
+                }
+            }
+        }
+
+        if (match_pos >= 0) {
+            /* Before match */
+            if (match_pos > 0)
+                write(STDOUT_FILENO, entry, (size_t)match_pos);
+            /* Highlighted match */
+            write(STDOUT_FILENO, SEARCH_HIGHLIGHT, 4);
+            write(STDOUT_FILENO, entry + match_pos, (size_t)term->search_len);
+            write(STDOUT_FILENO, SEARCH_RESET, 4);
+            /* After match */
+            int32_t after = match_pos + term->search_len;
+            if (after < elen)
+                write(STDOUT_FILENO, entry + after, (size_t)(elen - after));
+        } else {
+            write(STDOUT_FILENO, entry, (size_t)elen);
+        }
+    }
+
+    /* Update row tracking */
+    int32_t total_vis = SEARCH_PROMPT_LEN + term->search_len + 3;
+    if (term->search_match_idx >= 0)
+        total_vis += (int32_t)strlen(term->hist.entries[term->search_match_idx]);
+    if (term->term_width > 0) {
+        term->last_total_rows = (total_vis + term->term_width - 1) / term->term_width;
+        if (term->last_total_rows == 0) term->last_total_rows = 1;
+    }
+
+    /* Position cursor right after the search query closing tick */
+    int32_t cursor_col = SEARCH_PROMPT_LEN + term->search_len;
+    int32_t end_col = total_vis;
+    int32_t diff = end_col - cursor_col;
+    if (diff > 0) td_cursor_move_left(diff);
 
     td_cursor_show();
     fflush(stdout);
@@ -645,6 +744,108 @@ td_t* td_term_read(td_term_t* term) {
                         (size_t)(term->buf_len - end));
                 term->buf_len -= (end - term->buf_pos);
                 td_term_redraw(term);
+            }
+            continue;
+        }
+
+        case KEYCODE_CTRL_R: {
+            /* Enter reverse incremental search mode */
+            term->search_mode = 1;
+            term->search_len = 0;
+            term->search_match_idx = -1;
+            td_term_search_redraw(term);
+
+            for (;;) {
+                int64_t ssz = td_term_getc(term);
+                if (ssz <= 0) {
+                    term->search_mode = 0;
+                    td_term_redraw(term);
+                    break;
+                }
+
+                char skey = term->input[0];
+
+                if (skey == KEYCODE_RETURN) {
+                    /* Accept match into buffer */
+                    if (term->search_match_idx >= 0) {
+                        const char* entry = term->hist.entries[term->search_match_idx];
+                        int32_t len = (int32_t)strlen(entry);
+                        memcpy(term->buf, entry, (size_t)len);
+                        term->buf_len = len;
+                        term->buf_pos = len;
+                    }
+                    term->search_mode = 0;
+                    putchar('\n');
+                    fflush(stdout);
+                    term->buf[term->buf_len] = '\0';
+                    td_hist_add(&term->hist, term->buf, term->buf_len);
+                    if (term->buf_len == 0) return td_str("", 0);
+                    return td_str(term->buf, (size_t)term->buf_len);
+                }
+
+                if (skey == KEYCODE_ESCAPE) {
+                    /* Read and discard potential escape sequence */
+                    /* Use non-blocking check: set a short timeout */
+                    /* For simplicity, just cancel search */
+                    term->search_mode = 0;
+                    td_term_redraw(term);
+                    break;
+                }
+
+                if (skey == KEYCODE_CTRL_C) {
+                    /* Cancel search, clear buffer */
+                    term->search_mode = 0;
+                    term->buf_len = 0;
+                    term->buf_pos = 0;
+                    write(STDOUT_FILENO, "^C\n", 3);
+                    td_term_prompt(term);
+                    fflush(stdout);
+                    break;
+                }
+
+                if (skey == KEYCODE_CTRL_R) {
+                    /* Search further back */
+                    if (term->search_match_idx > 0 && term->search_len > 0) {
+                        int32_t idx = td_hist_search(&term->hist,
+                                                     term->search_buf,
+                                                     term->search_len,
+                                                     term->search_match_idx - 1);
+                        if (idx >= 0)
+                            term->search_match_idx = idx;
+                    }
+                    td_term_search_redraw(term);
+                    continue;
+                }
+
+                if (skey == KEYCODE_BACKSPACE || skey == KEYCODE_DELETE) {
+                    /* Remove last char from search query */
+                    if (term->search_len > 0) {
+                        term->search_len--;
+                        if (term->search_len > 0) {
+                            term->search_match_idx = td_hist_search(
+                                &term->hist, term->search_buf,
+                                term->search_len, term->hist.count - 1);
+                        } else {
+                            term->search_match_idx = -1;
+                        }
+                    }
+                    td_term_search_redraw(term);
+                    continue;
+                }
+
+                /* Printable character — append to search and search */
+                if ((unsigned char)skey >= 0x20 && term->search_len < 255) {
+                    term->search_buf[term->search_len++] = skey;
+                    /* Search from current match position or from end */
+                    int32_t start = (term->search_match_idx >= 0)
+                                    ? term->search_match_idx
+                                    : term->hist.count - 1;
+                    term->search_match_idx = td_hist_search(
+                        &term->hist, term->search_buf,
+                        term->search_len, start);
+                    td_term_search_redraw(term);
+                    continue;
+                }
             }
             continue;
         }

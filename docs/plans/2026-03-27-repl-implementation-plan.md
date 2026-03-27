@@ -147,16 +147,16 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Modify `src/app/term.c`
 
-- [ ] Implement search mode state in `td_term_t`: `int32_t search_mode`, `char search_buf[256]`, `int32_t search_len`
-- [ ] Ctrl-R enters search mode:
+- [x] Implement search mode state in `td_term_t`: `int32_t search_mode`, `char search_buf[256]`, `int32_t search_len`
+- [x] Ctrl-R enters search mode:
   - Prompt changes to `(search) `
   - Each keystroke appends to `search_buf` and scans history for substring match
   - Display matching entry with highlighted match
   - Enter accepts match into buffer, exits search mode
   - Escape cancels search
   - Ctrl-R again goes to next match (further back)
-- [ ] Smoke test: Ctrl-R, type partial text, matching history entry appears
-- [ ] Commit: `feat(repl): reverse incremental history search (Ctrl-R)`
+- [x] Smoke test: Ctrl-R, type partial text, matching history entry appears
+- [x] Commit: `feat(repl): reverse incremental history search (Ctrl-R)`
 
 ---
 

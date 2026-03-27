@@ -77,6 +77,10 @@ typedef struct td_term {
     int32_t  last_total_rows;
     int32_t  last_cursor_row;
     td_hist_t hist;
+    int32_t  search_mode;
+    char     search_buf[256];
+    int32_t  search_len;
+    int32_t  search_match_idx;
 } td_term_t;
 
 td_term_t* td_term_create(void);
@@ -108,6 +112,8 @@ int32_t td_hist_prev(td_hist_t* hist, char* buf);
 int32_t td_hist_next(td_hist_t* hist, char* buf);
 void    td_hist_load(td_hist_t* hist, const char* path);
 void    td_hist_save(td_hist_t* hist, const char* path);
+int32_t td_hist_search(td_hist_t* hist, const char* needle, int32_t needle_len,
+                       int32_t start_idx);
 
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
