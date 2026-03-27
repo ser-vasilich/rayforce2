@@ -2,8 +2,9 @@
 #include <teide/td.h>
 #include <string.h>
 
-/* Forward declaration for env functions */
+/* Forward declarations for lang modules */
 #include "lang/env.h"
+#include "lang/parse.h"
 
 /* ---- Setup / Teardown ---- */
 
@@ -63,11 +64,87 @@ static MunitResult test_fn_vary(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: lex integer ---- */
+static MunitResult test_lex_i64(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("42");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 42);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: lex negative integer ---- */
+static MunitResult test_lex_neg_i64(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("-7");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, -7);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: lex float ---- */
+static MunitResult test_lex_f64(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("3.14");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_F64);
+    munit_assert_double(result->f64, ==, 3.14);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: lex string ---- */
+static MunitResult test_lex_string(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("\"hello\"");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_STR);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: lex symbol ---- */
+static MunitResult test_lex_symbol(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_parse("'AAPL");
+    munit_assert_ptr_not_null(result);
+    munit_assert_int(result->type, ==, TD_ATOM_SYM);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: lex true/false ---- */
+static MunitResult test_lex_bool(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* t = td_parse("true");
+    munit_assert_ptr_not_null(t);
+    munit_assert_int(t->type, ==, TD_ATOM_BOOL);
+    munit_assert_uint(t->b8, ==, 1);
+    td_release(t);
+
+    td_t* f = td_parse("false");
+    munit_assert_int(f->type, ==, TD_ATOM_BOOL);
+    munit_assert_uint(f->b8, ==, 0);
+    td_release(f);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
-    { "/fn_unary",  test_fn_unary,  lang_setup, lang_teardown, 0, NULL },
-    { "/fn_binary", test_fn_binary, lang_setup, lang_teardown, 0, NULL },
-    { "/fn_vary",   test_fn_vary,   lang_setup, lang_teardown, 0, NULL },
+    { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
+    { "/fn_binary",  test_fn_binary,  lang_setup, lang_teardown, 0, NULL },
+    { "/fn_vary",    test_fn_vary,    lang_setup, lang_teardown, 0, NULL },
+    { "/lex/i64",    test_lex_i64,    lang_setup, lang_teardown, 0, NULL },
+    { "/lex/neg_i64",test_lex_neg_i64,lang_setup, lang_teardown, 0, NULL },
+    { "/lex/f64",    test_lex_f64,    lang_setup, lang_teardown, 0, NULL },
+    { "/lex/string", test_lex_string, lang_setup, lang_teardown, 0, NULL },
+    { "/lex/symbol", test_lex_symbol, lang_setup, lang_teardown, 0, NULL },
+    { "/lex/bool",   test_lex_bool,   lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

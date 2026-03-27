@@ -243,7 +243,8 @@ typedef enum {
     TD_ERR_IO,
     TD_ERR_SCHEMA,
     TD_ERR_CORRUPT,
-    TD_ERR_CANCEL
+    TD_ERR_CANCEL,
+    TD_ERR_PARSE
 } td_err_t;
 
 #define TD_ERR_PTR(e)   ((td_t*)(uintptr_t)(e))

@@ -313,7 +313,7 @@ git commit -m "feat(lang): function object constructors and global environment"
 
 ### Task 2.1: ASCII dispatch table and basic tokenization
 
-- [ ] Implement ASCII dispatch table and basic tokenization
+- [x] Implement ASCII dispatch table and basic tokenization
 
 **Files:**
 - Create: `src/lang/parse.h`
