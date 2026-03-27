@@ -88,6 +88,9 @@ typedef struct td_term {
     int32_t     popup_scroll;
     const char** popup_items;     /* borrowed from comp_items */
     int32_t     popup_max_visible;
+    /* Scratch buffer for null-terminated completion word copies */
+    char        comp_scratch[TERM_BUF_SIZE];
+    int32_t     comp_scratch_len;
     /* Multi-line input state */
     char        multiline_buf[TERM_BUF_SIZE];
     int32_t     multiline_len;

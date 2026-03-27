@@ -818,8 +818,8 @@ static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
         int32_t start = j;
         while (j < buf_len && is_alphanum(buf[j])) j++;
         int32_t nlen = j - start;
-        /* Intern the name and look it up in env */
-        int64_t sym = td_sym_intern(buf + start, (size_t)nlen);
+        /* Look up the name (read-only) and check env */
+        int64_t sym = td_sym_find(buf + start, (size_t)nlen);
         if (sym < 0) continue;
         td_t* val = td_env_get(sym);
         if (val && val->type == TD_TABLE) return val;
@@ -830,6 +830,7 @@ static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
 void td_term_collect_completions(td_term_t* term, const char* prefix,
                                  int32_t prefix_len) {
     term->comp_count = 0;
+    term->comp_scratch_len = 0;
     if (prefix_len <= 0) return;
 
     const char** out = term->comp_items;
@@ -874,8 +875,8 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
     }
 
     /* Source 4: history words — tokenize history entries, match prefix.
-     * We intern matching words via td_sym_intern to get stable null-terminated
-     * pointers (sym table strings live until program exit). */
+     * Matching words are copied into comp_scratch for stable null-terminated
+     * pointers (reset each completion cycle). */
     {
         td_hist_t* hist = &term->hist;
         for (int32_t hi = hist->count - 1; hi >= 0 && n < cap; hi--) {
@@ -903,14 +904,15 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
                         }
                     }
                     if (!dup) {
-                        /* Intern to get a stable null-terminated pointer */
-                        int64_t sym = td_sym_intern(entry + ws, (size_t)wlen);
-                        if (sym >= 0) {
-                            td_t* s = td_sym_str(sym);
-                            if (s) {
-                                const char* word = td_str_ptr(s);
-                                if (word) out[n++] = word;
-                            }
+                        /* Copy word into scratch buffer for a stable
+                         * null-terminated pointer (avoids polluting the
+                         * global sym table with arbitrary history words) */
+                        if (term->comp_scratch_len + wlen + 1 <= TERM_BUF_SIZE) {
+                            memcpy(term->comp_scratch + term->comp_scratch_len,
+                                   entry + ws, (size_t)wlen);
+                            term->comp_scratch[term->comp_scratch_len + wlen] = '\0';
+                            out[n++] = term->comp_scratch + term->comp_scratch_len;
+                            term->comp_scratch_len += wlen + 1;
                         }
                     }
                 }
@@ -1479,6 +1481,16 @@ td_t* td_term_read(td_term_t* term) {
                            term->buf, (size_t)term->buf_len);
                     term->multiline_len += term->buf_len;
                     term->multiline_buf[term->multiline_len++] = '\n';
+                } else {
+                    fprintf(stderr, "\ninput too long (max %d bytes)\n",
+                            TERM_BUF_SIZE - 1);
+                    fflush(stderr);
+                    term->multiline_len = 0;
+                    term->buf_len = 0;
+                    term->buf_pos = 0;
+                    td_term_prompt(term);
+                    fflush(stdout);
+                    continue;
                 }
                 term->buf_len = 0;
                 term->buf_pos = 0;
@@ -1500,11 +1512,15 @@ td_t* td_term_read(td_term_t* term) {
                 td_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
                 td_t* result = td_str(term->multiline_buf, (size_t)term->multiline_len);
                 term->multiline_len = 0;
-                return result;
+                return TD_IS_ERR(result) ? NULL : result;
             }
             td_hist_add(&term->hist, term->buf, term->buf_len);
-            if (term->buf_len == 0) return td_str("", 0);
-            return td_str(term->buf, (size_t)term->buf_len);
+            if (term->buf_len == 0) {
+                td_t* result = td_str("", 0);
+                return TD_IS_ERR(result) ? NULL : result;
+            }
+            { td_t* result = td_str(term->buf, (size_t)term->buf_len);
+              return TD_IS_ERR(result) ? NULL : result; }
         }
 
         case KEYCODE_CTRL_D: {
@@ -1600,7 +1616,8 @@ td_t* td_term_read(td_term_t* term) {
                 int skey = (unsigned char)term->input[0];
 
                 if (skey == KEYCODE_RETURN) {
-                    /* Accept match into buffer */
+                    /* Accept match into buffer, discard any partial
+                     * multiline state, then submit via normal Enter path */
                     if (term->search_match_idx >= 0) {
                         const char* entry = term->hist.entries[term->search_match_idx];
                         int32_t len = (int32_t)strlen(entry);
@@ -1610,12 +1627,9 @@ td_t* td_term_read(td_term_t* term) {
                         term->buf_pos = len;
                     }
                     term->search_mode = 0;
-                    putchar('\n');
-                    fflush(stdout);
-                    term->buf[term->buf_len] = '\0';
-                    td_hist_add(&term->hist, term->buf, term->buf_len);
-                    if (term->buf_len == 0) return td_str("", 0);
-                    return td_str(term->buf, (size_t)term->buf_len);
+                    term->multiline_len = 0;
+                    key = KEYCODE_RETURN;
+                    goto handle;
                 }
 
                 if (skey == KEYCODE_ESCAPE) {
