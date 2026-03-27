@@ -367,13 +367,13 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/repl.c`, `src/app/term.c`
 
-- [ ] Install `SIGINT` handler that sets a flag instead of terminating
-- [ ] In eval loop: check flag after `td_eval_str()`, if set → print `^C`, clear flag, show prompt
-- [ ] In `td_term_read()`: Ctrl-C clears current buffer, prints `^C\n`, shows fresh prompt
-- [ ] Ensure terminal is restored on any exit path (SIGTERM, SIGQUIT)
-- [ ] Install `atexit()` handler that calls `td_term_destroy()` to restore termios
-- [ ] Smoke test: Ctrl-C during input clears line, Ctrl-C during long eval interrupts
-- [ ] Commit: `feat(repl): signal handling for clean Ctrl-C interrupt`
+- [x] Install `SIGINT` handler that sets a flag instead of terminating
+- [x] In eval loop: check flag after `td_eval_str()`, if set → print `^C`, clear flag, show prompt
+- [x] In `td_term_read()`: Ctrl-C clears current buffer, prints `^C\n`, shows fresh prompt
+- [x] Ensure terminal is restored on any exit path (SIGTERM, SIGQUIT)
+- [x] Install `atexit()` handler that calls `td_term_destroy()` to restore termios
+- [x] Smoke test: Ctrl-C during input clears line, Ctrl-C during long eval interrupts
+- [x] Commit: `feat(repl): signal handling for clean Ctrl-C interrupt`
 
 ---
 

@@ -261,6 +261,8 @@ td_repl_t* td_repl_create(void) {
 
     if (isatty(STDIN_FD)) {
         repl->term = td_term_create();
+        if (repl->term)
+            td_term_install_signals((td_term_t*)repl->term);
     }
     return repl;
 }
@@ -277,9 +279,18 @@ static void eval_and_print(const char* input, bool use_color, bool timeit) {
     struct timespec t0, t1;
     if (timeit) clock_gettime(CLOCK_MONOTONIC, &t0);
 
+    td_term_clear_interrupt();
     td_t* result = td_eval_str(input);
 
     if (timeit) clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    if (td_term_interrupted()) {
+        td_term_clear_interrupt();
+        fprintf(stdout, "\n^C\n");
+        fflush(stdout);
+        if (result && !TD_IS_ERR(result)) td_release(result);
+        return;
+    }
 
     if (TD_IS_ERR(result)) {
         repl_print_result(stdout, result, use_color);

@@ -1,8 +1,13 @@
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "app/term.h"
 #include "lang/env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -12,6 +17,73 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #endif
+
+/* ===== Signal handling ===== */
+
+static volatile sig_atomic_t g_interrupted = 0;
+static td_term_t* g_active_term = NULL;
+
+static void signal_handler(int sig) {
+    g_interrupted = 1;
+#if defined(_WIN32)
+    if (sig == SIGTERM) {
+#else
+    if (sig == SIGTERM || sig == SIGQUIT) {
+#endif
+        /* Restore terminal and exit for fatal signals */
+        if (g_active_term) {
+#if defined(_WIN32)
+            SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
+            SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
+#else
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
+#endif
+        }
+        /* Re-raise with default handler to get correct exit status */
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
+
+static void atexit_handler(void) {
+    if (g_active_term) {
+#if defined(_WIN32)
+        SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
+        SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
+#else
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
+#endif
+        g_active_term = NULL;
+    }
+}
+
+int td_term_interrupted(void) {
+    return g_interrupted != 0;
+}
+
+void td_term_clear_interrupt(void) {
+    g_interrupted = 0;
+}
+
+void td_term_install_signals(td_term_t* term) {
+    g_active_term = term;
+    atexit(atexit_handler);
+
+#if defined(_WIN32)
+    signal(SIGINT,  signal_handler);
+    signal(SIGTERM, signal_handler);
+#else
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sigaction(SIGINT,  &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGQUIT, &sa, NULL);
+#endif
+}
 
 /* ===== Cursor helpers ===== */
 
@@ -143,6 +215,7 @@ td_term_t* td_term_create(void) {
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    if (g_active_term == term) g_active_term = NULL;
     td_hist_save(&term->hist, NULL);
     td_hist_destroy(&term->hist);
     SetConsoleMode(term->h_stdin,  term->old_stdin_mode);
@@ -187,6 +260,7 @@ td_term_t* td_term_create(void) {
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    if (g_active_term == term) g_active_term = NULL;
     td_hist_save(&term->hist, NULL);
     td_hist_destroy(&term->hist);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);

@@ -150,6 +150,13 @@ void td_term_popup_hide(td_term_t* term);
 int32_t td_term_count_unmatched(td_term_t* term);
 void    td_term_continuation_prompt(td_term_t* term);
 
+/* Signal handling — install handlers to restore terminal on exit */
+void td_term_install_signals(td_term_t* term);
+
+/* Global interrupt flag — set by SIGINT handler, checked by eval loop */
+int  td_term_interrupted(void);
+void td_term_clear_interrupt(void);
+
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
 
