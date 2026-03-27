@@ -54,8 +54,8 @@ typedef struct {
     int32_t count;
 } td_scope_frame_t;
 
-static td_scope_frame_t scope_stack[SCOPE_CAP];
-static int32_t scope_depth = 0;
+static _Thread_local td_scope_frame_t scope_stack[SCOPE_CAP];
+static _Thread_local int32_t scope_depth = 0;
 
 td_err_t td_env_init(void) {
     memset(&g_env, 0, sizeof(g_env));

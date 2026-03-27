@@ -43,7 +43,7 @@ static const char _PA[128] =
 /*  p    q    r    s    t    u    v    w    x    y    z    {    |    }    ~   DEL */
     "\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x02\x09\x02\x0a\x02\x00";
 
-#define PA(c) ((int)(unsigned char)_PA[(unsigned char)(c)])
+#define PA(c) ((unsigned char)(c) < 128 ? (int)(unsigned char)_PA[(unsigned char)(c)] : PA_ERR)
 
 /* ══════════════════════════════════════════
  * Parser state
@@ -100,20 +100,47 @@ static td_t* parse_number(td_parser_t *p) {
     return td_i64(v);
 }
 
-/* ── String parsing ── */
+/* ── String parsing with escape sequence decoding ── */
 static td_t* parse_string(td_parser_t *p) {
     p->pos++; /* skip opening " */
     const char *start = p->pos;
 
-    /* Scan for closing " (handle escapes later) */
-    while (*p->pos && *p->pos != '"') {
-        if (*p->pos == '\\' && p->pos[1]) p->pos++;
-        p->pos++;
+    /* First pass: scan for closing " and check for escapes */
+    bool has_escape = false;
+    const char *scan = p->pos;
+    while (*scan && *scan != '"') {
+        if (*scan == '\\' && scan[1]) { has_escape = true; scan++; }
+        scan++;
     }
-    size_t len = (size_t)(p->pos - start);
-    if (*p->pos == '"') p->pos++;
+    size_t raw_len = (size_t)(scan - start);
+    if (*scan == '"') scan++;
+    p->pos = (char *)scan;
 
-    return td_str(start, len);
+    if (!has_escape) return td_str(start, raw_len);
+
+    /* Decode escape sequences into a temporary buffer */
+    char buf[4096];
+    size_t out = 0;
+    const char *r = start;
+    const char *end = start + raw_len;
+    while (r < end && out < sizeof(buf) - 1) {
+        if (*r == '\\' && r + 1 < end) {
+            r++;
+            switch (*r) {
+            case 'n':  buf[out++] = '\n'; break;
+            case 't':  buf[out++] = '\t'; break;
+            case 'r':  buf[out++] = '\r'; break;
+            case '\\': buf[out++] = '\\'; break;
+            case '"':  buf[out++] = '"';  break;
+            case '0':  buf[out++] = '\0'; break;
+            default:   buf[out++] = '\\'; buf[out++] = *r; break;
+            }
+            r++;
+        } else {
+            buf[out++] = *r++;
+        }
+    }
+    return td_str(buf, out);
 }
 
 /* ── Symbol parsing: 'name ── */
@@ -291,8 +318,17 @@ td_t* td_parse(const char* source) {
     do_list->type = TD_LIST;
     do_list->len = count + 1;
     td_t** elems = (td_t**)td_data(do_list);
-    elems[0] = td_env_get(td_sym_intern("do", 2));
-    if (elems[0]) td_retain(elems[0]);
+    /* Build a name-reference atom for "do" so parsing is independent of runtime */
+    td_t* do_sym = td_alloc(0);
+    if (!do_sym) {
+        td_release(do_list);
+        for (int32_t i = 0; i < count; i++) td_release(exprs[i]);
+        return TD_ERR_PTR(TD_ERR_OOM);
+    }
+    do_sym->type = TD_ATOM_SYM;
+    do_sym->attrs = TD_ATTR_NAME;
+    do_sym->i64 = td_sym_intern("do", 2);
+    elems[0] = do_sym;
     for (int32_t i = 0; i < count; i++)
         elems[i + 1] = exprs[i];
     return do_list;

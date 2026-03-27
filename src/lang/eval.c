@@ -988,10 +988,23 @@ static td_t* ray_key(td_t* x) {
     return result;
 }
 
-/* (value dict) — placeholder for dict value extraction */
+/* (value dict) — extract values from a dict as a list */
 static td_t* ray_value(td_t* x) {
-    (void)x;
-    return TD_ERR_PTR(TD_ERR_NYI);
+    if (x->type != TD_LIST || !(x->attrs & TD_ATTR_DICT))
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t n = td_len(x);
+    int64_t nvals = n / 2;
+    td_t* result = td_alloc(nvals * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = nvals;
+    td_t** src = (td_t**)td_data(x);
+    td_t** dst = (td_t**)td_data(result);
+    for (int64_t i = 0; i < nvals; i++) {
+        dst[i] = src[i * 2 + 1];
+        td_retain(dst[i]);
+    }
+    return result;
 }
 
 /* ══════════════════════════════════════════
@@ -2419,8 +2432,14 @@ op_calld: {
 }
 
 op_ret: {
-    td_t *result = (vm.sp > vm.fp + n_locals) ? POP() : make_i64(0);
-    td_retain(result);  /* protect from cleanup aliasing */
+    td_t *result;
+    bool from_stack = (vm.sp > vm.fp + n_locals);
+    if (from_stack) {
+        result = POP();
+        td_retain(result);  /* protect from cleanup aliasing */
+    } else {
+        result = make_i64(0);  /* fresh alloc, no alias — skip retain */
+    }
 
     /* Clean up current frame */
     while (vm.sp > vm.fp) {
