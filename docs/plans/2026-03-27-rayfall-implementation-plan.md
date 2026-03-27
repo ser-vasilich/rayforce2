@@ -320,7 +320,7 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_distinct` — `(distinct [1 1 2 2 3])` → [1 2 3]
   - `test_eval_in` — `(in 2 [1 2 3])` → true
   - `test_eval_except` — `(except [1 2 3] [2])` → [1 3]
@@ -331,9 +331,9 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
   - `test_eval_at` — `(at [10 20 30] 1)` → i64 20
   - `test_eval_find` — `(find [1 2 3] 2)` → i64 1
   - `test_eval_reverse` — `(reverse [1 2 3])` → [3 2 1]
-- [ ] Implement all collection builtins
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): collection operations (distinct, in, except, union, take, at, find)`
+- [x] Implement all collection builtins
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): collection operations (distinct, in, except, union, take, at, find)`
 
 ---
 

@@ -611,6 +611,159 @@ static MunitResult test_eval_apply(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: distinct ---- */
+static MunitResult test_eval_distinct(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(distinct [1 1 2 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 2);
+    munit_assert_int(elems[2]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: in ---- */
+static MunitResult test_eval_in(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(in 2 [1 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_BOOL);
+    munit_assert_uint(result->b8, ==, 1);
+    td_release(result);
+
+    td_t* result2 = td_eval_str("(in 9 [1 2 3])");
+    munit_assert_ptr_not_null(result2);
+    munit_assert_false(TD_IS_ERR(result2));
+    munit_assert_int(result2->type, ==, TD_ATOM_BOOL);
+    munit_assert_uint(result2->b8, ==, 0);
+    td_release(result2);
+    return MUNIT_OK;
+}
+
+/* ---- Test: except ---- */
+static MunitResult test_eval_except(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(except [1 2 3] [2])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 2);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: union ---- */
+static MunitResult test_eval_union(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(union [1 2] [2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 2);
+    munit_assert_int(elems[2]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: sect (intersection) ---- */
+static MunitResult test_eval_sect(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(sect [1 2 3] [2 3 4])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 2);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 2);
+    munit_assert_int(elems[1]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: take positive ---- */
+static MunitResult test_eval_take(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(take [1 2 3 4 5] 3)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 2);
+    munit_assert_int(elems[2]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: take negative (from end) ---- */
+static MunitResult test_eval_take_neg(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(take [1 2 3 4 5] -3)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 3);
+    munit_assert_int(elems[1]->i64, ==, 4);
+    munit_assert_int(elems[2]->i64, ==, 5);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: at (index into vector) ---- */
+static MunitResult test_eval_at(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(at [10 20 30] 1)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 20);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: find ---- */
+static MunitResult test_eval_find(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(find [1 2 3] 2)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 1);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: reverse ---- */
+static MunitResult test_eval_reverse(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(reverse [1 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 3);
+    munit_assert_int(elems[1]->i64, ==, 2);
+    munit_assert_int(elems[2]->i64, ==, 1);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -658,6 +811,16 @@ static MunitTest lang_tests[] = {
     { "/eval/scan",            test_eval_scan,            lang_setup, lang_teardown, 0, NULL },
     { "/eval/filter",          test_eval_filter,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/apply",           test_eval_apply,           lang_setup, lang_teardown, 0, NULL },
+    { "/eval/distinct",        test_eval_distinct,        lang_setup, lang_teardown, 0, NULL },
+    { "/eval/in",              test_eval_in,              lang_setup, lang_teardown, 0, NULL },
+    { "/eval/except",          test_eval_except,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/union",           test_eval_union,           lang_setup, lang_teardown, 0, NULL },
+    { "/eval/sect",            test_eval_sect,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/take",            test_eval_take,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/take_neg",        test_eval_take_neg,        lang_setup, lang_teardown, 0, NULL },
+    { "/eval/at",              test_eval_at,              lang_setup, lang_teardown, 0, NULL },
+    { "/eval/find",            test_eval_find,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/reverse",         test_eval_reverse,         lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

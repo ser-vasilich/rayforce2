@@ -628,6 +628,221 @@ static td_t* ray_apply(td_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * Collection operations
+ * ══════════════════════════════════════════ */
+
+/* Helper: compare two atoms for equality (value-based) */
+static int atom_eq(td_t* a, td_t* b) {
+    if (a->type != b->type) {
+        if (is_numeric(a) && is_numeric(b))
+            return as_f64(a) == as_f64(b);
+        return 0;
+    }
+    switch (a->type) {
+    case TD_ATOM_I64:  return a->i64 == b->i64;
+    case TD_ATOM_F64:  return a->f64 == b->f64;
+    case TD_ATOM_BOOL: return a->b8 == b->b8;
+    case TD_ATOM_SYM:  return a->i64 == b->i64;
+    default: return 0;
+    }
+}
+
+/* (distinct vec) — remove duplicates, preserving first occurrence */
+static td_t* ray_distinct(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) { td_retain(x); return x; }
+    td_t** elems = (td_t**)td_data(x);
+
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    td_t** out = (td_t**)td_data(result);
+    int64_t count = 0;
+
+    for (int64_t i = 0; i < len; i++) {
+        int dup = 0;
+        for (int64_t j = 0; j < count; j++) {
+            if (atom_eq(out[j], elems[i])) { dup = 1; break; }
+        }
+        if (!dup) {
+            td_retain(elems[i]);
+            out[count++] = elems[i];
+        }
+    }
+    result->len = count;
+    return result;
+}
+
+/* (in val vec) — check membership */
+static td_t* ray_in(td_t* val, td_t* vec) {
+    if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    td_t** elems = (td_t**)td_data(vec);
+    for (int64_t i = 0; i < len; i++) {
+        if (atom_eq(val, elems[i])) return make_bool(1);
+    }
+    return make_bool(0);
+}
+
+/* (except vec1 vec2) — elements in vec1 not in vec2 */
+static td_t* ray_except(td_t* vec1, td_t* vec2) {
+    if (!is_list(vec1) || !is_list(vec2)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len1 = td_len(vec1);
+    int64_t len2 = td_len(vec2);
+    td_t** e1 = (td_t**)td_data(vec1);
+    td_t** e2 = (td_t**)td_data(vec2);
+
+    td_t* result = td_alloc(len1 * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    td_t** out = (td_t**)td_data(result);
+    int64_t count = 0;
+
+    for (int64_t i = 0; i < len1; i++) {
+        int found = 0;
+        for (int64_t j = 0; j < len2; j++) {
+            if (atom_eq(e1[i], e2[j])) { found = 1; break; }
+        }
+        if (!found) {
+            td_retain(e1[i]);
+            out[count++] = e1[i];
+        }
+    }
+    result->len = count;
+    return result;
+}
+
+/* (union vec1 vec2) — elements in vec1 + elements in vec2 not already in vec1 */
+static td_t* ray_union(td_t* vec1, td_t* vec2) {
+    if (!is_list(vec1) || !is_list(vec2)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len1 = td_len(vec1);
+    int64_t len2 = td_len(vec2);
+    td_t** e1 = (td_t**)td_data(vec1);
+    td_t** e2 = (td_t**)td_data(vec2);
+
+    td_t* result = td_alloc((len1 + len2) * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    td_t** out = (td_t**)td_data(result);
+    int64_t count = 0;
+
+    for (int64_t i = 0; i < len1; i++) {
+        td_retain(e1[i]);
+        out[count++] = e1[i];
+    }
+    for (int64_t i = 0; i < len2; i++) {
+        int found = 0;
+        for (int64_t j = 0; j < count; j++) {
+            if (atom_eq(out[j], e2[i])) { found = 1; break; }
+        }
+        if (!found) {
+            td_retain(e2[i]);
+            out[count++] = e2[i];
+        }
+    }
+    result->len = count;
+    return result;
+}
+
+/* (sect vec1 vec2) — intersection: elements in both */
+static td_t* ray_sect(td_t* vec1, td_t* vec2) {
+    if (!is_list(vec1) || !is_list(vec2)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len1 = td_len(vec1);
+    int64_t len2 = td_len(vec2);
+    td_t** e1 = (td_t**)td_data(vec1);
+    td_t** e2 = (td_t**)td_data(vec2);
+
+    td_t* result = td_alloc(len1 * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    td_t** out = (td_t**)td_data(result);
+    int64_t count = 0;
+
+    for (int64_t i = 0; i < len1; i++) {
+        for (int64_t j = 0; j < len2; j++) {
+            if (atom_eq(e1[i], e2[j])) {
+                td_retain(e1[i]);
+                out[count++] = e1[i];
+                break;
+            }
+        }
+    }
+    result->len = count;
+    return result;
+}
+
+/* (take vec n) — first n elements (positive) or last |n| elements (negative) */
+static td_t* ray_take(td_t* vec, td_t* n_obj) {
+    if (!is_list(vec) || n_obj->type != TD_ATOM_I64)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    int64_t n = n_obj->i64;
+    td_t** elems = (td_t**)td_data(vec);
+
+    int64_t start, count;
+    if (n >= 0) {
+        start = 0;
+        count = n < len ? n : len;
+    } else {
+        count = -n < len ? -n : len;
+        start = len - count;
+    }
+
+    td_t* result = td_alloc(count * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = count;
+    td_t** out = (td_t**)td_data(result);
+    for (int64_t i = 0; i < count; i++) {
+        td_retain(elems[start + i]);
+        out[i] = elems[start + i];
+    }
+    return result;
+}
+
+/* (at vec idx) — index into vector */
+static td_t* ray_at(td_t* vec, td_t* idx) {
+    if (!is_list(vec) || idx->type != TD_ATOM_I64)
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t i = idx->i64;
+    int64_t len = td_len(vec);
+    if (i < 0 || i >= len) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* elem = ((td_t**)td_data(vec))[i];
+    td_retain(elem);
+    return elem;
+}
+
+/* (find vec val) — index of first occurrence, or -1 */
+static td_t* ray_find(td_t* vec, td_t* val) {
+    if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    td_t** elems = (td_t**)td_data(vec);
+    for (int64_t i = 0; i < len; i++) {
+        if (atom_eq(elems[i], val)) return make_i64(i);
+    }
+    return make_i64(-1);
+}
+
+/* (reverse vec) — reverse a vector */
+static td_t* ray_reverse(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    td_t** elems = (td_t**)td_data(x);
+
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    for (int64_t i = 0; i < len; i++) {
+        td_retain(elems[len - 1 - i]);
+        out[i] = elems[len - 1 - i];
+    }
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -1304,6 +1519,17 @@ static void td_register_builtins(void) {
     register_vary("scan",   TD_FN_NONE, ray_scan);
     register_binary("filter", TD_FN_NONE, ray_filter);
     register_vary("apply",  TD_FN_NONE, ray_apply);
+
+    /* Collection operations */
+    register_unary("distinct", TD_FN_NONE, ray_distinct);
+    register_binary("in",      TD_FN_NONE, ray_in);
+    register_binary("except",  TD_FN_NONE, ray_except);
+    register_binary("union",   TD_FN_NONE, ray_union);
+    register_binary("sect",    TD_FN_NONE, ray_sect);
+    register_binary("take",    TD_FN_NONE, ray_take);
+    register_binary("at",      TD_FN_NONE, ray_at);
+    register_binary("find",    TD_FN_NONE, ray_find);
+    register_unary("reverse",  TD_FN_NONE, ray_reverse);
 }
 
 /* ══════════════════════════════════════════
