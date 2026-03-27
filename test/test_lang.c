@@ -764,6 +764,65 @@ static MunitResult test_eval_reverse(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: table construction ---- */
+static MunitResult test_eval_table(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(table ['a 'b] (list [1 2 3] [10 20 30]))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_TABLE);
+    munit_assert_int(td_table_ncols(result), ==, 2);
+    munit_assert_int(td_table_nrows(result), ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: at table (column access) ---- */
+static MunitResult test_eval_at_table(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['a 'b] (list [1 2 3] [10 20 30]))) (at t 'a))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 2);
+    munit_assert_int(elems[2]->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: key table (column names) ---- */
+static MunitResult test_eval_key_table(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['a 'b] (list [1 2 3] [10 20 30]))) (key t))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 2);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->type, ==, TD_ATOM_SYM);
+    munit_assert_int(elems[1]->type, ==, TD_ATOM_SYM);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: count table (row count) ---- */
+static MunitResult test_eval_count_table(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str(
+        "(do (set t (table ['a 'b] (list [1 2 3] [10 20 30]))) (count t))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -821,6 +880,10 @@ static MunitTest lang_tests[] = {
     { "/eval/at",              test_eval_at,              lang_setup, lang_teardown, 0, NULL },
     { "/eval/find",            test_eval_find,            lang_setup, lang_teardown, 0, NULL },
     { "/eval/reverse",         test_eval_reverse,         lang_setup, lang_teardown, 0, NULL },
+    { "/eval/table",           test_eval_table,           lang_setup, lang_teardown, 0, NULL },
+    { "/eval/at_table",        test_eval_at_table,        lang_setup, lang_teardown, 0, NULL },
+    { "/eval/key_table",       test_eval_key_table,       lang_setup, lang_teardown, 0, NULL },
+    { "/eval/count_table",     test_eval_count_table,     lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

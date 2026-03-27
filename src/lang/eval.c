@@ -270,6 +270,7 @@ static td_t* ray_sum(td_t* x) {
 }
 
 static td_t* ray_count(td_t* x) {
+    if (x->type == TD_TABLE) return make_i64(td_table_nrows(x));
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     return make_i64(td_len(x));
 }
@@ -801,8 +802,45 @@ static td_t* ray_take(td_t* vec, td_t* n_obj) {
     return result;
 }
 
-/* (at vec idx) — index into vector */
+/* (at vec idx) or (at table 'col) — index into vector or table */
 static td_t* ray_at(td_t* vec, td_t* idx) {
+    /* Table column access by symbol key */
+    if (vec->type == TD_TABLE && idx->type == TD_ATOM_SYM) {
+        td_t* col = td_table_get_col(vec, idx->i64);
+        if (!col) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        /* Convert typed column vector to a Rayfall list */
+        int64_t nrows = col->len;
+        td_t* result = td_alloc(nrows * sizeof(td_t*));
+        if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+        result->type = TD_LIST;
+        result->len = nrows;
+        td_t** out = (td_t**)td_data(result);
+        int8_t ctype = col->type;
+        for (int64_t i = 0; i < nrows; i++) {
+            if (ctype == TD_I64) {
+                out[i] = make_i64(((int64_t*)td_data(col))[i]);
+            } else if (ctype == TD_F64) {
+                out[i] = make_f64(((double*)td_data(col))[i]);
+            } else if (ctype == TD_BOOL) {
+                out[i] = make_bool(((uint8_t*)td_data(col))[i]);
+            } else if (ctype == TD_SYM) {
+                td_t* s = td_alloc(0);
+                if (!s) { td_release(result); return TD_ERR_PTR(TD_ERR_OOM); }
+                s->type = TD_ATOM_SYM;
+                s->i64 = ((int64_t*)td_data(col))[i];
+                out[i] = s;
+            } else {
+                out[i] = make_i64(0);
+            }
+            if (TD_IS_ERR(out[i])) {
+                for (int64_t j = 0; j < i; j++) td_release(out[j]);
+                td_release(result);
+                return out[i];
+            }
+        }
+        return result;
+    }
+
     if (!is_list(vec) || idx->type != TD_ATOM_I64)
         return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t i = idx->i64;
@@ -840,6 +878,105 @@ static td_t* ray_reverse(td_t* x) {
         out[i] = elems[len - 1 - i];
     }
     return result;
+}
+
+/* ══════════════════════════════════════════
+ * Table construction and access
+ * ══════════════════════════════════════════ */
+
+/* (list v1 v2 ...) — package args into a list */
+static td_t* ray_list(td_t** args, int64_t n) {
+    td_t* result = td_alloc(n * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = n;
+    td_t** out = (td_t**)td_data(result);
+    for (int64_t i = 0; i < n; i++) {
+        td_retain(args[i]);
+        out[i] = args[i];
+    }
+    return result;
+}
+
+/* (table [col_names] (list col1 col2 ...)) — build a TD_TABLE */
+static td_t* ray_table(td_t* names, td_t* cols) {
+    if (!is_list(names) || !is_list(cols)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t ncols = td_len(names);
+    if (td_len(cols) != ncols) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t** name_elems = (td_t**)td_data(names);
+    td_t** col_elems = (td_t**)td_data(cols);
+
+    td_t* tbl = td_table_new(ncols);
+    if (TD_IS_ERR(tbl)) return tbl;
+
+    for (int64_t i = 0; i < ncols; i++) {
+        if (name_elems[i]->type != TD_ATOM_SYM)
+            { td_release(tbl); return TD_ERR_PTR(TD_ERR_TYPE); }
+        int64_t name_id = name_elems[i]->i64;
+
+        /* Convert Rayfall list to typed column vector */
+        td_t* col_list = col_elems[i];
+        if (!is_list(col_list))
+            { td_release(tbl); return TD_ERR_PTR(TD_ERR_TYPE); }
+        int64_t nrows = td_len(col_list);
+        td_t** row_elems = (td_t**)td_data(col_list);
+
+        /* Determine column type from first element */
+        int8_t col_type = TD_I64;
+        if (nrows > 0) {
+            if (row_elems[0]->type == TD_ATOM_F64) col_type = TD_F64;
+            else if (row_elems[0]->type == TD_ATOM_BOOL) col_type = TD_BOOL;
+            else if (row_elems[0]->type == TD_ATOM_SYM) col_type = TD_SYM;
+        }
+
+        td_t* col_vec = td_vec_new(col_type, nrows);
+        if (TD_IS_ERR(col_vec))
+            { td_release(tbl); return col_vec; }
+
+        for (int64_t j = 0; j < nrows; j++) {
+            void* val_ptr;
+            if (col_type == TD_I64) val_ptr = &row_elems[j]->i64;
+            else if (col_type == TD_F64) val_ptr = &row_elems[j]->f64;
+            else if (col_type == TD_BOOL) val_ptr = &row_elems[j]->b8;
+            else val_ptr = &row_elems[j]->i64; /* SYM stored as i64 */
+            col_vec = td_vec_append(col_vec, val_ptr);
+            if (TD_IS_ERR(col_vec))
+                { td_release(tbl); return col_vec; }
+        }
+
+        tbl = td_table_add_col(tbl, name_id, col_vec);
+        td_release(col_vec);
+        if (TD_IS_ERR(tbl)) return tbl;
+    }
+
+    return tbl;
+}
+
+/* (key table) — return column names as a list of symbols */
+static td_t* ray_key(td_t* x) {
+    if (x->type != TD_TABLE) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t ncols = td_table_ncols(x);
+    td_t* result = td_alloc(ncols * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = ncols;
+    td_t** out = (td_t**)td_data(result);
+    for (int64_t i = 0; i < ncols; i++) {
+        int64_t name_id = td_table_col_name(x, i);
+        td_t* sym = td_alloc(0);
+        if (!sym) { td_release(result); return TD_ERR_PTR(TD_ERR_OOM); }
+        sym->type = TD_ATOM_SYM;
+        sym->i64 = name_id;
+        out[i] = sym;
+    }
+    return result;
+}
+
+/* (value dict) — placeholder for dict value extraction */
+static td_t* ray_value(td_t* x) {
+    (void)x;
+    return TD_ERR_PTR(TD_ERR_NYI);
 }
 
 /* ══════════════════════════════════════════
@@ -1530,6 +1667,12 @@ static void td_register_builtins(void) {
     register_binary("at",      TD_FN_NONE, ray_at);
     register_binary("find",    TD_FN_NONE, ray_find);
     register_unary("reverse",  TD_FN_NONE, ray_reverse);
+
+    /* Table operations */
+    register_vary("list",      TD_FN_NONE, ray_list);
+    register_binary("table",   TD_FN_NONE, ray_table);
+    register_unary("key",      TD_FN_NONE, ray_key);
+    register_unary("value",    TD_FN_NONE, ray_value);
 }
 
 /* ══════════════════════════════════════════

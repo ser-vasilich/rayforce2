@@ -343,17 +343,17 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_table` — `(table [a b] (list [1 2 3] [10 20 30]))` → `TD_TABLE`
   - `test_eval_at_table` — `(at t 'a)` → column vector, len 3
   - `test_eval_key_table` — `(key t)` → symbol vector of column names
   - `test_eval_count_table` — `(count t)` → i64 3 (row count)
-- [ ] Implement `ray_table` (`TD_BINARY`) — col names + col data → `td_table_new`
-- [ ] Implement `ray_at` (`TD_BINARY`) — index into vectors, dicts, tables by key
-- [ ] Implement `ray_key` (`TD_UNARY`) — column names from table/dict
-- [ ] Implement `ray_value` (`TD_UNARY`) — values from dict
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): table construction and column access`
+- [x] Implement `ray_table` (`TD_BINARY`) — col names + col data → `td_table_new`
+- [x] Implement `ray_at` (`TD_BINARY`) — index into vectors, dicts, tables by key
+- [x] Implement `ray_key` (`TD_UNARY`) — column names from table/dict
+- [x] Implement `ray_value` (`TD_UNARY`) — values from dict
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): table construction and column access`
 
 ---
 
