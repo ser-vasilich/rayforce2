@@ -260,5 +260,39 @@ static td_t* parse_expr(td_parser_t *p) {
 td_t* td_parse(const char* source) {
     if (!source) return TD_ERR_PTR(TD_ERR_PARSE);
     td_parser_t p = { .src = source, .pos = source };
-    return parse_expr(&p);
+    td_t* first = parse_expr(&p);
+    if (TD_IS_ERR(first)) return first;
+
+    /* Check if there are more expressions after the first */
+    skip_ws_and_comments(&p);
+    if (*p.pos == '\0') return first;  /* single expression */
+
+    /* Multiple expressions: collect into (do expr1 expr2 ...) */
+    td_t* exprs[256];
+    int32_t count = 0;
+    exprs[count++] = first;
+
+    while (*p.pos && count < 256) {
+        td_t* expr = parse_expr(&p);
+        if (TD_IS_ERR(expr)) {
+            for (int32_t i = 0; i < count; i++) td_release(exprs[i]);
+            return expr;
+        }
+        exprs[count++] = expr;
+        skip_ws_and_comments(&p);
+    }
+
+    /* Build (do expr1 expr2 ...) list */
+    td_t* do_list = td_alloc((count + 1) * sizeof(td_t*));
+    if (!do_list) {
+        for (int32_t i = 0; i < count; i++) td_release(exprs[i]);
+        return TD_ERR_PTR(TD_ERR_OOM);
+    }
+    do_list->type = TD_LIST;
+    do_list->len = count + 1;
+    td_t** elems = (td_t**)td_data(do_list);
+    elems[0] = td_env_get(td_sym_intern("do", 2));
+    for (int32_t i = 0; i < count; i++)
+        elems[i + 1] = exprs[i];
+    return do_list;
 }

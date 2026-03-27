@@ -1546,8 +1546,9 @@ static td_t* ray_upsert(td_t** args, int64_t n) {
     }
 
     if (match_row < 0) {
-        /* Key not found — insert */
-        return ray_insert(args, 2);  /* reuse insert with (tbl, row) */
+        /* Key not found — insert: ray_insert expects (table, row) */
+        td_t* insert_args[2] = { tbl, row };
+        return ray_insert(insert_args, 2);
     }
 
     /* Key found — update that row */
@@ -2056,6 +2057,7 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
         [OP_CALLD]      = &&op_calld,
         [OP_DUP]        = &&op_dup,
         [OP_LOADCONST_W] = &&op_loadconst_w,
+        [OP_RESOLVE_W]  = &&op_resolve_w,
         [OP_TRAP]       = &&op_trap,
         [OP_TRAP_END]   = &&op_trap_end,
     };
@@ -2149,6 +2151,17 @@ op_resolve: {
     DISPATCH();
 }
 
+op_resolve_w: {
+    uint16_t idx = (uint16_t)((code[ip] << 8) | code[ip + 1]);
+    ip += 2;
+    td_t *name_obj = cpool[idx];
+    td_t *val = td_env_get(name_obj->i64);
+    if (!val) goto vm_error;
+    td_retain(val);
+    PUSH(val);
+    DISPATCH();
+}
+
 op_jmp: {
     int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
     ip += 2;
@@ -2173,7 +2186,11 @@ op_call1: {
     td_t *arg = POP();
     td_t *fn_obj = POP();
     td_unary_fn fn = (td_unary_fn)(uintptr_t)fn_obj->i64;
-    td_t *result = fn(arg);
+    td_t *result;
+    if ((fn_obj->attrs & TD_FN_ATOMIC) && is_list(arg))
+        result = atomic_map_unary(fn, arg);
+    else
+        result = fn(arg);
     td_release(arg);
     td_release(fn_obj);
     PUSH(result);
@@ -2185,7 +2202,11 @@ op_call2: {
     td_t *left = POP();
     td_t *fn_obj = POP();
     td_binary_fn fn = (td_binary_fn)(uintptr_t)fn_obj->i64;
-    td_t *result = fn(left, right);
+    td_t *result;
+    if ((fn_obj->attrs & TD_FN_ATOMIC) && (is_list(left) || is_list(right)))
+        result = atomic_map_binary(fn, left, right);
+    else
+        result = fn(left, right);
     td_release(left);
     td_release(right);
     td_release(fn_obj);
@@ -2195,6 +2216,7 @@ op_call2: {
 
 op_calln: {
     uint8_t n = code[ip++];
+    if (n > 64) goto vm_error;
     td_t *fn_args[64];
     for (int32_t i = n - 1; i >= 0; i--)
         fn_args[i] = POP();
@@ -2210,6 +2232,7 @@ op_calln: {
 
 op_callf: {
     uint8_t n = code[ip++];
+    if (n > 64) goto vm_error;
     td_t *fn_args[64];
     for (int32_t i = n - 1; i >= 0; i--)
         fn_args[i] = POP();
@@ -2287,6 +2310,7 @@ op_callf: {
 op_calls: {
     /* Tail call: reuse current frame (no return stack push) */
     uint8_t n = code[ip++];
+    if (n > 64) goto vm_error;
     td_t *fn_args[64];
     for (int32_t i = n - 1; i >= 0; i--)
         fn_args[i] = POP();
@@ -2715,8 +2739,9 @@ td_t* td_eval(td_t* obj) {
                 return fn(elems + 1, n - 1);
             }
             int64_t argc = n - 1;
+            if (argc > 64) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
             td_t* args[64];
-            for (int64_t i = 0; i < argc && i < 64; i++) {
+            for (int64_t i = 0; i < argc; i++) {
                 args[i] = td_eval(elems[i + 1]);
                 if (TD_IS_ERR(args[i])) {
                     for (int64_t j = 0; j < i; j++) td_release(args[j]);
@@ -2731,8 +2756,9 @@ td_t* td_eval(td_t* obj) {
         }
         case TD_ATOM_LAMBDA: {
             int64_t argc = n - 1;
+            if (argc > 64) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
             td_t* args[64];
-            for (int64_t i = 0; i < argc && i < 64; i++) {
+            for (int64_t i = 0; i < argc; i++) {
                 args[i] = td_eval(elems[i + 1]);
                 if (TD_IS_ERR(args[i])) {
                     for (int64_t j = 0; j < i; j++) td_release(args[j]);

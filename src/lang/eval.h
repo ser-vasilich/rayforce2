@@ -23,6 +23,7 @@ enum {
     OP_CALLD,         /* dynamic dispatch: fallback to td_eval() */
     OP_DUP,           /* duplicate top of stack */
     OP_LOADCONST_W,   /* push constant pool[operand] (2-byte index) */
+    OP_RESOLVE_W,     /* resolve global name: 2-byte constant pool index */
     OP_TRAP,          /* push trap frame, 2-byte handler offset */
     OP_TRAP_END,      /* pop trap frame (success path) */
     OP__COUNT

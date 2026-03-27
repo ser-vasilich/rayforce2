@@ -342,6 +342,15 @@ static void td_release_owned_refs(td_t* v) {
     if (!v || TD_IS_ERR(v)) return;
 
     if (td_is_atom(v)) {
+        if (v->type == TD_ATOM_LAMBDA) {
+            /* Lambda stores [params, body, bytecode, constants] in td_data */
+            td_t** slots = (td_t**)td_data(v);
+            for (int i = 0; i < 4; i++) {
+                if (slots[i] && !TD_IS_ERR(slots[i]))
+                    td_release(slots[i]);
+            }
+            return;
+        }
         if (td_atom_owns_obj(v) && v->obj && !TD_IS_ERR(v->obj))
             td_release(v->obj);
         return;
@@ -404,6 +413,14 @@ void td_retain_owned_refs(td_t* v) {
     if (!v || TD_IS_ERR(v)) return;
 
     if (td_is_atom(v)) {
+        if (v->type == TD_ATOM_LAMBDA) {
+            td_t** slots = (td_t**)td_data(v);
+            for (int i = 0; i < 4; i++) {
+                if (slots[i] && !TD_IS_ERR(slots[i]))
+                    td_retain(slots[i]);
+            }
+            return;
+        }
         if (td_atom_owns_obj(v) && v->obj && !TD_IS_ERR(v->obj))
             td_retain(v->obj);
         return;
@@ -465,6 +482,11 @@ static void td_detach_owned_refs(td_t* v) {
     if (!v || TD_IS_ERR(v)) return;
 
     if (td_is_atom(v)) {
+        if (v->type == TD_ATOM_LAMBDA) {
+            td_t** slots = (td_t**)td_data(v);
+            for (int i = 0; i < 4; i++) slots[i] = NULL;
+            return;
+        }
         if (td_atom_owns_obj(v)) v->obj = NULL;
         return;
     }

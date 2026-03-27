@@ -1,5 +1,6 @@
 #include "lang/eval.h"
 #include "lang/env.h"
+#include <stdbool.h>
 #include <string.h>
 
 /* ── Compiler state ──
@@ -19,24 +20,28 @@ typedef struct {
     struct { int64_t sym_id; int32_t slot; } locals[256];
     int32_t  n_locals;
     int32_t  max_locals;
+    bool     error;
 } compiler_t;
 
 static void compile_expr(compiler_t *c, td_t *ast);
 
-static void compiler_init(compiler_t *c) {
+static bool compiler_init(compiler_t *c) {
     memset(c, 0, sizeof(*c));
     c->code_cap = 256;
     c->code_obj = td_alloc(c->code_cap);
+    if (!c->code_obj) return false;
     c->code_obj->type = TD_U8;
     c->code_obj->len = 0;
     c->code = (uint8_t *)td_data(c->code_obj);
 
     c->consts_cap = 16;
     c->consts_obj = td_alloc(c->consts_cap * sizeof(td_t *));
+    if (!c->consts_obj) { td_release(c->code_obj); return false; }
     c->consts_obj->type = TD_LIST;
     c->consts_obj->len = 0;
     c->consts = (td_t **)td_data(c->consts_obj);
     memset(c->consts, 0, c->consts_cap * sizeof(td_t *));
+    return true;
 }
 
 static void compiler_destroy(compiler_t *c) {
@@ -51,6 +56,7 @@ static void emit(compiler_t *c, uint8_t byte) {
     if (c->code_len >= c->code_cap) {
         int32_t new_cap = c->code_cap * 2;
         td_t *new_obj = td_alloc(new_cap);
+        if (!new_obj) { c->error = true; return; }
         new_obj->type = TD_U8;
         new_obj->len = 0;
         memcpy(td_data(new_obj), c->code, c->code_len);
@@ -281,8 +287,14 @@ static void compile_expr(compiler_t *c, td_t *ast) {
                 emit(c, (uint8_t)slot);
             } else {
                 int32_t idx = add_constant(c, ast);
-                emit(c, OP_RESOLVE);
-                emit(c, (uint8_t)idx);
+                if (idx < 256) {
+                    emit(c, OP_RESOLVE);
+                    emit(c, (uint8_t)idx);
+                } else {
+                    emit(c, OP_RESOLVE_W);
+                    emit(c, (uint8_t)(idx >> 8));
+                    emit(c, (uint8_t)(idx & 0xFF));
+                }
             }
             return;
         }
@@ -311,7 +323,7 @@ void td_compile(td_t *lambda) {
     if (LAMBDA_IS_COMPILED(lambda)) return;
 
     compiler_t c;
-    compiler_init(&c);
+    if (!compiler_init(&c)) return;
 
     /* Register params as locals */
     td_t *params_list = LAMBDA_PARAMS(lambda);
@@ -330,14 +342,18 @@ void td_compile(td_t *lambda) {
     }
     emit(&c, OP_RET);
 
+    if (c.error) { compiler_destroy(&c); return; }
+
     /* Build bytecode vector */
     td_t *bc = td_alloc(c.code_len);
+    if (!bc) { compiler_destroy(&c); return; }
     bc->type = TD_U8;
     bc->len = c.code_len;
     memcpy(td_data(bc), c.code, c.code_len);
 
     /* Build constants list */
     td_t *consts = td_alloc(c.n_consts * sizeof(td_t *));
+    if (!consts) { td_release(bc); compiler_destroy(&c); return; }
     consts->type = TD_LIST;
     consts->len = c.n_consts;
     td_t **cpool = (td_t **)td_data(consts);
