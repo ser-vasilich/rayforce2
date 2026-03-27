@@ -43,6 +43,17 @@
 #define KEYCODE_RBRACKET  ']'
 
 #define TERM_BUF_SIZE 4096
+#define HIST_DEFAULT_CAP 256
+
+typedef struct td_hist {
+    char**   entries;
+    int32_t  count;
+    int32_t  capacity;
+    int32_t  index;
+    int32_t  curr_saved;
+    char     curr[TERM_BUF_SIZE];
+    int32_t  curr_len;
+} td_hist_t;
 
 typedef struct td_term {
     td_t*    _block;
@@ -65,6 +76,7 @@ typedef struct td_term {
     int32_t  prompt_len;
     int32_t  last_total_rows;
     int32_t  last_cursor_row;
+    td_hist_t hist;
 } td_term_t;
 
 td_term_t* td_term_create(void);
@@ -88,5 +100,11 @@ void    td_term_goto_position(td_term_t* term, int32_t from_pos, int32_t to_pos)
 td_t*  td_term_read(td_term_t* term);
 void   td_term_redraw(td_term_t* term);
 void   td_term_prompt(td_term_t* term);
+
+void    td_hist_create(td_hist_t* hist);
+void    td_hist_destroy(td_hist_t* hist);
+void    td_hist_add(td_hist_t* hist, const char* buf, int32_t len);
+int32_t td_hist_prev(td_hist_t* hist, char* buf);
+int32_t td_hist_next(td_hist_t* hist, char* buf);
 
 #endif /* TD_TERM_H */

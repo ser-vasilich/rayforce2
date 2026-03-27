@@ -131,12 +131,14 @@ td_term_t* td_term_create(void) {
     term->term_height = 24;
     term->last_total_rows = 1;
     td_term_get_size(term);
+    td_hist_create(&term->hist);
 
     return term;
 }
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    td_hist_destroy(&term->hist);
     SetConsoleMode(term->h_stdin,  term->old_stdin_mode);
     SetConsoleMode(term->h_stdout, term->old_stdout_mode);
     td_free(term->_block);
@@ -171,12 +173,14 @@ td_term_t* td_term_create(void) {
     term->term_height = 24;
     term->last_total_rows = 1;
     td_term_get_size(term);
+    td_hist_create(&term->hist);
 
     return term;
 }
 
 void td_term_destroy(td_term_t* term) {
     if (!term) return;
+    td_hist_destroy(&term->hist);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
     td_free(term->_block);
 }
@@ -188,6 +192,93 @@ int64_t td_term_getc(td_term_t* term) {
 }
 
 #endif /* _WIN32 */
+
+/* ===== History ===== */
+
+void td_hist_create(td_hist_t* hist) {
+    hist->capacity = HIST_DEFAULT_CAP;
+    td_t* block = td_alloc((int64_t)(hist->capacity * (int64_t)sizeof(char*)));
+    hist->entries = (char**)td_data(block);
+    hist->count = 0;
+    hist->index = 0;
+    hist->curr_saved = 0;
+    hist->curr_len = 0;
+}
+
+void td_hist_destroy(td_hist_t* hist) {
+    if (!hist->entries) return;
+    for (int32_t i = 0; i < hist->count; i++) {
+        td_t* block = (td_t*)((char*)hist->entries[i] - 32);
+        td_free(block);
+    }
+    td_t* block = (td_t*)((char*)hist->entries - 32);
+    td_free(block);
+    hist->entries = NULL;
+    hist->count = 0;
+}
+
+void td_hist_add(td_hist_t* hist, const char* buf, int32_t len) {
+    if (len <= 0) return;
+    /* Skip if same as last entry */
+    if (hist->count > 0) {
+        const char* last = hist->entries[hist->count - 1];
+        if ((int32_t)strlen(last) == len && memcmp(last, buf, (size_t)len) == 0)
+            goto reset;
+    }
+    /* Grow if needed */
+    if (hist->count >= hist->capacity) {
+        int32_t new_cap = hist->capacity * 2;
+        td_t* new_block = td_alloc((int64_t)(new_cap * (int64_t)sizeof(char*)));
+        char** new_entries = (char**)td_data(new_block);
+        memcpy(new_entries, hist->entries, (size_t)(hist->count) * sizeof(char*));
+        td_t* old_block = (td_t*)((char*)hist->entries - 32);
+        td_free(old_block);
+        hist->entries = new_entries;
+        hist->capacity = new_cap;
+    }
+    /* Allocate and copy the entry */
+    td_t* entry_block = td_alloc((int64_t)(len + 1));
+    char* entry = (char*)td_data(entry_block);
+    memcpy(entry, buf, (size_t)len);
+    entry[len] = '\0';
+    hist->entries[hist->count++] = entry;
+
+reset:
+    hist->index = hist->count;
+    hist->curr_saved = 0;
+}
+
+int32_t td_hist_prev(td_hist_t* hist, char* buf) {
+    if (hist->count == 0 || hist->index <= 0) return -1;
+    /* Save current input on first navigation */
+    if (!hist->curr_saved) {
+        hist->curr_saved = 1;
+        /* caller's buf is the term buf — copy it */
+    }
+    hist->index--;
+    const char* entry = hist->entries[hist->index];
+    int32_t len = (int32_t)strlen(entry);
+    memcpy(buf, entry, (size_t)len);
+    return len;
+}
+
+int32_t td_hist_next(td_hist_t* hist, char* buf) {
+    if (hist->index >= hist->count) return -1;
+    hist->index++;
+    if (hist->index >= hist->count) {
+        /* Restore saved current input */
+        if (hist->curr_saved) {
+            memcpy(buf, hist->curr, (size_t)hist->curr_len);
+            hist->curr_saved = 0;
+            return hist->curr_len;
+        }
+        return 0; /* empty buffer */
+    }
+    const char* entry = hist->entries[hist->index];
+    int32_t len = (int32_t)strlen(entry);
+    memcpy(buf, entry, (size_t)len);
+    return len;
+}
 
 /* ===== UTF-8 helpers ===== */
 
@@ -312,8 +403,28 @@ td_t* td_term_read(td_term_t* term) {
 
     handle:
         /* Arrow keys are encoded as negative to distinguish from printable chars */
-        if (key == -KEYCODE_UP || key == -KEYCODE_DOWN) {
-            /* History — will be wired in Task 2.1 */
+        if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
+            /* Save current input before first navigation */
+            if (!term->hist.curr_saved) {
+                memcpy(term->hist.curr, term->buf, (size_t)term->buf_len);
+                term->hist.curr_len = term->buf_len;
+            }
+            int32_t len = td_hist_prev(&term->hist, term->buf);
+            if (len >= 0) {
+                term->buf_len = len;
+                term->buf_pos = len;
+                td_term_redraw(term);
+            }
+            continue;
+        }
+
+        if (key == -KEYCODE_DOWN || key == KEYCODE_CTRL_N) {
+            int32_t len = td_hist_next(&term->hist, term->buf);
+            if (len >= 0) {
+                term->buf_len = len;
+                term->buf_pos = len;
+                td_term_redraw(term);
+            }
             continue;
         }
 
@@ -356,6 +467,7 @@ td_t* td_term_read(td_term_t* term) {
             term->buf[term->buf_len] = '\0';
             putchar('\n');
             fflush(stdout);
+            td_hist_add(&term->hist, term->buf, term->buf_len);
             if (term->buf_len == 0) return td_str("", 0);
             return td_str(term->buf, (size_t)term->buf_len);
         }

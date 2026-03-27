@@ -104,25 +104,25 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Modify `src/app/term.h`, `src/app/term.c`
 
-- [ ] Add `td_hist_t` struct to `term.h`:
+- [x] Add `td_hist_t` struct to `term.h`:
   - `char** entries` — array of strings (td_alloc'd)
   - `int32_t count`, `capacity`, `index` (navigation pos)
   - `int32_t curr_saved` — flag for saved current input
   - `char curr[TERM_BUF_SIZE]` — saved current input before navigating
   - `int32_t curr_len`
-- [ ] Add `hist` field to `td_term_t`
-- [ ] Implement in `term.c`:
+- [x] Add `hist` field to `td_term_t`
+- [x] Implement in `term.c`:
   - `td_hist_create()` — allocate entry array
   - `td_hist_destroy()` — free all entries
   - `td_hist_add(hist, buf, len)` — copy entry to array (skip if same as last entry)
   - `td_hist_prev(hist, buf)` — save current if first time, copy prev entry to buf, return len
   - `td_hist_next(hist, buf)` — copy next entry (or restore saved current), return len
-- [ ] Wire into `td_term_read()`:
+- [x] Wire into `td_term_read()`:
   - Enter: call `td_hist_add()` before returning
   - Up/Ctrl-P: `td_hist_prev()`, update buf/buf_len/buf_pos, redraw
   - Down/Ctrl-N: `td_hist_next()`, update, redraw
-- [ ] Smoke test: type expressions, Up recalls them, Down goes back to current
-- [ ] Commit: `feat(repl): history navigation with Up/Down`
+- [x] Smoke test: type expressions, Up recalls them, Down goes back to current
+- [x] Commit: `feat(repl): history navigation with Up/Down`
 
 ---
 
