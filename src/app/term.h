@@ -115,6 +115,9 @@ void    td_hist_save(td_hist_t* hist, const char* path);
 int32_t td_hist_search(td_hist_t* hist, const char* needle, int32_t needle_len,
                        int32_t start_idx);
 
+int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
+                                    int32_t cursor_pos);
+
 #define HIST_MAX_ENTRIES 1000
 #define HIST_DEFAULT_PATH ".teide_history"
 

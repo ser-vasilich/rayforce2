@@ -194,16 +194,16 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 680-784 (`term_red
 
 Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_highlight_pos`, `term_find_open_paren`)
 
-- [ ] Implement `td_term_find_matching_paren()`:
+- [x] Implement `td_term_find_matching_paren()`:
   - Stack-based scan from cursor position
   - If cursor is on opening bracket: scan forward for matching close
   - If cursor is on closing bracket: scan backward for matching open
   - Handle multiline buffer too (scan `multiline_buf` first for context)
   - Skip brackets inside strings (`"..."`)
   - Return position of match, or -1
-- [ ] In `term_redraw_highlighted()`: if cursor is on a bracket and match found, render both with `BACK_CYAN` (highlight background)
-- [ ] Smoke test: type `(+ (* 2 3) 4)`, cursor on `(` highlights matching `)`
-- [ ] Commit: `feat(repl): bracket matching with highlight`
+- [x] In `term_redraw_highlighted()`: if cursor is on a bracket and match found, render both with `BACK_CYAN` (highlight background)
+- [x] Smoke test: type `(+ (* 2 3) 4)`, cursor on `(` highlights matching `)`
+- [x] Commit: `feat(repl): bracket matching with highlight`
 
 ---
 

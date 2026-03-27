@@ -469,9 +469,81 @@ static int is_builtin(const char* word, int32_t wlen) {
     return 0;
 }
 
+/* ===== Bracket matching ===== */
+
+static int is_open_bracket(char c) {
+    return c == '(' || c == '[' || c == '{';
+}
+
+static int is_close_bracket(char c) {
+    return c == ')' || c == ']' || c == '}';
+}
+
+static char opposite_bracket(char c) {
+    switch (c) {
+    case '(': return ')';
+    case ')': return '(';
+    case '[': return ']';
+    case ']': return '[';
+    case '{': return '}';
+    case '}': return '{';
+    default:  return 0;
+    }
+}
+
+static int in_string_at(const char* buf, int32_t pos) {
+    int in_str = 0;
+    for (int32_t i = 0; i < pos; i++) {
+        if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\'))
+            in_str = !in_str;
+    }
+    return in_str;
+}
+
+int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
+                                    int32_t cursor_pos) {
+    if (cursor_pos < 0 || cursor_pos >= buf_len)
+        return -1;
+
+    char c = buf[cursor_pos];
+    if (!is_open_bracket(c) && !is_close_bracket(c))
+        return -1;
+
+    if (in_string_at(buf, cursor_pos))
+        return -1;
+
+    char target = opposite_bracket(c);
+    int depth = 0;
+
+    if (is_open_bracket(c)) {
+        /* Scan forward */
+        for (int32_t i = cursor_pos; i < buf_len; i++) {
+            if (in_string_at(buf, i)) continue;
+            if (buf[i] == c) depth++;
+            else if (buf[i] == target) {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+    } else {
+        /* Scan backward */
+        for (int32_t i = cursor_pos; i >= 0; i--) {
+            if (in_string_at(buf, i)) continue;
+            if (buf[i] == c) depth++;
+            else if (buf[i] == target) {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+    }
+
+    return -1;
+}
+
 /* Write highlighted buffer content into dst. Returns bytes written. */
 static int32_t term_highlight_into(char* dst, int32_t dst_cap,
-                                   const char* buf, int32_t buf_len) {
+                                   const char* buf, int32_t buf_len,
+                                   int32_t match_pos1, int32_t match_pos2) {
     int32_t n = 0;
 
 #define HL_APPEND(s, slen) do { \
@@ -485,7 +557,11 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
 
         switch (c) {
         case '(': case ')': case '[': case ']': case '{': case '}':
-            HL_LIT(CLR_GRAY);
+            if (i == match_pos1 || i == match_pos2) {
+                HL_LIT(CLR_BACK_CYAN);
+            } else {
+                HL_LIT(CLR_GRAY);
+            }
             HL_APPEND(&c, 1);
             HL_LIT(CLR_RESET);
             colored = 1;
@@ -625,9 +701,22 @@ void td_term_redraw(td_term_t* term) {
         memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
         hlen = PROMPT_LEN;
         if (term->buf_len > 0) {
+            /* Find bracket match at cursor */
+            int32_t match_pos1 = -1, match_pos2 = -1;
+            int32_t cursor = term->buf_pos;
+            /* Check char at cursor, or char before cursor */
+            if (cursor < term->buf_len) {
+                int32_t m = td_term_find_matching_paren(term->buf, term->buf_len, cursor);
+                if (m >= 0) { match_pos1 = cursor; match_pos2 = m; }
+            }
+            if (match_pos1 < 0 && cursor > 0) {
+                int32_t m = td_term_find_matching_paren(term->buf, term->buf_len, cursor - 1);
+                if (m >= 0) { match_pos1 = cursor - 1; match_pos2 = m; }
+            }
             hlen += term_highlight_into(hlbuf + hlen,
                                         (int32_t)sizeof(hlbuf) - hlen,
-                                        term->buf, term->buf_len);
+                                        term->buf, term->buf_len,
+                                        match_pos1, match_pos2);
         }
         write(STDOUT_FILENO, hlbuf, (size_t)hlen);
     }
