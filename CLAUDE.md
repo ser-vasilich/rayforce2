@@ -18,6 +18,10 @@ cd build && ctest --output-on-failure
 
 # Run a single test suite
 ./build/test_teide --suite /vec
+
+# Run the Rayfall REPL (interactive or file mode)
+./build/teide_repl
+./build/teide_repl script.rfl
 ```
 
 ## Architecture
@@ -38,6 +42,14 @@ Core abstraction is `td_t` — a 32-byte block header. Every object (atom, vecto
 - Opcodes: `OP_EXPAND` (1-hop), `OP_VAR_EXPAND` (BFS), `OP_SHORTEST_PATH`, `OP_ASTAR` (A*), `OP_K_SHORTEST` (Yen's), `OP_CLUSTER_COEFF`, `OP_RANDOM_WALK`, `OP_WCO_JOIN` (LFTJ), `OP_BETWEENNESS` (Brandes), `OP_CLOSENESS` (closeness centrality), `OP_MST` (Kruskal)
 - Factorized execution: `td_fvec_t` / `td_ftable_t` avoid materializing cross-products
 - Optimizer: SIP pass propagates `TD_SEL` bitmaps backward through `OP_EXPAND` chains
+
+**Rayfall language**: Lisp-like query frontend. Parser produces `td_t` objects directly (no separate AST). Tree-walking `td_eval()` dispatches by function type (`TD_UNARY`, `TD_BINARY`, `TD_VARY`). Lambdas compile lazily to bytecode and run in a stack-based computed-goto VM (`td_vm_t`). `select`/`update` builtins bridge to Teide's DAG executor at runtime.
+- Types: `TD_LAMBDA` (user-defined), `TD_UNARY`/`TD_BINARY`/`TD_VARY` (builtins)
+- Function flags: `FN_ATOMIC` (auto-map over vectors), `FN_AGGR` (aggregation), `FN_SPECIAL_FORM` (unevaluated args)
+- Entry points: `td_lang_init()` / `td_eval_str("(+ 1 2)")` / `td_eval(parsed_obj)`
+- VM: 1024-slot program stack + return stack, trap frames for `try`/`raise` error handling
+
+**Per-VM heaps**: each heap carries a `heap_id` (u16 in `td_t`), allocated via atomic bitmap. Cross-heap frees enqueue blocks to a lock-free LIFO (`td_heap_flush_foreign()` reclaims them). Worker heaps merge back via `td_heap_push_pending()` / `td_heap_drain_pending()`.
 
 ## Code Conventions
 
@@ -73,5 +85,11 @@ test/test_str.c             TD_STR string vector tests (slice, concat, hash, com
 test/test_exec.c            Executor tests (string ops, comparisons, conditionals, joins)
 src/vec/vec.c               Vector operations — append, set, concat, slice, TD_STR string vectors with pool
 src/io/csv.{h,c}           CSV loader — mmap, parallel parse, null handling, sym merge
+src/lang/parse.{h,c}       Rayfall lexer (ASCII dispatch table) and recursive descent parser
+src/lang/eval.{h,c}        Tree-walking evaluator, bytecode VM (computed goto), all builtins
+src/lang/compile.c          Bytecode compiler (AST → opcodes for lambda functions)
+src/lang/env.{h,c}         Global environment and local scope stack for variable binding
+src/lang/repl.c             Rayfall REPL binary (interactive + file mode)
+test/test_lang.c            Rayfall language tests (lexer, parser, eval, VM, tables, joins)
 bench/bench_csv*.c          CSV loading benchmarks (build with -DTEIDE_BENCH=ON)
 ```

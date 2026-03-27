@@ -203,7 +203,7 @@ typedef struct td_heap {
 #define TD_HEAP_ID_BITS   (TD_HEAP_ID_WORDS * 64)
 
 /* Global pending-merge queue head (lock-free LIFO) */
-extern td_heap_t* td_heap_pending_merge;
+extern _Atomic(td_heap_t*) td_heap_pending_merge;
 
 /* --------------------------------------------------------------------------
  * Pool-list scan: find which pool a block belongs to without reading the

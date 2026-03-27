@@ -1,5 +1,6 @@
 #include "lang/env.h"
 #include <string.h>
+#include <assert.h>
 
 /* ---- Function constructors ---- */
 
@@ -105,10 +106,9 @@ void td_env_set(int64_t sym_id, td_t* val) {
 }
 
 void td_env_push_scope(void) {
-    if (scope_depth < SCOPE_CAP) {
-        scope_stack[scope_depth].count = 0;
-        scope_depth++;
-    }
+    assert(scope_depth < SCOPE_CAP && "scope stack overflow");
+    scope_stack[scope_depth].count = 0;
+    scope_depth++;
 }
 
 void td_env_pop_scope(void) {

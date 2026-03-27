@@ -68,7 +68,10 @@ static td_t* ray_mul(td_t* a, td_t* b) {
 
 static td_t* ray_div(td_t* a, td_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return TD_ERR_PTR(TD_ERR_TYPE);
-    if (is_float_op(a, b)) return make_f64(as_f64(a) / as_f64(b));
+    if (is_float_op(a, b)) {
+        if (as_f64(b) == 0.0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        return make_f64(as_f64(a) / as_f64(b));
+    }
     if (b->i64 == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
     return make_i64(a->i64 / b->i64);
 }
@@ -111,18 +114,25 @@ static td_t* ray_neq(td_t* a, td_t* b) {
     return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
 }
 
-/* Logical */
+/* Logical — coerce to truthiness (0/nil/false = falsy, else truthy) */
+static inline int is_truthy(td_t* x) {
+    if (x->type == TD_ATOM_BOOL) return x->b8;
+    if (x->type == TD_ATOM_I64)  return x->i64 != 0;
+    if (x->type == TD_ATOM_F64)  return x->f64 != 0.0;
+    return 1; /* non-null objects are truthy */
+}
+
 static td_t* ray_and(td_t* a, td_t* b) {
-    return make_bool((a->b8 && b->b8) ? 1 : 0);
+    return make_bool((is_truthy(a) && is_truthy(b)) ? 1 : 0);
 }
 
 static td_t* ray_or(td_t* a, td_t* b) {
-    return make_bool((a->b8 || b->b8) ? 1 : 0);
+    return make_bool((is_truthy(a) || is_truthy(b)) ? 1 : 0);
 }
 
 /* Unary */
 static td_t* ray_not(td_t* x) {
-    return make_bool(x->b8 ? 0 : 1);
+    return make_bool(is_truthy(x) ? 0 : 1);
 }
 
 static td_t* ray_neg(td_t* x) {
@@ -497,8 +507,6 @@ static td_t* ray_fold(td_t** args, int64_t n) {
     td_t* fn = args[0];
     td_t* vec;
     td_t* acc;
-    int free_acc = 0;
-
     if (n == 2) {
         /* (fold fn vec) — use first element as initial value */
         vec = args[1];
@@ -1327,31 +1335,13 @@ static td_t* ray_update(td_t** args, int64_t n) {
     uint8_t* mask = NULL;
 
     if (where_expr) {
+        /* Evaluate the predicate as a DAG to get a boolean mask vector */
         td_graph_t* g = td_graph_new(tbl);
         if (!g) { td_release(tbl); return TD_ERR_PTR(TD_ERR_OOM); }
-        td_op_t* root = td_const_table(g, tbl);
         td_op_t* pred = compile_expr_dag(g, where_expr);
         if (!pred) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
-        root = td_filter(g, root, pred);
-        root = td_optimize(g, root);
-        td_t* filtered = td_execute(g, root);
-        td_graph_free(g);
-
-        if (TD_IS_ERR(filtered)) { td_release(tbl); return filtered; }
-
-        /* Build mask: which original rows passed the filter?
-         * We use a simple approach: evaluate the predicate expression
-         * directly for each row using the Rayfall evaluator. */
-        td_release(filtered);
-
-        /* Re-evaluate: build the predicate as a DAG over the full table,
-         * but only extract the boolean column result. */
-        g = td_graph_new(tbl);
-        if (!g) { td_release(tbl); return TD_ERR_PTR(TD_ERR_OOM); }
-        td_op_t* pred2 = compile_expr_dag(g, where_expr);
-        if (!pred2) { td_graph_free(g); td_release(tbl); return TD_ERR_PTR(TD_ERR_DOMAIN); }
-        pred2 = td_optimize(g, pred2);
-        td_t* mask_vec = td_execute(g, pred2);
+        pred = td_optimize(g, pred);
+        td_t* mask_vec = td_execute(g, pred);
         td_graph_free(g);
 
         if (TD_IS_ERR(mask_vec)) { td_release(tbl); return mask_vec; }
@@ -1872,8 +1862,9 @@ static td_t* ray_read_file(td_t* path_obj) {
     size_t rd = fread(data, 1, (size_t)sz, fp);
     fclose(fp);
     data[rd] = '\0';
+    td_t* result = td_str(data, rd);
     td_release(buf);
-    return td_str(data, rd);
+    return result;
 }
 
 /* (write path content) — write string to a file */
@@ -2092,7 +2083,7 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
     int32_t ip = 0;
 
 #define DISPATCH() goto *dispatch[code[ip++]]
-#define PUSH(v)    (vm.ps[vm.sp++] = (v))
+#define PUSH(v)    do { if (vm.sp >= VM_STACK_SIZE) goto vm_error; vm.ps[vm.sp++] = (v); } while(0)
 #define POP()      (vm.ps[--vm.sp])
 #define PEEK()     (vm.ps[vm.sp - 1])
 #define LOCAL(s)   (vm.ps[vm.fp + (s)])
@@ -2231,6 +2222,7 @@ op_callf: {
 
         if (LAMBDA_IS_COMPILED(fn_obj)) {
             /* Push return frame */
+            if (vm.rp >= VM_STACK_SIZE) goto vm_error;
             vm.rs[vm.rp++] = (vm_ctx_t){ .fn = vm.fn, .fp = vm.fp, .ip = ip };
 
             /* Set up new frame */
@@ -2427,6 +2419,7 @@ op_ret: {
 op_trap: {
     int16_t offset = (int16_t)((code[ip] << 8) | code[ip + 1]);
     ip += 2;
+    if (vm.tp >= VM_TRAP_SIZE) goto vm_error;
     vm.ts[vm.tp++] = (vm_trap_t){
         .rp = vm.rp, .sp = vm.sp, .handler_ip = ip + offset,
         .fn = vm.fn, .fp = vm.fp, .n_locals = n_locals

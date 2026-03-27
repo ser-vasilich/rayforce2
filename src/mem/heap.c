@@ -51,7 +51,7 @@ static _Atomic(uint64_t) g_heap_id_cursor = 0;
 td_heap_t* td_heap_registry[TD_HEAP_REGISTRY_SIZE];
 
 /* Pending-merge queue head (lock-free LIFO) */
-td_heap_t* td_heap_pending_merge = NULL;
+_Atomic(td_heap_t*) td_heap_pending_merge = NULL;
 
 static int heap_id_acquire(void) {
     uint64_t start = atomic_fetch_add_explicit(&g_heap_id_cursor, 1,
@@ -1150,9 +1150,9 @@ void td_heap_push_pending(td_heap_t* heap) {
     /* Unregister so no new foreign blocks target this heap */
     td_heap_registry[heap->id % TD_HEAP_REGISTRY_SIZE] = NULL;
     /* Lock-free push: CAS loop on global LIFO head */
-    heap->pending_next = td_heap_pending_merge;
+    heap->pending_next = atomic_load_explicit(&td_heap_pending_merge, memory_order_relaxed);
     while (!atomic_compare_exchange_weak_explicit(
-            (_Atomic(td_heap_t*)*)&td_heap_pending_merge,
+            &td_heap_pending_merge,
             &heap->pending_next, heap,
             memory_order_release, memory_order_relaxed))
         ;
@@ -1161,7 +1161,7 @@ void td_heap_push_pending(td_heap_t* heap) {
 void td_heap_drain_pending(void) {
     /* Atomically steal the entire pending list */
     td_heap_t* pending = atomic_exchange_explicit(
-        (_Atomic(td_heap_t*)*)&td_heap_pending_merge, NULL,
+        &td_heap_pending_merge, NULL,
         memory_order_acquire);
     while (pending) {
         td_heap_t* next = pending->pending_next;

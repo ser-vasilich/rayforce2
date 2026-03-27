@@ -112,6 +112,7 @@ static int32_t find_local(compiler_t *c, int64_t sym_id) {
 }
 
 static int32_t add_local(compiler_t *c, int64_t sym_id) {
+    if (c->n_locals >= 256) return -1;
     int32_t slot = c->n_locals;
     c->locals[c->n_locals].sym_id = sym_id;
     c->locals[c->n_locals].slot = slot;
