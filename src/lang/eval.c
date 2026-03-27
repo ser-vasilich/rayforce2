@@ -1359,8 +1359,7 @@ static td_t* ray_xbar(td_t* col, td_t* bucket) {
         double b = bucket->type == TD_ATOM_F64 ? bucket->f64 : (double)bucket->i64;
         if (b == 0.0) return TD_ERR_PTR(TD_ERR_DOMAIN);
         /* Floor division for correct negative bucketing */
-        double q = c / b;
-        double fq = q >= 0 ? (double)(int64_t)q : (q == (double)(int64_t)q ? q : (double)((int64_t)q - 1));
+        double fq = floor(c / b);
         return make_f64(fq * b);
     }
     return TD_ERR_PTR(TD_ERR_TYPE);
@@ -2177,8 +2176,9 @@ static td_t* ray_write_file(td_t* path_obj, td_t* content) {
     if (!path || !data) return TD_ERR_PTR(TD_ERR_DOMAIN);
     FILE* fp = fopen(path, "wb");
     if (!fp) return TD_ERR_PTR(TD_ERR_IO);
-    fwrite(data, 1, len, fp);
+    size_t written = fwrite(data, 1, len, fp);
     fclose(fp);
+    if (written != len) return TD_ERR_PTR(TD_ERR_IO);
     return make_i64(0);
 }
 
@@ -2389,7 +2389,7 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
 
 #define DISPATCH() goto *dispatch[code[ip++]]
 #define PUSH(v)    do { if (vm.sp >= VM_STACK_SIZE) goto vm_error; vm.ps[vm.sp++] = (v); } while(0)
-#define POP()      (vm.sp > 0 ? vm.ps[--vm.sp] : (td_t*)NULL)
+#define POP()      ({ if (vm.sp <= 0) goto vm_error; vm.ps[--vm.sp]; })
 #define PEEK()     (vm.ps[vm.sp - 1])
 #define LOCAL(s)   (vm.ps[vm.fp + (s)])
 
@@ -2867,12 +2867,12 @@ static void td_register_builtins(void) {
     register_binary("*",   TD_FN_ATOMIC, ray_mul);
     register_binary("/",   TD_FN_ATOMIC, ray_div);
     register_binary("%",   TD_FN_ATOMIC, ray_mod);
-    register_binary(">",   TD_FN_NONE,   ray_gt);
-    register_binary("<",   TD_FN_NONE,   ray_lt);
-    register_binary(">=",  TD_FN_NONE,   ray_gte);
-    register_binary("<=",  TD_FN_NONE,   ray_lte);
-    register_binary("==",  TD_FN_NONE,   ray_eq);
-    register_binary("!=",  TD_FN_NONE,   ray_neq);
+    register_binary(">",   TD_FN_ATOMIC, ray_gt);
+    register_binary("<",   TD_FN_ATOMIC, ray_lt);
+    register_binary(">=",  TD_FN_ATOMIC, ray_gte);
+    register_binary("<=",  TD_FN_ATOMIC, ray_lte);
+    register_binary("==",  TD_FN_ATOMIC, ray_eq);
+    register_binary("!=",  TD_FN_ATOMIC, ray_neq);
     register_binary("and", TD_FN_NONE,   ray_and);
     register_binary("or",  TD_FN_NONE,   ray_or);
     register_unary("not",  TD_FN_NONE,   ray_not);
