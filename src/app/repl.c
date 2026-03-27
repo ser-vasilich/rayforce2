@@ -310,6 +310,7 @@ static void eval_and_print(td_term_t* term, const char* input,
 
     if (TD_IS_ERR(result)) {
         repl_print_result(stdout, result, use_color);
+        fflush(stdout);
     } else if (result) {
         repl_print_result(stdout, result, use_color);
         fflush(stdout);

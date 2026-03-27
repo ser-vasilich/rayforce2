@@ -1340,6 +1340,7 @@ static void td_term_search_redraw(td_term_t* term) {
         }
     }
     printf("\033[J");
+    fflush(stdout);
 
     /* Write search prompt: (search) `query`: matched_entry */
     write(STDOUT_FILENO, SEARCH_PROMPT, SEARCH_PROMPT_LEN);
