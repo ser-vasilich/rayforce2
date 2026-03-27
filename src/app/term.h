@@ -81,6 +81,11 @@ typedef struct td_term {
     char     search_buf[256];
     int32_t  search_len;
     int32_t  search_match_idx;
+    /* Ghost text (inline completion suggestion) */
+    char     ghost[TERM_BUF_SIZE];
+    int32_t  ghost_len;
+    int32_t  ghost_word_start; /* position in buf where the completed word starts */
+    int32_t  ghost_word_len;   /* length of the prefix that was matched */
 } td_term_t;
 
 td_term_t* td_term_create(void);

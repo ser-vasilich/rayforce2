@@ -637,6 +637,70 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
     return n;
 }
 
+/* ===== Ghost text (inline completion) ===== */
+
+/* Find the start of the word at/before the cursor */
+static int32_t find_word_start(const char* buf, int32_t pos) {
+    int32_t i = pos;
+    while (i > 0 && is_alphanum(buf[i - 1]))
+        i--;
+    return i;
+}
+
+/* Compute ghost text suggestion based on the word at cursor.
+ * Sets term->ghost, ghost_len, ghost_word_start, ghost_word_len.
+ * Ghost text is the REMAINING part of the best match (after the typed prefix). */
+static void td_term_update_ghost(td_term_t* term) {
+    term->ghost_len = 0;
+
+    /* Only show ghost at end of buffer or end of a word */
+    if (term->buf_pos != term->buf_len)
+        return;
+    if (term->buf_len == 0)
+        return;
+
+    /* Extract word before cursor */
+    int32_t ws = find_word_start(term->buf, term->buf_pos);
+    int32_t wlen = term->buf_pos - ws;
+    if (wlen <= 0)
+        return;
+
+    /* Look up completions */
+    const char* results[64];
+    int64_t count = td_env_lookup_prefix(term->buf + ws, (int64_t)wlen,
+                                          results, 64);
+    if (count <= 0)
+        return;
+
+    /* Use the first (alphabetically) match */
+    const char* match = results[0];
+    int32_t mlen = (int32_t)strlen(match);
+    if (mlen <= wlen)
+        return; /* already fully typed */
+
+    /* Ghost = the remaining characters */
+    int32_t remaining = mlen - wlen;
+    if (remaining >= TERM_BUF_SIZE)
+        remaining = TERM_BUF_SIZE - 1;
+    memcpy(term->ghost, match + wlen, (size_t)remaining);
+    term->ghost_len = remaining;
+    term->ghost_word_start = ws;
+    term->ghost_word_len = wlen;
+}
+
+/* Accept ghost text into the buffer */
+static void td_term_accept_ghost(td_term_t* term) {
+    if (term->ghost_len <= 0)
+        return;
+    if (term->buf_len + term->ghost_len >= TERM_BUF_SIZE)
+        return;
+
+    memcpy(term->buf + term->buf_len, term->ghost, (size_t)term->ghost_len);
+    term->buf_len += term->ghost_len;
+    term->buf_pos = term->buf_len;
+    term->ghost_len = 0;
+}
+
 /* ===== Prompt ===== */
 
 #define PROMPT_STR "teide> "
@@ -651,6 +715,9 @@ void td_term_prompt(td_term_t* term) {
 
 void td_term_redraw(td_term_t* term) {
     int32_t total_width;
+
+    /* Recompute ghost text on every redraw */
+    td_term_update_ghost(term);
 
     td_cursor_hide();
     td_term_get_size(term);
@@ -692,11 +759,28 @@ void td_term_redraw(td_term_t* term) {
                                         term->buf, term->buf_len,
                                         match_pos1, match_pos2);
         }
+        /* Append ghost text in gray after buffer content */
+        if (term->ghost_len > 0 && term->buf_pos == term->buf_len) {
+            const char* g_pre = CLR_GRAY;
+            const char* g_post = CLR_RESET;
+            int32_t g_pre_len = (int32_t)strlen(g_pre);
+            int32_t g_post_len = (int32_t)strlen(g_post);
+            if (hlen + g_pre_len + term->ghost_len + g_post_len < (int32_t)sizeof(hlbuf)) {
+                memcpy(hlbuf + hlen, g_pre, (size_t)g_pre_len);
+                hlen += g_pre_len;
+                memcpy(hlbuf + hlen, term->ghost, (size_t)term->ghost_len);
+                hlen += term->ghost_len;
+                memcpy(hlbuf + hlen, g_post, (size_t)g_post_len);
+                hlen += g_post_len;
+            }
+        }
         write(STDOUT_FILENO, hlbuf, (size_t)hlen);
     }
 
-    /* Track rows used */
-    total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
+    /* Track rows used — include ghost text width for row calculation */
+    int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
+                        ? term->ghost_len : 0;
+    total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len) + ghost_vis;
     if (term->term_width > 0) {
         term->last_total_rows = (total_width + term->term_width - 1) / term->term_width;
         if (term->last_total_rows == 0)
@@ -884,6 +968,10 @@ td_t* td_term_read(td_term_t* term) {
                 td_term_goto_position(term, term->buf_pos, next);
                 term->buf_pos = next;
                 fflush(stdout);
+            } else if (term->ghost_len > 0) {
+                /* Accept ghost text at end of line */
+                td_term_accept_ghost(term);
+                td_term_redraw(term);
             }
             continue;
         }
@@ -1094,9 +1182,15 @@ td_t* td_term_read(td_term_t* term) {
             continue;
         }
 
-        case KEYCODE_TAB:
-            /* Autocomplete — will be wired in Phase 4 */
+        case KEYCODE_TAB: {
+            /* Accept ghost text if available */
+            if (term->ghost_len > 0) {
+                td_term_accept_ghost(term);
+                td_term_update_ghost(term);
+                td_term_redraw(term);
+            }
             continue;
+        }
 
         default: {
             /* Printable character insert */
@@ -1110,13 +1204,8 @@ td_t* td_term_read(td_term_t* term) {
                 term->buf_pos++;
                 term->buf_len++;
 
-                if (term->buf_pos == term->buf_len) {
-                    /* Append at end — just write the char */
-                    write(STDOUT_FILENO, &key, 1);
-                    fflush(stdout);
-                } else {
-                    td_term_redraw(term);
-                }
+                /* Always do full redraw to show ghost text */
+                td_term_redraw(term);
             }
             continue;
         }

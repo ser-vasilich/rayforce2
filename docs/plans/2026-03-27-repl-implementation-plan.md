@@ -234,19 +234,19 @@ Reference: `/home/hetoku/data/work/rayforce/app/term.c` lines 930-1055 (`term_hi
 
 **Files:** Modify `src/app/term.c`
 
-- [ ] After each keystroke (in `td_term_read` loop, after redraw):
+- [x] After each keystroke (in `td_term_read` loop, after redraw):
   - Extract word under/before cursor (scan backward for word start)
   - Call `td_env_lookup_prefix(word, word_len, results, 64)`
   - Also scan keywords, column names (if in select context), history words
   - If exactly 1 match and it's longer than what's typed: render remainder as gray ghost text after cursor
   - If 0 matches: no ghost text
   - If 2+ matches: show ghost text for first match
-- [ ] Ghost text rendering: append `"\033[90m<rest>\033[0m"` in the redraw output after cursor position, but do NOT modify `buf`
-- [ ] Right arrow at end of line: accept ghost text (copy remainder into buf)
-- [ ] Tab with 1 match: accept ghost text into buf
-- [ ] Any other keystroke: ghost text recalculates
-- [ ] Smoke test: type `sel` → ghost shows `ect` grayed out, Tab completes to `select`
-- [ ] Commit: `feat(repl): inline ghost text suggestions`
+- [x] Ghost text rendering: append `"\033[90m<rest>\033[0m"` in the redraw output after cursor position, but do NOT modify `buf`
+- [x] Right arrow at end of line: accept ghost text (copy remainder into buf)
+- [x] Tab with 1 match: accept ghost text into buf
+- [x] Any other keystroke: ghost text recalculates
+- [x] Smoke test: type `sel` → ghost shows `ect` grayed out, Tab completes to `select`
+- [x] Commit: `feat(repl): inline ghost text suggestions`
 
 ---
 
