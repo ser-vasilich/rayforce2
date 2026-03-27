@@ -1188,6 +1188,7 @@ void td_term_redraw(td_term_t* term) {
                 hlen += g_post_len;
             }
         }
+        fflush(stdout);
         write(STDOUT_FILENO, hlbuf, (size_t)hlen);
     }
 
@@ -1332,10 +1333,11 @@ td_t* td_term_read(td_term_t* term) {
                         }
                         continue;
                     default:
-                        /* Consume remaining bytes of unknown CSI sequence */
+                        /* Consume remaining bytes of unknown CSI sequence (max 8) */
                         { char discard;
                           if (!((seq[1] >= 0x40 && seq[1] <= 0x7E))) {
-                              while (read(STDIN_FILENO, &discard, 1) == 1) {
+                              for (int csi_i = 0; csi_i < 8; csi_i++) {
+                                  if (read(STDIN_FILENO, &discard, 1) != 1) break;
                                   if (discard >= 0x40 && discard <= 0x7E) break;
                               }
                           }
