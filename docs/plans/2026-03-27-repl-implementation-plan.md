@@ -82,19 +82,19 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Modify `src/lang/repl.c`; Create `src/app/repl.h`, `src/app/repl.c`
 
-- [ ] Create `src/app/repl.h`:
+- [x] Create `src/app/repl.h`:
   - `td_repl_t` struct: `td_term_t* term`
   - `td_repl_create()`, `td_repl_destroy()`, `td_repl_run()`, `td_repl_run_file()`
-- [ ] Create `src/app/repl.c`:
+- [x] Create `src/app/repl.c`:
   - `td_repl_create()` — allocate struct, `td_term_create()` if `isatty(STDIN_FILENO)`, NULL otherwise
   - `td_repl_run()` — if terminal: prompt loop with `td_term_read()` → `td_eval_str()` → `td_lang_print()`. If piped: read chunks with `read()`, eval, print
   - `td_repl_run_file()` — read file, eval (keep existing logic from `run_file`)
   - `td_repl_destroy()` — `td_term_destroy()`, free struct
-- [ ] Update `src/lang/repl.c` (main binary):
+- [x] Update `src/lang/repl.c` (main binary):
   - Strip out `run_repl()` and `run_file()` implementations
   - Replace with: `td_repl_create()` → `td_repl_run()` or `td_repl_run_file()` → `td_repl_destroy()`
-- [ ] Build and smoke test: `./build/teide_repl` — interactive editing works, `echo '(+ 1 2)' | ./build/teide_repl` → `3`
-- [ ] Commit: `feat(repl): wire REPL to new terminal layer, separate app/repl module`
+- [x] Build and smoke test: `./build/teide_repl` — interactive editing works, `echo '(+ 1 2)' | ./build/teide_repl` → `3`
+- [x] Commit: `feat(repl): wire REPL to new terminal layer, separate app/repl module`
 
 ---
 
