@@ -177,19 +177,19 @@ cd build && ctest --output-on-failure
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_lambda` — `(do (set double (fn [x] (* x 2))) (double 5))` → i64 10
   - `test_eval_lambda_multi` — `(do (set add3 (fn [a b c] (+ a (+ b c)))) (add3 1 2 3))` → i64 6
   - `test_eval_lambda_let` — `(do (set f (fn [a b] (let c (+ a b)) (+ c 1))) (f 3 4))` → i64 8
-- [ ] Implement `ray_fn` (`FN_SPECIAL_FORM, TD_VARY`):
+- [x] Implement `ray_fn` (`FN_SPECIAL_FORM, TD_VARY`):
   - First arg is vector of param names (symbols)
   - Remaining args are body expressions
   - Creates `TD_LAMBDA` object (stores args list + body)
-- [ ] Implement lambda call in `td_eval()`:
+- [x] Implement lambda call in `td_eval()`:
   - When head evals to `TD_ATOM_LAMBDA`: bind args into local env frame, eval body
   - Local env frames: push/pop stack for lexical scoping
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): lambda functions with lexical binding`
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): lambda functions with lexical binding`
 
 ---
 

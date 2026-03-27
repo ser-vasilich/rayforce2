@@ -301,6 +301,42 @@ static MunitResult test_eval_let(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: eval lambda ---- */
+static MunitResult test_eval_lambda(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (set double (fn [x] (* x 2))) (double 5))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 10);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval lambda with multiple params ---- */
+static MunitResult test_eval_lambda_multi(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (set add3 (fn [a b c] (+ a (+ b c)))) (add3 1 2 3))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 6);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: eval lambda with let in body ---- */
+static MunitResult test_eval_lambda_let(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(do (set f (fn [a b] (let c (+ a b)) (+ c 1))) (f 3 4))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 8);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -326,6 +362,9 @@ static MunitTest lang_tests[] = {
     { "/eval/if_true",      test_eval_if_true,      lang_setup, lang_teardown, 0, NULL },
     { "/eval/if_false",     test_eval_if_false,     lang_setup, lang_teardown, 0, NULL },
     { "/eval/let",          test_eval_let,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/lambda",       test_eval_lambda,       lang_setup, lang_teardown, 0, NULL },
+    { "/eval/lambda_multi", test_eval_lambda_multi, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/lambda_let",   test_eval_lambda_let,   lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

@@ -186,6 +186,80 @@ static td_t* ray_do(td_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * Lambda functions
+ * ══════════════════════════════════════════ */
+
+/* (fn [params...] body...) — create a lambda object.
+ * Stores params list and body expressions in data area. */
+static td_t* ray_fn(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    /* args[0] = param vector (list of name symbols), args[1..n-1] = body exprs */
+    td_t* params_list = args[0];
+
+    /* Create lambda object with space for params + body pointers */
+    td_t* lambda = td_alloc(2 * sizeof(td_t*));
+    if (!lambda) return TD_ERR_PTR(TD_ERR_OOM);
+    lambda->type = TD_ATOM_LAMBDA;
+    lambda->attrs = 0;
+    lambda->len = 0;
+
+    /* Store params list */
+    td_retain(params_list);
+    ((td_t**)td_data(lambda))[0] = params_list;
+
+    /* Build body list: wrap body expressions in a TD_LIST */
+    int64_t body_count = n - 1;
+    td_t* body = td_alloc(body_count * sizeof(td_t*));
+    if (!body) {
+        td_release(params_list);
+        td_release(lambda);
+        return TD_ERR_PTR(TD_ERR_OOM);
+    }
+    body->type = TD_LIST;
+    body->len = body_count;
+    td_t** body_elems = (td_t**)td_data(body);
+    for (int64_t i = 0; i < body_count; i++) {
+        td_retain(args[i + 1]);
+        body_elems[i] = args[i + 1];
+    }
+    ((td_t**)td_data(lambda))[1] = body;
+
+    return lambda;
+}
+
+/* Call a lambda: bind args, eval body, return last result. */
+static td_t* call_lambda(td_t* lambda, td_t** call_args, int64_t argc) {
+    td_t* params_list = ((td_t**)td_data(lambda))[0];
+    td_t* body = ((td_t**)td_data(lambda))[1];
+
+    int64_t param_count = td_len(params_list);
+    td_t** param_syms = (td_t**)td_data(params_list);
+
+    td_env_push_scope();
+
+    /* Bind parameters to argument values */
+    for (int64_t i = 0; i < param_count && i < argc; i++) {
+        td_env_set_local(param_syms[i]->i64, call_args[i]);
+    }
+
+    /* Eval body expressions in sequence, return last */
+    int64_t body_count = td_len(body);
+    td_t** body_exprs = (td_t**)td_data(body);
+    td_t* result = NULL;
+    for (int64_t i = 0; i < body_count; i++) {
+        if (result) td_release(result);
+        result = td_eval(body_exprs[i]);
+        if (TD_IS_ERR(result)) {
+            td_env_pop_scope();
+            return result;
+        }
+    }
+
+    td_env_pop_scope();
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -232,6 +306,7 @@ static void td_register_builtins(void) {
     register_binary("let", TD_FN_SPECIAL_FORM, ray_let);
     register_vary("if",    TD_FN_SPECIAL_FORM, ray_cond);
     register_vary("do",    TD_FN_SPECIAL_FORM, ray_do);
+    register_vary("fn",    TD_FN_SPECIAL_FORM, ray_fn);
 }
 
 /* ══════════════════════════════════════════
@@ -329,6 +404,22 @@ td_t* td_eval(td_t* obj) {
             td_release(head);
             td_t* result = fn(args, argc);
             for (int64_t i = 0; i < argc; i++) td_release(args[i]);
+            return result;
+        }
+        case TD_ATOM_LAMBDA: {
+            int64_t argc = n - 1;
+            td_t* args[64];
+            for (int64_t i = 0; i < argc && i < 64; i++) {
+                args[i] = td_eval(elems[i + 1]);
+                if (TD_IS_ERR(args[i])) {
+                    for (int64_t j = 0; j < i; j++) td_release(args[j]);
+                    td_release(head);
+                    return args[i];
+                }
+            }
+            td_t* result = call_lambda(head, args, argc);
+            for (int64_t i = 0; i < argc; i++) td_release(args[i]);
+            td_release(head);
             return result;
         }
         default:
