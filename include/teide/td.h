@@ -150,6 +150,9 @@ extern "C" {
 /* AST name flag (distinguishes symbol literal from variable reference) */
 #define TD_ATTR_NAME        0x20  /* td_t SYM atom with this flag = name reference */
 
+/* Vector literal flag (distinguishes [x y z] data from (f x y) calls in TD_LIST) */
+#define TD_ATTR_VECTOR      0x01  /* TD_LIST with this flag = data vector, not call */
+
 /* Function type signatures (use union td_t since td_t typedef comes later) */
 typedef union td_t* (*td_unary_fn)(union td_t*);
 typedef union td_t* (*td_binary_fn)(union td_t*, union td_t*);

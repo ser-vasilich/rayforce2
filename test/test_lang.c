@@ -412,6 +412,112 @@ static MunitResult test_eval_raise(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: vector + scalar auto-mapping ---- */
+static MunitResult test_eval_vector_add(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(+ [1 2 3] 10)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 11);
+    munit_assert_int(elems[1]->i64, ==, 12);
+    munit_assert_int(elems[2]->i64, ==, 13);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: vector + vector auto-mapping ---- */
+static MunitResult test_eval_vector_add_vec(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(+ [1 2 3] [4 5 6])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 5);
+    munit_assert_int(elems[1]->i64, ==, 7);
+    munit_assert_int(elems[2]->i64, ==, 9);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: sum aggregation ---- */
+static MunitResult test_eval_sum(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(sum [1 2 3 4 5])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 15);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: count ---- */
+static MunitResult test_eval_count(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(count [1 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 3);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: avg ---- */
+static MunitResult test_eval_avg(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(avg [2 4 6])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_F64);
+    munit_assert_double(result->f64, ==, 4.0);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: min/max ---- */
+static MunitResult test_eval_min_max(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* mn = td_eval_str("(min [5 2 8])");
+    munit_assert_ptr_not_null(mn);
+    munit_assert_false(TD_IS_ERR(mn));
+    munit_assert_int(mn->type, ==, TD_ATOM_I64);
+    munit_assert_int(mn->i64, ==, 2);
+    td_release(mn);
+
+    td_t* mx = td_eval_str("(max [5 2 8])");
+    munit_assert_ptr_not_null(mx);
+    munit_assert_false(TD_IS_ERR(mx));
+    munit_assert_int(mx->type, ==, TD_ATOM_I64);
+    munit_assert_int(mx->i64, ==, 8);
+    td_release(mx);
+    return MUNIT_OK;
+}
+
+/* ---- Test: first/last ---- */
+static MunitResult test_eval_first_last(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* f = td_eval_str("(first [1 2 3])");
+    munit_assert_ptr_not_null(f);
+    munit_assert_false(TD_IS_ERR(f));
+    munit_assert_int(f->type, ==, TD_ATOM_I64);
+    munit_assert_int(f->i64, ==, 1);
+    td_release(f);
+
+    td_t* l = td_eval_str("(last [1 2 3])");
+    munit_assert_ptr_not_null(l);
+    munit_assert_false(TD_IS_ERR(l));
+    munit_assert_int(l->type, ==, TD_ATOM_I64);
+    munit_assert_int(l->i64, ==, 3);
+    td_release(l);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -446,6 +552,13 @@ static MunitTest lang_tests[] = {
     { "/vm/loop",           test_vm_loop,           lang_setup, lang_teardown, 0, NULL },
     { "/eval/try",          test_eval_try,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/raise",        test_eval_raise,        lang_setup, lang_teardown, 0, NULL },
+    { "/eval/vector_add",      test_eval_vector_add,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/vector_add_vec",  test_eval_vector_add_vec,  lang_setup, lang_teardown, 0, NULL },
+    { "/eval/sum",             test_eval_sum,             lang_setup, lang_teardown, 0, NULL },
+    { "/eval/count",           test_eval_count,           lang_setup, lang_teardown, 0, NULL },
+    { "/eval/avg",             test_eval_avg,             lang_setup, lang_teardown, 0, NULL },
+    { "/eval/min_max",         test_eval_min_max,         lang_setup, lang_teardown, 0, NULL },
+    { "/eval/first_last",      test_eval_first_last,      lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

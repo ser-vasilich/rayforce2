@@ -156,6 +156,7 @@ static td_t* parse_vector(td_parser_t *p) {
     p->pos++; /* skip [ */
     td_t* list = td_list_new(8);
     if (TD_IS_ERR(list)) return list;
+    list->attrs |= TD_ATTR_VECTOR;
 
     skip_ws_and_comments(p);
     while (*p->pos && *p->pos != ']') {

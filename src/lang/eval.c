@@ -181,6 +181,220 @@ static td_t* ray_try(td_t* expr, td_t* handler_expr) {
 }
 
 /* ══════════════════════════════════════════
+ * FN_ATOMIC auto-mapping helpers
+ * ══════════════════════════════════════════ */
+
+static int is_list(td_t* x) {
+    return x && !TD_IS_ERR(x) && x->type == TD_LIST;
+}
+
+/* Map a binary function element-wise over lists.
+ * Both args can be lists (zip-map) or one scalar (broadcast). */
+static td_t* atomic_map_binary(td_binary_fn fn, td_t* left, td_t* right) {
+    int left_list = is_list(left);
+    int right_list = is_list(right);
+
+    if (!left_list && !right_list) return fn(left, right);
+
+    int64_t len;
+    if (left_list && right_list) {
+        len = td_len(left) < td_len(right) ? td_len(left) : td_len(right);
+    } else {
+        len = left_list ? td_len(left) : td_len(right);
+    }
+
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    td_t** le = left_list ? (td_t**)td_data(left) : NULL;
+    td_t** re = right_list ? (td_t**)td_data(right) : NULL;
+
+    for (int64_t i = 0; i < len; i++) {
+        td_t* a = left_list ? le[i] : left;
+        td_t* b = right_list ? re[i] : right;
+        td_t* elem = fn(a, b);
+        if (TD_IS_ERR(elem)) {
+            for (int64_t j = 0; j < i; j++) td_release(out[j]);
+            td_release(result);
+            return elem;
+        }
+        out[i] = elem;
+    }
+    return result;
+}
+
+/* Map a unary function element-wise over a list. */
+static td_t* atomic_map_unary(td_unary_fn fn, td_t* arg) {
+    if (!is_list(arg)) return fn(arg);
+
+    int64_t len = td_len(arg);
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    td_t** elems = (td_t**)td_data(arg);
+
+    for (int64_t i = 0; i < len; i++) {
+        td_t* elem = fn(elems[i]);
+        if (TD_IS_ERR(elem)) {
+            for (int64_t j = 0; j < i; j++) td_release(out[j]);
+            td_release(result);
+            return elem;
+        }
+        out[i] = elem;
+    }
+    return result;
+}
+
+/* ══════════════════════════════════════════
+ * Aggregation builtins
+ * ══════════════════════════════════════════ */
+
+static td_t* ray_sum(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return make_i64(0);
+    td_t** elems = (td_t**)td_data(x);
+    int has_float = 0;
+    double fsum = 0.0;
+    int64_t isum = 0;
+    for (int64_t i = 0; i < len; i++) {
+        if (elems[i]->type == TD_ATOM_F64) { has_float = 1; fsum += elems[i]->f64; }
+        else if (elems[i]->type == TD_ATOM_I64) { isum += elems[i]->i64; fsum += (double)elems[i]->i64; }
+        else return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+    return has_float ? make_f64(fsum) : make_i64(isum);
+}
+
+static td_t* ray_count(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    return make_i64(td_len(x));
+}
+
+static td_t* ray_avg(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** elems = (td_t**)td_data(x);
+    double sum = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        if (!is_numeric(elems[i])) return TD_ERR_PTR(TD_ERR_TYPE);
+        sum += as_f64(elems[i]);
+    }
+    return make_f64(sum / (double)len);
+}
+
+static td_t* ray_min(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** elems = (td_t**)td_data(x);
+    if (!is_numeric(elems[0])) return TD_ERR_PTR(TD_ERR_TYPE);
+    int has_float = elems[0]->type == TD_ATOM_F64;
+    double fmin = as_f64(elems[0]);
+    int64_t imin = elems[0]->type == TD_ATOM_I64 ? elems[0]->i64 : 0;
+    for (int64_t i = 1; i < len; i++) {
+        if (!is_numeric(elems[i])) return TD_ERR_PTR(TD_ERR_TYPE);
+        if (elems[i]->type == TD_ATOM_F64) has_float = 1;
+        double v = as_f64(elems[i]);
+        if (v < fmin) { fmin = v; imin = elems[i]->type == TD_ATOM_I64 ? elems[i]->i64 : 0; }
+    }
+    return has_float ? make_f64(fmin) : make_i64(imin);
+}
+
+static td_t* ray_max(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** elems = (td_t**)td_data(x);
+    if (!is_numeric(elems[0])) return TD_ERR_PTR(TD_ERR_TYPE);
+    int has_float = elems[0]->type == TD_ATOM_F64;
+    double fmax = as_f64(elems[0]);
+    int64_t imax = elems[0]->type == TD_ATOM_I64 ? elems[0]->i64 : 0;
+    for (int64_t i = 1; i < len; i++) {
+        if (!is_numeric(elems[i])) return TD_ERR_PTR(TD_ERR_TYPE);
+        if (elems[i]->type == TD_ATOM_F64) has_float = 1;
+        double v = as_f64(elems[i]);
+        if (v > fmax) { fmax = v; imax = elems[i]->type == TD_ATOM_I64 ? elems[i]->i64 : 0; }
+    }
+    return has_float ? make_f64(fmax) : make_i64(imax);
+}
+
+static td_t* ray_first(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    if (td_len(x) == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* elem = ((td_t**)td_data(x))[0];
+    td_retain(elem);
+    return elem;
+}
+
+static td_t* ray_last(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t* elem = ((td_t**)td_data(x))[len - 1];
+    td_retain(elem);
+    return elem;
+}
+
+static td_t* ray_med(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** elems = (td_t**)td_data(x);
+    /* Allocate scratch as a td_t vector to use td_release for cleanup */
+    td_t* scratch = td_alloc(len * sizeof(double));
+    if (!scratch) return TD_ERR_PTR(TD_ERR_OOM);
+    scratch->type = TD_F64;
+    scratch->len = len;
+    double* vals = (double*)td_data(scratch);
+    for (int64_t i = 0; i < len; i++) {
+        if (!is_numeric(elems[i])) { td_release(scratch); return TD_ERR_PTR(TD_ERR_TYPE); }
+        vals[i] = as_f64(elems[i]);
+    }
+    /* Insertion sort */
+    for (int64_t i = 1; i < len; i++) {
+        double key = vals[i];
+        int64_t j = i - 1;
+        while (j >= 0 && vals[j] > key) { vals[j + 1] = vals[j]; j--; }
+        vals[j + 1] = key;
+    }
+    double median;
+    if (len % 2 == 1) median = vals[len / 2];
+    else median = (vals[len / 2 - 1] + vals[len / 2]) / 2.0;
+    td_release(scratch);
+    return make_f64(median);
+}
+
+static td_t* ray_dev(td_t* x) {
+    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(x);
+    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    td_t** elems = (td_t**)td_data(x);
+    double sum = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        if (!is_numeric(elems[i])) return TD_ERR_PTR(TD_ERR_TYPE);
+        sum += as_f64(elems[i]);
+    }
+    double mean = sum / (double)len;
+    double var = 0.0;
+    for (int64_t i = 0; i < len; i++) {
+        double d = as_f64(elems[i]) - mean;
+        var += d * d;
+    }
+    /* Use sqrt approximation — no math.h dependency */
+    double s = var / (double)len;
+    /* Newton's method for sqrt */
+    if (s == 0.0) return make_f64(0.0);
+    double g = s;
+    for (int i = 0; i < 50; i++) g = (g + s / g) * 0.5;
+    return make_f64(g);
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -835,6 +1049,17 @@ static void td_register_builtins(void) {
     register_vary("do",    TD_FN_SPECIAL_FORM, ray_do);
     register_vary("fn",    TD_FN_SPECIAL_FORM, ray_fn);
 
+    /* Aggregation builtins */
+    register_unary("sum",   TD_FN_AGGR, ray_sum);
+    register_unary("count", TD_FN_AGGR, ray_count);
+    register_unary("avg",   TD_FN_AGGR, ray_avg);
+    register_unary("min",   TD_FN_AGGR, ray_min);
+    register_unary("max",   TD_FN_AGGR, ray_max);
+    register_unary("first", TD_FN_NONE, ray_first);
+    register_unary("last",  TD_FN_NONE, ray_last);
+    register_unary("med",   TD_FN_AGGR, ray_med);
+    register_unary("dev",   TD_FN_AGGR, ray_dev);
+
     /* Error handling */
     register_unary("raise", TD_FN_NONE, ray_raise);
     register_binary("try",  TD_FN_SPECIAL_FORM, ray_try);
@@ -881,6 +1106,27 @@ td_t* td_eval(td_t* obj) {
     /* Empty list */
     if (td_len(obj) == 0) { td_retain(obj); return obj; }
 
+    /* Vector literal [x y z]: evaluate each element, return as data list */
+    if (obj->attrs & TD_ATTR_VECTOR) {
+        int64_t len = td_len(obj);
+        td_t** src = (td_t**)td_data(obj);
+        td_t* result = td_alloc(len * sizeof(td_t*));
+        if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+        result->type = TD_LIST;
+        result->attrs = TD_ATTR_VECTOR;
+        result->len = len;
+        td_t** dst = (td_t**)td_data(result);
+        for (int64_t i = 0; i < len; i++) {
+            dst[i] = td_eval(src[i]);
+            if (TD_IS_ERR(dst[i])) {
+                for (int64_t j = 0; j < i; j++) td_release(dst[j]);
+                td_release(result);
+                return dst[i];
+            }
+        }
+        return result;
+    }
+
     /* List: evaluate first element, dispatch by type */
     td_t** elems = (td_t**)td_data(obj);
     td_t* head = td_eval(elems[0]);
@@ -892,17 +1138,23 @@ td_t* td_eval(td_t* obj) {
         case TD_ATOM_UNARY: {
             if (n < 2) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
             td_unary_fn fn = (td_unary_fn)(uintptr_t)head->i64;
+            uint8_t fn_attrs = head->attrs;
             td_t* arg = td_eval(elems[1]);
             td_release(head);
             if (TD_IS_ERR(arg)) return arg;
-            td_t* result = fn(arg);
+            td_t* result;
+            if ((fn_attrs & TD_FN_ATOMIC) && is_list(arg))
+                result = atomic_map_unary(fn, arg);
+            else
+                result = fn(arg);
             td_release(arg);
             return result;
         }
         case TD_ATOM_BINARY: {
             if (n < 3) { td_release(head); return TD_ERR_PTR(TD_ERR_DOMAIN); }
             td_binary_fn fn = (td_binary_fn)(uintptr_t)head->i64;
-            if (head->attrs & TD_FN_SPECIAL_FORM) {
+            uint8_t fn_attrs = head->attrs;
+            if (fn_attrs & TD_FN_SPECIAL_FORM) {
                 td_release(head);
                 return fn(elems[1], elems[2]);
             }
@@ -911,7 +1163,11 @@ td_t* td_eval(td_t* obj) {
             td_t* right = td_eval(elems[2]);
             if (TD_IS_ERR(right)) { td_release(head); td_release(left); return right; }
             td_release(head);
-            td_t* result = fn(left, right);
+            td_t* result;
+            if ((fn_attrs & TD_FN_ATOMIC) && (is_list(left) || is_list(right)))
+                result = atomic_map_binary(fn, left, right);
+            else
+                result = fn(left, right);
             td_release(left);
             td_release(right);
             return result;

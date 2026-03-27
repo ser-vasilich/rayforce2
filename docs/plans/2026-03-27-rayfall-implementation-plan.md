@@ -277,7 +277,7 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_vector_add` — `(+ [1 2 3] 10)` → vector [11 12 13], len 3
   - `test_eval_vector_add_vec` — `(+ [1 2 3] [4 5 6])` → vector [5 7 9]
   - `test_eval_sum` — `(sum [1 2 3 4 5])` → i64 15
@@ -285,12 +285,12 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
   - `test_eval_avg` — `(avg [2 4 6])` → f64 4.0
   - `test_eval_min_max` — `(min [5 2 8])` → i64 2, `(max [5 2 8])` → i64 8
   - `test_eval_first_last` — `(first [1 2 3])` → i64 1, `(last [1 2 3])` → i64 3
-- [ ] Implement `FN_ATOMIC` auto-mapping in eval dispatch:
+- [x] Implement `FN_ATOMIC` auto-mapping in eval dispatch:
   - If fn has `FN_ATOMIC` and any arg is a vector, map element-wise
   - Same logic as Rayforce's atomic dispatch
-- [ ] Implement aggregation builtins: `ray_sum`, `ray_avg`, `ray_min`, `ray_max`, `ray_count`, `ray_first`, `ray_last`, `ray_med`, `ray_dev`
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): FN_ATOMIC auto-mapping and aggregation builtins`
+- [x] Implement aggregation builtins: `ray_sum`, `ray_avg`, `ray_min`, `ray_max`, `ray_count`, `ray_first`, `ray_last`, `ray_med`, `ray_dev`
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): FN_ATOMIC auto-mapping and aggregation builtins`
 
 ---
 
