@@ -395,6 +395,239 @@ static td_t* ray_dev(td_t* x) {
 }
 
 /* ══════════════════════════════════════════
+ * Higher-order functions: map, pmap, fold, scan, filter, apply
+ * ══════════════════════════════════════════ */
+
+/* Helper: call a function object with 1 arg, returning result.
+ * Handles UNARY, BINARY, LAMBDA types. Does not release fn or arg. */
+static td_t* call_fn1(td_t* fn, td_t* arg) {
+    if (fn->type == TD_ATOM_UNARY) {
+        td_unary_fn f = (td_unary_fn)(uintptr_t)fn->i64;
+        return f(arg);
+    }
+    if (fn->type == TD_ATOM_LAMBDA) {
+        td_t* args[1] = { arg };
+        return call_lambda(fn, args, 1);
+    }
+    return TD_ERR_PTR(TD_ERR_TYPE);
+}
+
+/* Helper: call a function object with 2 args. Does not release fn or args. */
+static td_t* call_fn2(td_t* fn, td_t* a, td_t* b) {
+    if (fn->type == TD_ATOM_BINARY) {
+        td_binary_fn f = (td_binary_fn)(uintptr_t)fn->i64;
+        return f(a, b);
+    }
+    if (fn->type == TD_ATOM_LAMBDA) {
+        td_t* args[2] = { a, b };
+        return call_lambda(fn, args, 2);
+    }
+    if (fn->type == TD_ATOM_UNARY) {
+        /* Partial application not supported, just call with first arg */
+        td_unary_fn f = (td_unary_fn)(uintptr_t)fn->i64;
+        return f(a);
+    }
+    return TD_ERR_PTR(TD_ERR_TYPE);
+}
+
+/* (map fn val vec) — apply binary fn(val, elem) to each element of vec.
+ * Also supports (map fn vec) for unary mapping. */
+static td_t* ray_map(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* fn = args[0];
+
+    if (n == 2) {
+        /* Unary map: (map fn vec) */
+        td_t* vec = args[1];
+        if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+        int64_t len = td_len(vec);
+        td_t* result = td_alloc(len * sizeof(td_t*));
+        if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+        result->type = TD_LIST;
+        result->len = len;
+        td_t** out = (td_t**)td_data(result);
+        td_t** elems = (td_t**)td_data(vec);
+        for (int64_t i = 0; i < len; i++) {
+            out[i] = call_fn1(fn, elems[i]);
+            if (TD_IS_ERR(out[i])) {
+                for (int64_t j = 0; j < i; j++) td_release(out[j]);
+                td_release(result);
+                return out[i];
+            }
+        }
+        return result;
+    }
+
+    /* Binary map: (map fn val vec) — apply fn(val, elem) */
+    td_t* val = args[1];
+    td_t* vec = args[2];
+    if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    td_t** elems = (td_t**)td_data(vec);
+    for (int64_t i = 0; i < len; i++) {
+        out[i] = call_fn2(fn, val, elems[i]);
+        if (TD_IS_ERR(out[i])) {
+            for (int64_t j = 0; j < i; j++) td_release(out[j]);
+            td_release(result);
+            return out[i];
+        }
+    }
+    return result;
+}
+
+/* (pmap fn val vec) — same as map, parallel not implemented yet (sequential fallback) */
+static td_t* ray_pmap(td_t** args, int64_t n) {
+    return ray_map(args, n);
+}
+
+/* (fold fn vec) or (fold fn init vec) — reduce with binary fn */
+static td_t* ray_fold(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* fn = args[0];
+    td_t* vec;
+    td_t* acc;
+    int free_acc = 0;
+
+    if (n == 2) {
+        /* (fold fn vec) — use first element as initial value */
+        vec = args[1];
+        if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+        int64_t len = td_len(vec);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        td_t** elems = (td_t**)td_data(vec);
+        td_retain(elems[0]);
+        acc = elems[0];
+        for (int64_t i = 1; i < len; i++) {
+            td_t* next = call_fn2(fn, acc, elems[i]);
+            td_release(acc);
+            if (TD_IS_ERR(next)) return next;
+            acc = next;
+        }
+        return acc;
+    }
+
+    /* (fold fn init vec) */
+    td_retain(args[1]);
+    acc = args[1];
+    vec = args[2];
+    if (!is_list(vec)) { td_release(acc); return TD_ERR_PTR(TD_ERR_TYPE); }
+    int64_t len = td_len(vec);
+    td_t** elems = (td_t**)td_data(vec);
+    for (int64_t i = 0; i < len; i++) {
+        td_t* next = call_fn2(fn, acc, elems[i]);
+        td_release(acc);
+        if (TD_IS_ERR(next)) return next;
+        acc = next;
+    }
+    return acc;
+}
+
+/* (scan fn vec) — running fold, returns vector of partial results */
+static td_t* ray_scan(td_t** args, int64_t n) {
+    if (n < 2) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* fn = args[0];
+    td_t* vec = args[1];
+    if (!is_list(vec)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    if (len == 0) {
+        td_t* result = td_alloc(0);
+        if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+        result->type = TD_LIST;
+        result->len = 0;
+        return result;
+    }
+
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    td_t** elems = (td_t**)td_data(vec);
+
+    td_retain(elems[0]);
+    out[0] = elems[0];
+    for (int64_t i = 1; i < len; i++) {
+        out[i] = call_fn2(fn, out[i - 1], elems[i]);
+        if (TD_IS_ERR(out[i])) {
+            for (int64_t j = 0; j < i; j++) td_release(out[j]);
+            td_release(result);
+            return out[i];
+        }
+    }
+    return result;
+}
+
+/* (filter vec mask) — filter vector by boolean mask */
+static td_t* ray_filter(td_t* vec, td_t* mask) {
+    if (!is_list(vec) || !is_list(mask)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len = td_len(vec);
+    int64_t mlen = td_len(mask);
+    if (len != mlen) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t** velems = (td_t**)td_data(vec);
+    td_t** melems = (td_t**)td_data(mask);
+
+    /* Count true values */
+    int64_t count = 0;
+    for (int64_t i = 0; i < len; i++) {
+        if (melems[i]->type == TD_ATOM_BOOL && melems[i]->b8) count++;
+    }
+
+    td_t* result = td_alloc(count * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = count;
+    td_t** out = (td_t**)td_data(result);
+    int64_t j = 0;
+    for (int64_t i = 0; i < len; i++) {
+        if (melems[i]->type == TD_ATOM_BOOL && melems[i]->b8) {
+            td_retain(velems[i]);
+            out[j++] = velems[i];
+        }
+    }
+    return result;
+}
+
+/* (apply fn vec1 vec2) — zip-apply fn element-wise over two vectors */
+static td_t* ray_apply(td_t** args, int64_t n) {
+    if (n < 3) return TD_ERR_PTR(TD_ERR_DOMAIN);
+
+    td_t* fn = args[0];
+    td_t* vec1 = args[1];
+    td_t* vec2 = args[2];
+    if (!is_list(vec1) || !is_list(vec2)) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t len1 = td_len(vec1);
+    int64_t len2 = td_len(vec2);
+    int64_t len = len1 < len2 ? len1 : len2;
+
+    td_t* result = td_alloc(len * sizeof(td_t*));
+    if (!result) return TD_ERR_PTR(TD_ERR_OOM);
+    result->type = TD_LIST;
+    result->len = len;
+    td_t** out = (td_t**)td_data(result);
+    td_t** e1 = (td_t**)td_data(vec1);
+    td_t** e2 = (td_t**)td_data(vec2);
+
+    for (int64_t i = 0; i < len; i++) {
+        out[i] = call_fn2(fn, e1[i], e2[i]);
+        if (TD_IS_ERR(out[i])) {
+            for (int64_t j = 0; j < i; j++) td_release(out[j]);
+            td_release(result);
+            return out[i];
+        }
+    }
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Special forms: set, let, if, do
  * ══════════════════════════════════════════ */
 
@@ -1063,6 +1296,14 @@ static void td_register_builtins(void) {
     /* Error handling */
     register_unary("raise", TD_FN_NONE, ray_raise);
     register_binary("try",  TD_FN_SPECIAL_FORM, ray_try);
+
+    /* Higher-order functions */
+    register_vary("map",    TD_FN_NONE, ray_map);
+    register_vary("pmap",   TD_FN_NONE, ray_pmap);
+    register_vary("fold",   TD_FN_NONE, ray_fold);
+    register_vary("scan",   TD_FN_NONE, ray_scan);
+    register_binary("filter", TD_FN_NONE, ray_filter);
+    register_vary("apply",  TD_FN_NONE, ray_apply);
 }
 
 /* ══════════════════════════════════════════

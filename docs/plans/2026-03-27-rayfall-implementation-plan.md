@@ -298,21 +298,21 @@ Reference: `/home/hetoku/data/work/kdb/src/lang/vm.c`, `/home/hetoku/data/work/r
 
 **Files:** Modify `src/lang/eval.c`, `test/test_lang.c`
 
-- [ ] Add tests:
+- [x] Add tests:
   - `test_eval_map` — `(map + 1 [1 2 3])` → [2 3 4]
   - `test_eval_pmap` — `(pmap * 2 [1 2 3])` → [2 4 6]
   - `test_eval_fold` — `(fold + [1 2 3 4 5])` → i64 15
   - `test_eval_scan` — `(scan + [1 2 3 4 5])` → [1 3 6 10 15]
   - `test_eval_filter` — `(filter [1 2 3 4 5] [true false true false true])` → [1 3 5]
   - `test_eval_apply` — `(apply + [1 2] [3 4])` → [4 6]
-- [ ] Implement `ray_map` (`TD_VARY`) — apply fn to each element
-- [ ] Implement `ray_pmap` (`TD_VARY`) — parallel map (thread pool)
-- [ ] Implement `ray_fold` (`TD_VARY`) — reduce with fn
-- [ ] Implement `ray_scan` (`TD_VARY`) — running fold
-- [ ] Implement `ray_filter` (`TD_BINARY`) — filter by boolean mask
-- [ ] Implement `ray_apply` (`TD_VARY`) — zip-apply fn
-- [ ] Run tests: all pass
-- [ ] Commit: `feat(lang): higher-order functions (map, fold, scan, filter)`
+- [x] Implement `ray_map` (`TD_VARY`) — apply fn to each element
+- [x] Implement `ray_pmap` (`TD_VARY`) — parallel map (thread pool)
+- [x] Implement `ray_fold` (`TD_VARY`) — reduce with fn
+- [x] Implement `ray_scan` (`TD_VARY`) — running fold
+- [x] Implement `ray_filter` (`TD_BINARY`) — filter by boolean mask
+- [x] Implement `ray_apply` (`TD_VARY`) — zip-apply fn
+- [x] Run tests: all pass
+- [x] Commit: `feat(lang): higher-order functions (map, fold, scan, filter)`
 
 ---
 

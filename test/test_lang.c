@@ -518,6 +518,99 @@ static MunitResult test_eval_first_last(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Test: map with binary fn and value ---- */
+static MunitResult test_eval_map(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(map + 1 [1 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 2);
+    munit_assert_int(elems[1]->i64, ==, 3);
+    munit_assert_int(elems[2]->i64, ==, 4);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: pmap with binary fn and value ---- */
+static MunitResult test_eval_pmap(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(pmap * 2 [1 2 3])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 2);
+    munit_assert_int(elems[1]->i64, ==, 4);
+    munit_assert_int(elems[2]->i64, ==, 6);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: fold (reduce) ---- */
+static MunitResult test_eval_fold(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(fold + [1 2 3 4 5])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    munit_assert_int(result->i64, ==, 15);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: scan (running fold) ---- */
+static MunitResult test_eval_scan(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(scan + [1 2 3 4 5])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 5);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 3);
+    munit_assert_int(elems[2]->i64, ==, 6);
+    munit_assert_int(elems[3]->i64, ==, 10);
+    munit_assert_int(elems[4]->i64, ==, 15);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: filter by boolean mask ---- */
+static MunitResult test_eval_filter(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(filter [1 2 3 4 5] [true false true false true])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 3);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 1);
+    munit_assert_int(elems[1]->i64, ==, 3);
+    munit_assert_int(elems[2]->i64, ==, 5);
+    td_release(result);
+    return MUNIT_OK;
+}
+
+/* ---- Test: apply (zip-apply) ---- */
+static MunitResult test_eval_apply(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    td_t* result = td_eval_str("(apply + [1 2] [3 4])");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(TD_IS_ERR(result));
+    munit_assert_int(result->type, ==, TD_LIST);
+    munit_assert_int(td_len(result), ==, 2);
+    td_t** elems = (td_t**)td_data(result);
+    munit_assert_int(elems[0]->i64, ==, 4);
+    munit_assert_int(elems[1]->i64, ==, 6);
+    td_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Suite definition ---- */
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
@@ -559,6 +652,12 @@ static MunitTest lang_tests[] = {
     { "/eval/avg",             test_eval_avg,             lang_setup, lang_teardown, 0, NULL },
     { "/eval/min_max",         test_eval_min_max,         lang_setup, lang_teardown, 0, NULL },
     { "/eval/first_last",      test_eval_first_last,      lang_setup, lang_teardown, 0, NULL },
+    { "/eval/map",             test_eval_map,             lang_setup, lang_teardown, 0, NULL },
+    { "/eval/pmap",            test_eval_pmap,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/fold",            test_eval_fold,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/scan",            test_eval_scan,            lang_setup, lang_teardown, 0, NULL },
+    { "/eval/filter",          test_eval_filter,          lang_setup, lang_teardown, 0, NULL },
+    { "/eval/apply",           test_eval_apply,           lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
