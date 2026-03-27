@@ -13,11 +13,27 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#define hist_open(p, f, m)  _open((p), (f), (m))
+#define hist_read(fd, b, n) _read((fd), (b), (unsigned)(n))
+#define hist_write(fd, b, n) _write((fd), (b), (unsigned)(n))
+#define hist_close(fd)      _close(fd)
+#define hist_fstat(fd, st)  _fstat((fd), (st))
+typedef struct _stat hist_stat_t;
+#define HIST_PATH_SEP       '\\'
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#define hist_open(p, f, m)  open((p), (f), (m))
+#define hist_read(fd, b, n) read((fd), (b), (n))
+#define hist_write(fd, b, n) write((fd), (b), (n))
+#define hist_close(fd)      close(fd)
+#define hist_fstat(fd, st)  fstat((fd), (st))
+typedef struct stat hist_stat_t;
+#define HIST_PATH_SEP       '/'
 #endif
 
 /* Recover td_t* block pointer from a td_data() result pointer.
@@ -464,7 +480,7 @@ static void hist_build_path(char* out, int32_t out_size) {
     if (!home) home = getenv("USERPROFILE");
 #endif
     if (!home) home = ".";
-    snprintf(out, (size_t)out_size, "%s/%s", home, HIST_DEFAULT_PATH);
+    snprintf(out, (size_t)out_size, "%s%c%s", home, HIST_PATH_SEP, HIST_DEFAULT_PATH);
 }
 
 void td_hist_load(td_hist_t* hist, const char* path) {
@@ -474,13 +490,13 @@ void td_hist_load(td_hist_t* hist, const char* path) {
         path = pathbuf;
     }
 
-    int fd = open(path, O_RDONLY);
+    int fd = hist_open(path, O_RDONLY, 0);
     if (fd < 0) return;
 
     /* Get file size */
-    struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size == 0) {
-        close(fd);
+    hist_stat_t st;
+    if (hist_fstat(fd, &st) != 0 || st.st_size == 0) {
+        hist_close(fd);
         return;
     }
 
@@ -488,16 +504,16 @@ void td_hist_load(td_hist_t* hist, const char* path) {
     int64_t fsize = st.st_size;
     if (fsize > TERM_BUF_SIZE * 100) fsize = TERM_BUF_SIZE * 100; /* sanity cap */
     td_t* fbuf_block = td_alloc(fsize + 1);
-    if (!fbuf_block) { close(fd); return; }
+    if (!fbuf_block) { hist_close(fd); return; }
     char* fbuf = (char*)td_data(fbuf_block);
 
     int64_t total = 0;
     while (total < fsize) {
-        ssize_t n = read(fd, fbuf + total, (size_t)(fsize - total));
+        int64_t n = hist_read(fd, fbuf + total, (size_t)(fsize - total));
         if (n <= 0) break;
         total += n;
     }
-    close(fd);
+    hist_close(fd);
 
     /* Parse null-byte delimited entries */
     char* p = fbuf;
@@ -524,7 +540,7 @@ void td_hist_save(td_hist_t* hist, const char* path) {
 
     if (hist->count == 0) return;
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = hist_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return;
 
     /* Only save last HIST_MAX_ENTRIES entries */
@@ -535,15 +551,15 @@ void td_hist_save(td_hist_t* hist, const char* path) {
     for (int32_t i = start; i < hist->count; i++) {
         const char* entry = hist->entries[i];
         int32_t len = (int32_t)strlen(entry);
-        (void)write(fd, entry, (size_t)len);
+        (void)hist_write(fd, entry, (size_t)len);
         if (i < hist->count - 1) {
-            (void)write(fd, "\0", 1);
+            (void)hist_write(fd, "\0", 1);
         }
     }
     /* Write trailing null so load knows where last entry ends */
-    (void)write(fd, "\0", 1);
+    (void)hist_write(fd, "\0", 1);
 
-    close(fd);
+    hist_close(fd);
 }
 
 /* ===== UTF-8 helpers ===== */
@@ -609,10 +625,16 @@ static char opposite_bracket(char c) {
     }
 }
 
+static int is_escaped(const char* buf, int32_t pos) {
+    int bs = 0;
+    while (pos - 1 - bs >= 0 && buf[pos - 1 - bs] == '\\') bs++;
+    return bs % 2 != 0;
+}
+
 static int in_string_at(const char* buf, int32_t pos) {
     int in_str = 0;
     for (int32_t i = 0; i < pos; i++) {
-        if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\'))
+        if (buf[i] == '"' && !is_escaped(buf, i))
             in_str = !in_str;
     }
     return in_str;
@@ -637,7 +659,7 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
         /* Scan forward, tracking string state incrementally */
         int in_str = 0;
         for (int32_t i = cursor_pos; i < buf_len; i++) {
-            if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\')) {
+            if (buf[i] == '"' && !is_escaped(buf, i)) {
                 if (i > cursor_pos) in_str = !in_str;
             }
             if (in_str) continue;
@@ -653,7 +675,7 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
         uint8_t str_map[TERM_BUF_SIZE];
         int s = 0;
         for (int32_t i = 0; i < buf_len; i++) {
-            if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\'))
+            if (buf[i] == '"' && !is_escaped(buf, i))
                 s = !s;
             str_map[i] = (uint8_t)s;
         }
