@@ -74,7 +74,7 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 - [x] Implement `td_term_prompt()` — write `"teide> "` with prompt_len tracking
 - [x] Build: compiles clean
 - [x] Smoke test: `./build/teide_repl` — type chars, backspace works, arrows work, Enter evals
-- [ ] Commit: `feat(repl): basic line editing with cursor movement and kill commands`
+- [x] Commit: `feat(repl): basic line editing with cursor movement and kill commands`
 
 ---
 
