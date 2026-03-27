@@ -188,3 +188,284 @@ int64_t td_term_getc(td_term_t* term) {
 }
 
 #endif /* _WIN32 */
+
+/* ===== UTF-8 helpers ===== */
+
+static int32_t find_prev_utf8(const char* buf, int32_t pos) {
+    if (pos == 0) return 0;
+    pos--;
+    while (pos > 0 && ((unsigned char)buf[pos] & 0xC0) == 0x80)
+        pos--;
+    return pos;
+}
+
+static int32_t find_next_utf8(const char* buf, int32_t pos, int32_t len) {
+    if (pos >= len) return len;
+    pos++;
+    while (pos < len && ((unsigned char)buf[pos] & 0xC0) == 0x80)
+        pos++;
+    return pos;
+}
+
+/* ===== Prompt ===== */
+
+#define PROMPT_STR "teide> "
+#define PROMPT_LEN 7
+
+void td_term_prompt(td_term_t* term) {
+    write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
+    term->prompt_len = PROMPT_LEN;
+}
+
+/* ===== Redraw ===== */
+
+void td_term_redraw(td_term_t* term) {
+    int32_t total_width;
+
+    td_cursor_hide();
+    td_term_get_size(term);
+
+    /* Move to start of first line */
+    printf("\r");
+    if (term->last_total_rows > 1) {
+        for (int32_t i = 1; i < term->last_total_rows; i++) {
+            td_cursor_move_up(1);
+            printf("\r");
+        }
+    }
+
+    /* Clear from cursor to end of screen */
+    printf("\033[J");
+
+    /* Write prompt + buffer */
+    write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
+    if (term->buf_len > 0)
+        write(STDOUT_FILENO, term->buf, (size_t)term->buf_len);
+
+    /* Track rows used */
+    total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
+    if (term->term_width > 0) {
+        term->last_total_rows = (total_width + term->term_width - 1) / term->term_width;
+        if (term->last_total_rows == 0)
+            term->last_total_rows = 1;
+    }
+
+    /* Position cursor at buf_pos */
+    td_term_goto_position(term, term->buf_len, term->buf_pos);
+
+    td_cursor_show();
+    fflush(stdout);
+}
+
+/* ===== Line editing ===== */
+
+td_t* td_term_read(td_term_t* term) {
+    td_term_prompt(term);
+    fflush(stdout);
+    term->buf_len = 0;
+    term->buf_pos = 0;
+
+    for (;;) {
+        int64_t sz = td_term_getc(term);
+        if (sz <= 0) return NULL;
+
+        char key = term->input[0];
+
+        if (key == KEYCODE_ESCAPE) {
+            /* Read escape sequence */
+            char seq[3];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+            if (seq[0] == '[') {
+                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+                switch (seq[1]) {
+                    case 'A': key = -KEYCODE_UP;    goto handle; /* Up */
+                    case 'B': key = -KEYCODE_DOWN;  goto handle; /* Down */
+                    case 'C': key = -KEYCODE_RIGHT; goto handle; /* Right */
+                    case 'D': key = -KEYCODE_LEFT;  goto handle; /* Left */
+                    case 'H': key = -KEYCODE_HOME;  goto handle; /* Home */
+                    case 'F': key = -KEYCODE_END;   goto handle; /* End */
+                    case '3': /* Delete key: \033[3~ */
+                        if (read(STDIN_FILENO, &seq[2], 1) == 1 && seq[2] == '~') {
+                            if (term->buf_pos < term->buf_len) {
+                                int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
+                                int32_t bytes = next - term->buf_pos;
+                                memmove(term->buf + term->buf_pos,
+                                        term->buf + term->buf_pos + bytes,
+                                        (size_t)(term->buf_len - term->buf_pos - bytes));
+                                term->buf_len -= bytes;
+                                td_term_redraw(term);
+                            }
+                        }
+                        continue;
+                    default: continue;
+                }
+            } else if (seq[0] == 'O') {
+                if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+                switch (seq[1]) {
+                    case 'H': key = -KEYCODE_HOME; goto handle;
+                    case 'F': key = -KEYCODE_END;  goto handle;
+                    default: continue;
+                }
+            }
+            continue;
+        }
+
+    handle:
+        /* Arrow keys are encoded as negative to distinguish from printable chars */
+        if (key == -KEYCODE_UP || key == -KEYCODE_DOWN) {
+            /* History — will be wired in Task 2.1 */
+            continue;
+        }
+
+        if (key == -KEYCODE_LEFT) {
+            if (term->buf_pos > 0) {
+                int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
+                td_term_goto_position(term, term->buf_pos, prev);
+                term->buf_pos = prev;
+                fflush(stdout);
+            }
+            continue;
+        }
+
+        if (key == -KEYCODE_RIGHT) {
+            if (term->buf_pos < term->buf_len) {
+                int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
+                td_term_goto_position(term, term->buf_pos, next);
+                term->buf_pos = next;
+                fflush(stdout);
+            }
+            continue;
+        }
+
+        if (key == -KEYCODE_HOME || key == KEYCODE_CTRL_A) {
+            td_term_goto_position(term, term->buf_pos, 0);
+            term->buf_pos = 0;
+            fflush(stdout);
+            continue;
+        }
+
+        if (key == -KEYCODE_END || key == KEYCODE_CTRL_E) {
+            td_term_goto_position(term, term->buf_pos, term->buf_len);
+            term->buf_pos = term->buf_len;
+            fflush(stdout);
+            continue;
+        }
+
+        switch (key) {
+        case KEYCODE_RETURN: {
+            term->buf[term->buf_len] = '\0';
+            putchar('\n');
+            fflush(stdout);
+            if (term->buf_len == 0) return td_str("", 0);
+            return td_str(term->buf, (size_t)term->buf_len);
+        }
+
+        case KEYCODE_CTRL_D: {
+            if (term->buf_len == 0) {
+                putchar('\n');
+                fflush(stdout);
+                return NULL;
+            }
+            /* Delete char at cursor (like Delete key) */
+            if (term->buf_pos < term->buf_len) {
+                int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
+                int32_t bytes = next - term->buf_pos;
+                memmove(term->buf + term->buf_pos,
+                        term->buf + term->buf_pos + bytes,
+                        (size_t)(term->buf_len - term->buf_pos - bytes));
+                term->buf_len -= bytes;
+                td_term_redraw(term);
+            }
+            continue;
+        }
+
+        case KEYCODE_CTRL_C: {
+            term->buf_len = 0;
+            term->buf_pos = 0;
+            write(STDOUT_FILENO, "^C\n", 3);
+            td_term_prompt(term);
+            fflush(stdout);
+            continue;
+        }
+
+        case KEYCODE_BACKSPACE:
+        case KEYCODE_DELETE: {
+            if (term->buf_pos > 0) {
+                int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
+                int32_t bytes = term->buf_pos - prev;
+                memmove(term->buf + prev,
+                        term->buf + term->buf_pos,
+                        (size_t)(term->buf_len - term->buf_pos));
+                term->buf_len -= bytes;
+                term->buf_pos = prev;
+                td_term_redraw(term);
+            }
+            continue;
+        }
+
+        case KEYCODE_CTRL_K: {
+            term->buf_len = term->buf_pos;
+            td_term_redraw(term);
+            continue;
+        }
+
+        case KEYCODE_CTRL_U: {
+            term->buf_len = 0;
+            term->buf_pos = 0;
+            td_term_redraw(term);
+            continue;
+        }
+
+        case KEYCODE_CTRL_W: {
+            if (term->buf_pos > 0) {
+                int32_t end = term->buf_pos;
+                /* Skip non-alphanum */
+                while (term->buf_pos > 0 && !((term->buf[term->buf_pos - 1] >= 'a' && term->buf[term->buf_pos - 1] <= 'z') ||
+                       (term->buf[term->buf_pos - 1] >= 'A' && term->buf[term->buf_pos - 1] <= 'Z') ||
+                       (term->buf[term->buf_pos - 1] >= '0' && term->buf[term->buf_pos - 1] <= '9') ||
+                       term->buf[term->buf_pos - 1] == '_' || term->buf[term->buf_pos - 1] == '-'))
+                    term->buf_pos--;
+                /* Skip alphanum */
+                while (term->buf_pos > 0 && ((term->buf[term->buf_pos - 1] >= 'a' && term->buf[term->buf_pos - 1] <= 'z') ||
+                       (term->buf[term->buf_pos - 1] >= 'A' && term->buf[term->buf_pos - 1] <= 'Z') ||
+                       (term->buf[term->buf_pos - 1] >= '0' && term->buf[term->buf_pos - 1] <= '9') ||
+                       term->buf[term->buf_pos - 1] == '_' || term->buf[term->buf_pos - 1] == '-'))
+                    term->buf_pos--;
+                memmove(term->buf + term->buf_pos,
+                        term->buf + end,
+                        (size_t)(term->buf_len - end));
+                term->buf_len -= (end - term->buf_pos);
+                td_term_redraw(term);
+            }
+            continue;
+        }
+
+        case KEYCODE_TAB:
+            /* Autocomplete — will be wired in Phase 4 */
+            continue;
+
+        default: {
+            /* Printable character insert */
+            if ((unsigned char)key >= 0x20 && term->buf_len < TERM_BUF_SIZE - 1) {
+                if (term->buf_pos < term->buf_len) {
+                    memmove(term->buf + term->buf_pos + 1,
+                            term->buf + term->buf_pos,
+                            (size_t)(term->buf_len - term->buf_pos));
+                }
+                term->buf[term->buf_pos] = key;
+                term->buf_pos++;
+                term->buf_len++;
+
+                if (term->buf_pos == term->buf_len) {
+                    /* Append at end — just write the char */
+                    write(STDOUT_FILENO, &key, 1);
+                    fflush(stdout);
+                } else {
+                    td_term_redraw(term);
+                }
+            }
+            continue;
+        }
+        }
+    }
+}

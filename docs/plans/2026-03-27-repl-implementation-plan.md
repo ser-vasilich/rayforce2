@@ -55,8 +55,8 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
 
 **Files:** Modify `src/app/term.h`, `src/app/term.c`
 
-- [ ] Add `td_term_read()` to `term.h` — reads one complete line, returns `td_t*` string or NULL
-- [ ] Implement `td_term_read()` in `term.c`:
+- [x] Add `td_term_read()` to `term.h` — reads one complete line, returns `td_t*` string or NULL
+- [x] Implement `td_term_read()` in `term.c`:
   - Loop calling `td_term_getc()`
   - Character insert: `memmove` to shift right, insert at `buf_pos`, increment `buf_len` and `buf_pos`
   - Backspace: UTF-8 aware (find prev char start), `memmove` to shift left, decrement
@@ -70,10 +70,10 @@ echo '(+ 1 2)' | ./build/teide_repl  # piped mode smoke test
   - Enter: return `td_str(buf, buf_len)`
   - Ctrl-D on empty: return NULL (EOF)
   - Ctrl-C: clear buffer, print newline, show prompt
-- [ ] Implement `td_term_redraw()` — clear line, rewrite prompt + buffer, position cursor
-- [ ] Implement `td_term_prompt()` — write `"teide> "` with prompt_len tracking
-- [ ] Build: compiles clean
-- [ ] Smoke test: `./build/teide_repl` — type chars, backspace works, arrows work, Enter evals
+- [x] Implement `td_term_redraw()` — clear line, rewrite prompt + buffer, position cursor
+- [x] Implement `td_term_prompt()` — write `"teide> "` with prompt_len tracking
+- [x] Build: compiles clean
+- [x] Smoke test: `./build/teide_repl` — type chars, backspace works, arrows work, Enter evals
 - [ ] Commit: `feat(repl): basic line editing with cursor movement and kill commands`
 
 ---

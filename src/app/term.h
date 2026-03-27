@@ -85,4 +85,8 @@ void td_cursor_show(void);
 int32_t td_term_visual_width(const char* str, int32_t len);
 void    td_term_goto_position(td_term_t* term, int32_t from_pos, int32_t to_pos);
 
+td_t*  td_term_read(td_term_t* term);
+void   td_term_redraw(td_term_t* term);
+void   td_term_prompt(td_term_t* term);
+
 #endif /* TD_TERM_H */
