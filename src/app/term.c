@@ -411,6 +411,7 @@ int32_t td_hist_prev(td_hist_t* hist, char* buf, int32_t buf_len) {
     int32_t len = (int32_t)strlen(entry);
     if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
     memcpy(buf, entry, (size_t)len);
+    buf[len] = '\0';
     return len;
 }
 
@@ -430,6 +431,7 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
     int32_t len = (int32_t)strlen(entry);
     if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
     memcpy(buf, entry, (size_t)len);
+    buf[len] = '\0';
     return len;
 }
 
@@ -632,9 +634,13 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
     int depth = 0;
 
     if (is_open_bracket(c)) {
-        /* Scan forward */
+        /* Scan forward, tracking string state incrementally */
+        int in_str = 0;
         for (int32_t i = cursor_pos; i < buf_len; i++) {
-            if (in_string_at(buf, i)) continue;
+            if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\')) {
+                if (i > cursor_pos) in_str = !in_str;
+            }
+            if (in_str) continue;
             if (buf[i] == c) depth++;
             else if (buf[i] == target) {
                 depth--;
@@ -642,9 +648,17 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
             }
         }
     } else {
-        /* Scan backward */
+        /* Scan backward: build string-state bitmap in one forward pass,
+         * then use it for the backward scan.  O(n) total. */
+        uint8_t str_map[TERM_BUF_SIZE];
+        int s = 0;
+        for (int32_t i = 0; i < buf_len; i++) {
+            if (buf[i] == '"' && (i == 0 || buf[i - 1] != '\\'))
+                s = !s;
+            str_map[i] = (uint8_t)s;
+        }
         for (int32_t i = cursor_pos; i >= 0; i--) {
-            if (in_string_at(buf, i)) continue;
+            if (str_map[i]) continue;
             if (buf[i] == c) depth++;
             else if (buf[i] == target) {
                 depth--;
@@ -870,7 +884,7 @@ static int comp_has(const char** results, int32_t count, const char* name) {
  * in the current buffer.  Returns the env value (a table) or NULL. */
 static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
     /* Scan for "from:" followed by a name */
-    for (int32_t i = 0; i + 5 < buf_len; i++) {
+    for (int32_t i = 0; i + 5 <= buf_len; i++) {
         if (memcmp(buf + i, "from:", 5) != 0) continue;
         int32_t j = i + 5;
         /* skip whitespace */
@@ -1212,8 +1226,8 @@ void td_term_redraw(td_term_t* term) {
 
     /* Write prompt + highlighted buffer into temp buf, then single write */
     {
-        /* 8K should be enough for 4K buf + ANSI escapes */
-        char hlbuf[8192];
+        /* Each char can expand to ~15 bytes with ANSI escapes */
+        char hlbuf[TERM_BUF_SIZE * 16];
         int32_t hlen = 0;
         if (term->multiline_len > 0) {
             memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);

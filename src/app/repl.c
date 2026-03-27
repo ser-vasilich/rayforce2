@@ -6,6 +6,7 @@
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -67,7 +68,7 @@ static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
     }
     case TD_I64: {
         int64_t* data = (int64_t*)td_data(vec);
-        return snprintf(out, (size_t)max, "%ld", (long)data[idx]);
+        return snprintf(out, (size_t)max, "%" PRId64, data[idx]);
     }
     case TD_F64: {
         double* data = (double*)td_data(vec);
@@ -89,7 +90,7 @@ static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
         td_t* s = td_sym_str(sym_id);
         if (s) return snprintf(out, (size_t)max, "%.*s",
                                (int)td_str_len(s), td_str_ptr(s));
-        return snprintf(out, (size_t)max, "?sym%ld", (long)sym_id);
+        return snprintf(out, (size_t)max, "?sym%" PRId64, sym_id);
     }
     case TD_STR: {
         size_t slen = 0;
@@ -101,7 +102,7 @@ static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
         int64_t* data = (int64_t*)td_data(vec);
         int64_t d = data[idx];
         /* Teide date = days since 2000-01-01 */
-        return snprintf(out, (size_t)max, "%ld", (long)d);
+        return snprintf(out, (size_t)max, "%" PRId64, d);
     }
     default:
         return snprintf(out, (size_t)max, "?");
@@ -145,7 +146,7 @@ static void print_typed_vector(FILE* fp, td_t* vec) {
         fmt_vec_elem(vec, i, elem_buf, (int)sizeof(elem_buf));
         fprintf(fp, "%s", elem_buf);
     }
-    if (len > show) fprintf(fp, " ...(+%ld)", (long)(len - show));
+    if (len > show) fprintf(fp, " ...(+%" PRId64 ")", len - show);
     fprintf(fp, "]");
 }
 
@@ -222,9 +223,9 @@ static void print_table(FILE* fp, td_t* tbl) {
     }
 
     if (nrows > sample)
-        fprintf(fp, "... %ld more rows\n", (long)(nrows - sample));
+        fprintf(fp, "... %" PRId64 " more rows\n", nrows - sample);
 
-    fprintf(fp, "(%ld row%s)\n", (long)nrows, nrows == 1 ? "" : "s");
+    fprintf(fp, "(%" PRId64 " row%s)\n", nrows, nrows == 1 ? "" : "s");
 }
 
 /* Pretty-print a result value */
