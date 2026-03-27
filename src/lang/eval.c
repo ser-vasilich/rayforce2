@@ -2389,7 +2389,7 @@ static td_t* vm_exec(td_t* lambda, td_t** call_args, int64_t argc) {
 
 #define DISPATCH() goto *dispatch[code[ip++]]
 #define PUSH(v)    do { if (vm.sp >= VM_STACK_SIZE) goto vm_error; vm.ps[vm.sp++] = (v); } while(0)
-#define POP()      ({ if (vm.sp <= 0) goto vm_error; vm.ps[--vm.sp]; })
+#define POP()      ({ if (vm.sp <= vm.fp + n_locals) goto vm_error; vm.ps[--vm.sp]; })
 #define PEEK()     (vm.ps[vm.sp - 1])
 #define LOCAL(s)   (vm.ps[vm.fp + (s)])
 
@@ -2731,22 +2731,25 @@ op_ret: {
     bool from_stack = (vm.sp > vm.fp + n_locals);
     if (from_stack) {
         result = POP();
-        td_retain(result);  /* protect from cleanup aliasing */
+        td_retain(result);  /* prevent free during cleanup if aliased in locals */
     } else {
-        result = make_i64(0);  /* fresh alloc, no alias — skip retain */
+        result = make_i64(0);
     }
 
-    /* Clean up current frame */
+    /* Clean up current frame — release all locals and leftover stack slots */
     while (vm.sp > vm.fp) {
         td_t *v = vm.ps[--vm.sp];
         if (v) td_release(v);
     }
 
+    /* Undo protective retain — POP's reference is the caller's ownership */
+    if (from_stack) td_release(result);
+
     if (vm.rp == 0) {
         /* Top-level return */
         td_release(vm.fn);
         __VM = NULL;
-        return result;  /* caller owns the retain */
+        return result;  /* caller owns the POP'd reference */
     }
 
     /* Pop return frame */
