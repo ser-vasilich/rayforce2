@@ -94,9 +94,9 @@ git commit -m "feat(lang): add TD_UNARY/TD_BINARY/TD_VARY/TD_LAMBDA type tags an
 
 ### Task 1.2: Function object constructors
 
-- [ ] Implement function object constructors and environment
-- [ ] Write tests for env operations
-- [ ] Verify build and tests pass
+- [x] Implement function object constructors and environment
+- [x] Write tests for env operations
+- [x] Verify build and tests pass
 
 **Files:**
 - Create: `src/lang/env.h`
