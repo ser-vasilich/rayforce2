@@ -3039,6 +3039,281 @@ static MunitResult test_exec_str_concat_null(const void* params, void* data) {
     return MUNIT_OK;
 }
 
+/* ---- I32 reduction ---- */
+static MunitResult test_exec_reduce_i32(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    int32_t raw[] = {10, 20, 30};
+    ray_t* vec = ray_vec_from_raw(RAY_I32, raw, 3);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    /* SUM */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_sum(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 60);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* COUNT */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_count(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 3);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* MIN */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_min_op(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 10);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* MAX */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_max_op(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 30);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* AVG */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_avg(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_double_equal(result->f64, 20.0, 6);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- I16 reduction ---- */
+static MunitResult test_exec_reduce_i16(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    int16_t raw[] = {1, 2, 3, 4, 5};
+    ray_t* vec = ray_vec_from_raw(RAY_I16, raw, 5);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_sum(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 15);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- BOOL reduction ---- */
+static MunitResult test_exec_reduce_bool(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    uint8_t raw[] = {1, 0, 1};
+    ray_t* vec = ray_vec_from_raw(RAY_BOOL, raw, 3);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    /* SUM */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_sum(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 2);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* COUNT */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_count(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 3);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- I64 with nulls ---- */
+static MunitResult test_exec_reduce_i64_nulls(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    int64_t raw[] = {10, 0, 30, 0, 50};
+    ray_t* vec = ray_vec_from_raw(RAY_I64, raw, 5);
+    ray_vec_set_null(vec, 1, true);
+    ray_vec_set_null(vec, 3, true);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    /* SUM — should skip nulls: 10 + 30 + 50 = 90 */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_sum(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 90);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* COUNT — only non-null elements */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_count(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 3);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* MIN */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_min_op(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 10);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* MAX */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_max_op(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 50);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- F64 with nulls ---- */
+static MunitResult test_exec_reduce_f64_nulls(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    double raw[] = {0.0, 2.0, 3.0};
+    ray_t* vec = ray_vec_from_raw(RAY_F64, raw, 3);
+    ray_vec_set_null(vec, 0, true);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    /* AVG — non-null: 2.0, 3.0 → avg = 2.5 */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_avg(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_double_equal(result->f64, 2.5, 6);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* COUNT */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_count(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 2);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- Empty vector reduction ---- */
+static MunitResult test_exec_reduce_empty(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    ray_t* vec = ray_vec_new(RAY_I64, 0);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
+
+    /* COUNT on empty → 0 */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* op = ray_count(g, x);
+    ray_t* result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 0);
+    ray_release(result);
+    ray_graph_free(g);
+
+    /* SUM on empty → 0 */
+    g = ray_graph_new(tbl);
+    x = ray_scan(g, "x");
+    op = ray_sum(g, x);
+    result = ray_execute(g, op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 0);
+    ray_release(result);
+    ray_graph_free(g);
+
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
 /* ======================================================================
  * Suite
  * ====================================================================== */
@@ -3056,6 +3331,12 @@ static MunitTest exec_tests[] = {
     { "/min2_max2",      test_exec_min2_max2,         NULL, NULL, 0, NULL },
     { "/if",             test_exec_if,                NULL, NULL, 0, NULL },
     { "/reductions",     test_exec_reductions,        NULL, NULL, 0, NULL },
+    { "/reduce_i32",     test_exec_reduce_i32,        NULL, NULL, 0, NULL },
+    { "/reduce_i16",     test_exec_reduce_i16,        NULL, NULL, 0, NULL },
+    { "/reduce_bool",    test_exec_reduce_bool,       NULL, NULL, 0, NULL },
+    { "/reduce_i64_nulls", test_exec_reduce_i64_nulls, NULL, NULL, 0, NULL },
+    { "/reduce_f64_nulls", test_exec_reduce_f64_nulls, NULL, NULL, 0, NULL },
+    { "/reduce_empty",   test_exec_reduce_empty,      NULL, NULL, 0, NULL },
     { "/sort",           test_exec_sort,              NULL, NULL, 0, NULL },
     { "/head_tail",      test_exec_head_tail,         NULL, NULL, 0, NULL },
     { "/join",           test_exec_join,              NULL, NULL, 0, NULL },
