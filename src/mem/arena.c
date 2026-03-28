@@ -22,6 +22,7 @@
  */
 
 #include "arena.h"
+#include "heap.h"
 #include "sys.h"
 #include <string.h>
 

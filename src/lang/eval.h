@@ -4,6 +4,27 @@
 #include <rayforce.h>
 #include <stdio.h>
 
+/* ===== Function Attribute Flags (stored in attrs byte) ===== */
+
+#define RAY_FN_NONE          0x00
+#define RAY_FN_LEFT_ATOMIC   0x01  /* auto-map left arg over vectors */
+#define RAY_FN_RIGHT_ATOMIC  0x02  /* auto-map right arg over vectors */
+#define RAY_FN_ATOMIC        0x04  /* auto-map all args over vectors */
+#define RAY_FN_AGGR          0x08  /* aggregation function */
+#define RAY_FN_SPECIAL_FORM  0x10  /* receives unevaluated args */
+
+/* AST name flag (distinguishes symbol literal from variable reference) */
+#define RAY_ATTR_NAME        0x20  /* ray_t SYM atom with this flag = name reference */
+
+/* Vector literal flag (distinguishes [x y z] data from (f x y) calls in RAY_LIST) */
+#define RAY_ATTR_VECTOR      0x01  /* RAY_LIST with this flag = data vector, not call */
+#define RAY_ATTR_DICT        0x02  /* RAY_LIST with this flag = dict {k: v ...} */
+
+/* Function type signatures */
+typedef ray_t* (*ray_unary_fn)(ray_t*);
+typedef ray_t* (*ray_binary_fn)(ray_t*, ray_t*);
+typedef ray_t* (*ray_vary_fn)(ray_t**, int64_t);
+
 /* ===== VM Bytecode Opcodes ===== */
 
 enum {

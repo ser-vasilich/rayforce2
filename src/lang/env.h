@@ -2,6 +2,7 @@
 #define RAY_ENV_H
 
 #include <rayforce.h>
+#include "lang/eval.h"
 
 /* Create function objects. Name is interned as a symbol.
  * The function pointer is stored in the i64 field of the atom. */

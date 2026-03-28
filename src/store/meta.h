@@ -26,4 +26,8 @@
 
 #include <rayforce.h>
 
+/* Metadata */
+ray_err_t ray_meta_save_d(ray_t* schema, const char* path);
+ray_t*    ray_meta_load_d(const char* path);
+
 #endif /* RAY_META_H */

@@ -38,6 +38,7 @@
 #endif
 
 #include "csv.h"
+#include "mem/heap.h"
 #include "mem/sys.h"
 #include "ops/pool.h"
 #include "ops/hash.h"

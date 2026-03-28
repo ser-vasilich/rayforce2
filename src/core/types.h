@@ -33,6 +33,15 @@
  */
 #include <rayforce.h>
 
+/* Number of types (positive range): must be > max type ID */
+#define RAY_TYPE_COUNT 22
+
+/* Type sizes lookup table (defined in types.c) */
+extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];
+
+/* Element size for a given type tag */
+#define ray_elem_size(t)  (ray_type_sizes[(t)])
+
 /* --------------------------------------------------------------------------
  * Type classification helpers (operate on positive type tags)
  * -------------------------------------------------------------------------- */

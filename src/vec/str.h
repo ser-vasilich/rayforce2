@@ -33,6 +33,29 @@
 
 #include <rayforce.h>
 
+/* ===== Inline String Element (16 bytes) ===== */
+
+typedef union {
+    struct { uint32_t len; char     data[12]; };      /* inline: len <= 12 */
+    struct { uint32_t len_; char    prefix[4];        /* pooled: len > 12  */
+             uint32_t pool_off; uint32_t _pad; };
+} ray_str_t;
+
+#define RAY_STR_INLINE_MAX 12
+
+static inline bool ray_str_is_inline(const ray_str_t* s) {
+    return s->len <= RAY_STR_INLINE_MAX;
+}
+
+/* Resolve string data pointer for a ray_str_t element.
+ * pool_base: base of string pool (NULL if all strings are inline) */
+static inline const char* ray_str_t_ptr(const ray_str_t* s, const char* pool_base) {
+    if (s->len == 0) return "";
+    if (ray_str_is_inline(s)) return s->data;
+    assert(pool_base != NULL && "ray_str_t_ptr: pooled string requires non-NULL pool_base");
+    return pool_base + s->pool_off;
+}
+
 /* Equality: fast reject on len, then prefix, then full compare.
  * pool_a/pool_b: pool bases for elements a and b respectively (NULL if inline) */
 static inline bool ray_str_t_eq(const ray_str_t* a, const char* pool_a,

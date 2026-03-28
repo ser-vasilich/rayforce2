@@ -22,6 +22,7 @@
  */
 
 #include "meta.h"
+#include "store/col.h"
 #include <string.h>
 #include <stdio.h>
 

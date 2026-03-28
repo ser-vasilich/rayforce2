@@ -23,6 +23,7 @@
 
 #include "col.h"
 #include "core/platform.h"
+#include "mem/heap.h"
 #include "store/fileio.h"
 #include "table/sym.h"
 #include <string.h>

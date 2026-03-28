@@ -26,6 +26,7 @@
 #include "core/platform.h"
 #include "mem/sys.h"
 #include "ops/ops.h"
+#include "store/splay.h"
 #include "table/sym.h"
 #include <string.h>
 #include <stdio.h>

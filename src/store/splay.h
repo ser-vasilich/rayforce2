@@ -26,4 +26,9 @@
 
 #include <rayforce.h>
 
+/* Splayed table I/O */
+ray_err_t ray_splay_save(ray_t* tbl, const char* dir, const char* sym_path);
+ray_t*    ray_splay_load(const char* dir, const char* sym_path);
+ray_t*    ray_read_splayed(const char* dir, const char* sym_path);
+
 #endif /* RAY_SPLAY_H */

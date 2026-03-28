@@ -30,6 +30,35 @@
 extern "C" {
 #endif
 
+/* ===== Internal Type Constants ===== */
+
+#define RAY_SEL       16   /* selection bitmap (lazy filter) */
+
+/* Lazy DAG handle (atom-only; stored inline in nullmap region) */
+#define RAY_LAZY      104
+
+/* ===== Forward Declarations (internal types) ===== */
+
+typedef struct ray_pool      ray_pool_t;
+typedef struct ray_csr       ray_csr_t;
+typedef struct ray_rel       ray_rel_t;
+typedef struct ray_hnsw      ray_hnsw_t;
+
+/* ===== Lazy DAG Handle Accessors ===== */
+
+typedef struct ray_graph ray_graph_t;
+typedef struct ray_op    ray_op_t;
+
+static inline bool ray_is_lazy(ray_t* x) {
+    return x && !RAY_IS_ERR(x) && x->type == RAY_LAZY;
+}
+
+ray_t*    ray_lazy_materialize(ray_t* val);
+
+/* ===== Cancel API ===== */
+
+void     ray_cancel(void);
+
 /* ===== Parted Types ===== */
 
 #define RAY_PARTED_BASE   32

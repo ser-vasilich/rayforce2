@@ -25,6 +25,11 @@
 #include <rayforce.h>
 #include "mem/heap.h"
 #include "ops/ops.h"
+#include "store/col.h"
+#include "store/fileio.h"
+#include "store/splay.h"
+#include "store/part.h"
+#include "table/sym.h"
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>

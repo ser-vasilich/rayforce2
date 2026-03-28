@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include <rayforce.h>
+#include "core/types.h"
 
 /* Element sizes indexed by positive type tag. */
 const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {

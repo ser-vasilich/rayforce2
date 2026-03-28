@@ -6,6 +6,9 @@
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
+#include "mem/heap.h"
+#include "ops/ops.h"
+#include "table/sym.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>

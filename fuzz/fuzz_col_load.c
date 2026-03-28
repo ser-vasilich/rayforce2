@@ -1,5 +1,6 @@
 #include <rayforce.h>
 #include "mem/heap.h"
+#include "store/col.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>

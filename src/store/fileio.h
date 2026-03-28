@@ -26,13 +26,27 @@
 
 #include <rayforce.h>
 
-/* ray_fd_t, RAY_FD_INVALID, RAY_OPEN_*, and ray_file_* function declarations
- * are provided by <rayforce.h>.  This header exists only for internal
- * source files that need the Windows-specific includes for the
- * implementation (fileio.c). */
-
+/* Cross-platform file I/O (locking, sync, atomic rename) */
 #ifdef _WIN32
   #include <windows.h>
+  typedef HANDLE ray_fd_t;
+  #define RAY_FD_INVALID INVALID_HANDLE_VALUE
+#else
+  typedef int ray_fd_t;
+  #define RAY_FD_INVALID (-1)
 #endif
+
+#define RAY_OPEN_READ   0x01
+#define RAY_OPEN_WRITE  0x02
+#define RAY_OPEN_CREATE 0x04
+
+ray_fd_t  ray_file_open(const char* path, int flags);
+void     ray_file_close(ray_fd_t fd);
+ray_err_t ray_file_lock_ex(ray_fd_t fd);
+ray_err_t ray_file_lock_sh(ray_fd_t fd);
+ray_err_t ray_file_unlock(ray_fd_t fd);
+ray_err_t ray_file_sync(ray_fd_t fd);
+ray_err_t ray_file_sync_dir(const char* path);
+ray_err_t ray_file_rename(const char* old_path, const char* new_path);
 
 #endif /* RAY_FILEIO_H */

@@ -24,6 +24,7 @@
 #include "munit.h"
 #include <rayforce.h>
 #include "mem/heap.h"
+#include "store/meta.h"
 #include <string.h>
 #include <unistd.h>
 

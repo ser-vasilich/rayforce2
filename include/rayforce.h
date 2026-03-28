@@ -49,7 +49,6 @@ extern "C" {
 #define RAY_TIMESTAMP 11
 #define RAY_GUID      12
 #define RAY_TABLE     13
-#define RAY_SEL       16   /* selection bitmap (lazy filter) */
 
 /* Unified dictionary-encoded string column (adaptive width) */
 #define RAY_SYM       20
@@ -57,71 +56,11 @@ extern "C" {
 /* Variable-length string column (inline + pool) */
 #define RAY_STR       21
 
-/* Lazy DAG handle (atom-only; stored inline in nullmap region) */
-#define RAY_LAZY      104
-
 /* Function types (Rayforce-compatible) */
 #define RAY_LAMBDA    100   /* User-defined function (compiled body + env) */
 #define RAY_UNARY     101   /* Unary builtin: ray_t* (*)(ray_t*) */
 #define RAY_BINARY    102   /* Binary builtin: ray_t* (*)(ray_t*, ray_t*) */
 #define RAY_VARY      103   /* Variadic builtin: ray_t* (*)(ray_t**, int64_t) */
-
-/* Function attribute flags (stored in attrs byte) */
-#define RAY_FN_NONE          0x00
-#define RAY_FN_LEFT_ATOMIC   0x01  /* auto-map left arg over vectors */
-#define RAY_FN_RIGHT_ATOMIC  0x02  /* auto-map right arg over vectors */
-#define RAY_FN_ATOMIC        0x04  /* auto-map all args over vectors */
-#define RAY_FN_AGGR          0x08  /* aggregation function */
-#define RAY_FN_SPECIAL_FORM  0x10  /* receives unevaluated args */
-
-/* AST name flag (distinguishes symbol literal from variable reference) */
-#define RAY_ATTR_NAME        0x20  /* ray_t SYM atom with this flag = name reference */
-
-/* Vector literal flag (distinguishes [x y z] data from (f x y) calls in RAY_LIST) */
-#define RAY_ATTR_VECTOR      0x01  /* RAY_LIST with this flag = data vector, not call */
-#define RAY_ATTR_DICT        0x02  /* RAY_LIST with this flag = dict {k: v ...} */
-
-/* Function type signatures (use union ray_t since ray_t typedef comes later) */
-typedef union ray_t* (*ray_unary_fn)(union ray_t*);
-typedef union ray_t* (*ray_binary_fn)(union ray_t*, union ray_t*);
-typedef union ray_t* (*ray_vary_fn)(union ray_t**, int64_t);
-
-/* Symbol width encoding (lower 2 bits of attrs when type == RAY_SYM) */
-#define RAY_SYM_W_MASK   0x03
-#define RAY_SYM_W8       0x00   /* uint8_t  indices — dict ≤ 255 entries */
-#define RAY_SYM_W16      0x01   /* uint16_t indices — dict ≤ 65,535 */
-#define RAY_SYM_W32      0x02   /* uint32_t indices — dict ≤ 4,294,967,295 */
-#define RAY_SYM_W64      0x03   /* uint64_t indices — dict > 4B entries */
-
-/* Helper macros */
-#define RAY_IS_SYM(t)         ((t) == RAY_SYM)
-#define RAY_SYM_ELEM(attrs)   (1u << ((attrs) & RAY_SYM_W_MASK))  /* 1,2,4,8 */
-
-/* Number of types (positive range): must be > max type ID */
-#define RAY_TYPE_COUNT 22
-
-/* ===== Attribute Flags =====
- *
- * The `attrs` byte in ray_t is type-namespaced: the same bit positions carry
- * different meanings depending on the object's type tag.
- *
- *   Bits 0x01-0x03  RAY_SYM vectors:  sym index width (RAY_SYM_W8/W16/W32/W64)
- *   Bits 0x01-0x10  function objects (RAY_UNARY/BINARY/VARY): RAY_FN_* flags
- *   Bits 0x01-0x02  RAY_LIST atoms:   RAY_ATTR_VECTOR / RAY_ATTR_DICT
- *   Bit  0x10       vectors:         RAY_ATTR_SLICE
- *   Bit  0x20       vectors:         RAY_ATTR_NULLMAP_EXT
- *   Bit  0x20       -RAY_SYM:        RAY_ATTR_NAME (variable reference)
- *   Bit  0x40       vectors:         RAY_ATTR_HAS_NULLS
- *   Bit  0x80       all types:       RAY_ATTR_ARENA (arena-allocated, no refcount)
- *
- * Overlapping bit values are safe because consumers always check the type tag
- * before interpreting attrs.
- */
-
-#define RAY_ATTR_SLICE        0x10
-#define RAY_ATTR_NULLMAP_EXT  0x20
-#define RAY_ATTR_HAS_NULLS    0x40
-#define RAY_ATTR_ARENA        0x80
 
 /* ===== Error Handling ===== */
 
@@ -189,23 +128,6 @@ typedef union ray_t {
     };
 } ray_t;
 
-/* Type sizes lookup table (defined in types.c) */
-extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];
-
-/* ===== Lazy DAG Handle Accessors =====
- *
- * A lazy handle is a ray_t with type == RAY_LAZY.  It stores two
- * pointers in the nullmap region (bytes 0-15), which is unused for atoms:
- *   Bytes 0-7:  ray_graph_t* (owns the graph)
- *   Bytes 8-15: ray_op_t*    (the output node)
- */
-typedef struct ray_graph ray_graph_t;
-typedef struct ray_op    ray_op_t;
-
-static inline bool ray_is_lazy(ray_t* x) {
-    return x && !RAY_IS_ERR(x) && x->type == RAY_LAZY;
-}
-
 /* ===== Accessor Macros ===== */
 
 #define ray_type(v)       ((v)->type)
@@ -214,37 +136,6 @@ static inline bool ray_is_lazy(ray_t* x) {
 #define ray_len(v)        ((v)->len)
 static inline void* ray_data_fn(ray_t* v) { return (void*)v->data; }
 #define ray_data(v)       ray_data_fn(v)
-#define ray_elem_size(t)  (ray_type_sizes[(t)])
-
-/* ===== Inline String Element (16 bytes) ===== */
-
-typedef union {
-    struct { uint32_t len; char     data[12]; };      /* inline: len <= 12 */
-    struct { uint32_t len_; char    prefix[4];        /* pooled: len > 12  */
-             uint32_t pool_off; uint32_t _pad; };
-} ray_str_t;
-
-#define RAY_STR_INLINE_MAX 12
-
-static inline bool ray_str_is_inline(const ray_str_t* s) {
-    return s->len <= RAY_STR_INLINE_MAX;
-}
-
-/* Resolve string data pointer for a ray_str_t element.
- * pool_base: base of string pool (NULL if all strings are inline) */
-static inline const char* ray_str_t_ptr(const ray_str_t* s, const char* pool_base) {
-    if (s->len == 0) return "";
-    if (ray_str_is_inline(s)) return s->data;
-    assert(pool_base != NULL && "ray_str_t_ptr: pooled string requires non-NULL pool_base");
-    return pool_base + s->pool_off;
-}
-
-/* ===== Forward Declarations (types referenced in public API) ===== */
-
-typedef struct ray_pool      ray_pool_t;
-typedef struct ray_csr       ray_csr_t;
-typedef struct ray_rel       ray_rel_t;
-typedef struct ray_hnsw      ray_hnsw_t;
 
 /* ===== Memory Allocator API ===== */
 
@@ -253,15 +144,11 @@ ray_t*    ray_alloc(size_t data_size);
  * Blocks freed from a non-owning thread are deferred and coalesced
  * when the owning heap flushes foreign blocks. */
 void     ray_free(ray_t* v);
-ray_t*    ray_alloc_copy(ray_t* v);
-ray_t*    ray_scratch_alloc(size_t data_size);
-ray_t*    ray_scratch_realloc(ray_t* v, size_t new_data_size);
 
 /* ===== COW / Ref Counting API ===== */
 
 void     ray_retain(ray_t* v);
 void     ray_release(ray_t* v);
-ray_t*    ray_cow(ray_t* v);
 
 /* ===== Atom Constructors ===== */
 
@@ -340,52 +227,6 @@ int64_t     ray_table_nrows(ray_t* tbl);
 int64_t     ray_parted_nrows(ray_t* parted_col);
 ray_t*       ray_table_schema(ray_t* tbl);
 
-/* ===== Lazy DAG Handle API (Public) ===== */
-
-ray_t*    ray_lazy_materialize(ray_t* val);
-
-/* ===== Storage API ===== */
-
-/* Cross-platform file I/O (locking, sync, atomic rename) */
-#ifdef _WIN32
-  typedef HANDLE ray_fd_t;
-  #define RAY_FD_INVALID INVALID_HANDLE_VALUE
-#else
-  typedef int ray_fd_t;
-  #define RAY_FD_INVALID (-1)
-#endif
-
-#define RAY_OPEN_READ   0x01
-#define RAY_OPEN_WRITE  0x02
-#define RAY_OPEN_CREATE 0x04
-
-ray_fd_t  ray_file_open(const char* path, int flags);
-void     ray_file_close(ray_fd_t fd);
-ray_err_t ray_file_lock_ex(ray_fd_t fd);
-ray_err_t ray_file_lock_sh(ray_fd_t fd);
-ray_err_t ray_file_unlock(ray_fd_t fd);
-ray_err_t ray_file_sync(ray_fd_t fd);
-ray_err_t ray_file_sync_dir(const char* path);
-ray_err_t ray_file_rename(const char* old_path, const char* new_path);
-
-/* Column file I/O */
-ray_err_t ray_col_save(ray_t* vec, const char* path);
-ray_t*    ray_col_load(const char* path);
-ray_t*    ray_col_mmap(const char* path);
-
-/* Splayed table I/O */
-ray_err_t ray_splay_save(ray_t* tbl, const char* dir, const char* sym_path);
-ray_t*    ray_splay_load(const char* dir, const char* sym_path);
-ray_t*    ray_read_splayed(const char* dir, const char* sym_path);
-
-/* Partitioned table */
-ray_t*    ray_part_load(const char* db_root, const char* table_name);
-ray_t*    ray_read_parted(const char* db_root, const char* table_name);
-
-/* Metadata */
-ray_err_t ray_meta_save_d(ray_t* schema, const char* path);
-ray_t*    ray_meta_load_d(const char* path);
-
 /* ===== CSV API ===== */
 
 ray_t* ray_read_csv(const char* path);
@@ -393,10 +234,6 @@ ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
                         const int8_t* col_types, int32_t n_types);
 ray_err_t ray_write_csv(ray_t* table, const char* path);
 
-
-/* ===== Pool / Cancel API ===== */
-
-void     ray_cancel(void);
 
 /* ===== Rayfall Builtin Functions ===== */
 /* Public builtin implementations for the Rayfall language.

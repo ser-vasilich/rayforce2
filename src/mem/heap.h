@@ -45,6 +45,39 @@
 #include "ops/ops.h"
 #include <stdint.h>
 
+/* ===== Attribute Flags =====
+ *
+ * The `attrs` byte in ray_t is type-namespaced: the same bit positions carry
+ * different meanings depending on the object's type tag.
+ *
+ *   Bits 0x01-0x03  RAY_SYM vectors:  sym index width (RAY_SYM_W8/W16/W32/W64)
+ *   Bits 0x01-0x10  function objects (RAY_UNARY/BINARY/VARY): RAY_FN_* flags
+ *   Bits 0x01-0x02  RAY_LIST atoms:   RAY_ATTR_VECTOR / RAY_ATTR_DICT
+ *   Bit  0x10       vectors:         RAY_ATTR_SLICE
+ *   Bit  0x20       vectors:         RAY_ATTR_NULLMAP_EXT
+ *   Bit  0x20       -RAY_SYM:        RAY_ATTR_NAME (variable reference)
+ *   Bit  0x40       vectors:         RAY_ATTR_HAS_NULLS
+ *   Bit  0x80       all types:       RAY_ATTR_ARENA (arena-allocated, no refcount)
+ *
+ * Overlapping bit values are safe because consumers always check the type tag
+ * before interpreting attrs.
+ */
+
+#define RAY_ATTR_SLICE        0x10
+#define RAY_ATTR_NULLMAP_EXT  0x20
+#define RAY_ATTR_HAS_NULLS    0x40
+#define RAY_ATTR_ARENA        0x80
+
+/* ===== Internal Allocator Variants ===== */
+
+ray_t*    ray_alloc_copy(ray_t* v);
+ray_t*    ray_scratch_alloc(size_t data_size);
+ray_t*    ray_scratch_realloc(ray_t* v, size_t new_data_size);
+
+/* ===== COW (Copy-on-Write) ===== */
+
+ray_t*    ray_cow(ray_t* v);
+
 /* ===== Memory Statistics ===== */
 
 typedef struct {

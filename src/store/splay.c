@@ -22,6 +22,7 @@
  */
 
 #include "splay.h"
+#include "store/col.h"
 #include <string.h>
 #include <stdio.h>
 #include <sys/stat.h>

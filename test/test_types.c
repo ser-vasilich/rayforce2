@@ -23,6 +23,8 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "core/types.h"
+#include "ops/ops.h"
 
 /* ---- test_type_sizes_known_types --------------------------------------- */
 

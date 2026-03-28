@@ -22,6 +22,7 @@
  */
 
 #include "table.h"
+#include "mem/heap.h"
 #include "ops/ops.h"
 #include <string.h>
 

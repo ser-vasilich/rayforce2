@@ -22,6 +22,7 @@
  */
 
 #include "csr.h"
+#include "store/col.h"
 #include "mem/sys.h"
 #include <stdlib.h>
 #include <string.h>

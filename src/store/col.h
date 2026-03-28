@@ -26,4 +26,9 @@
 
 #include <rayforce.h>
 
+/* Column file I/O */
+ray_err_t ray_col_save(ray_t* vec, const char* path);
+ray_t*    ray_col_load(const char* path);
+ray_t*    ray_col_mmap(const char* path);
+
 #endif /* RAY_COL_H */

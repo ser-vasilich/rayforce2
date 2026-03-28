@@ -23,8 +23,10 @@
 
 #include "vec.h"
 #include "core/platform.h"
+#include "mem/heap.h"
 #include "table/sym.h"
 #include "vec/embedding.h"
+#include "vec/str.h"
 #include <string.h>
 
 /* --------------------------------------------------------------------------

@@ -23,6 +23,7 @@
 
 #include "morsel.h"
 #include "core/platform.h"
+#include "mem/heap.h"
 #include "table/sym.h"
 #include <string.h>
 

@@ -23,7 +23,9 @@
 
 #include "sym.h"
 #include "core/platform.h"
+#include "store/col.h"
 #include "store/fileio.h"
+#include "mem/heap.h"
 #include "mem/sys.h"
 #include "mem/arena.h"
 #include <string.h>

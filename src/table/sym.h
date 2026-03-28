@@ -33,6 +33,18 @@
  */
 
 #include <rayforce.h>
+#include "core/types.h"
+
+/* Symbol width encoding (lower 2 bits of attrs when type == RAY_SYM) */
+#define RAY_SYM_W_MASK   0x03
+#define RAY_SYM_W8       0x00   /* uint8_t  indices -- dict <= 255 entries */
+#define RAY_SYM_W16      0x01   /* uint16_t indices -- dict <= 65,535 */
+#define RAY_SYM_W32      0x02   /* uint32_t indices -- dict <= 4,294,967,295 */
+#define RAY_SYM_W64      0x03   /* uint64_t indices -- dict > 4B entries */
+
+/* Helper macros */
+#define RAY_IS_SYM(t)         ((t) == RAY_SYM)
+#define RAY_SYM_ELEM(attrs)   (1u << ((attrs) & RAY_SYM_W_MASK))  /* 1,2,4,8 */
 
 /* Determine optimal SYM width for a given dictionary size */
 static inline uint8_t ray_sym_dict_width(int64_t dict_size) {
