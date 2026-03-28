@@ -87,13 +87,13 @@
       (_InterlockedCompareExchange((volatile long*)(p), (long)(desired), (long)(*(expected))) == (long)(*(expected)))
 #else
   #include <stdatomic.h>
-  #define ray_atomic_inc(p)   atomic_fetch_add_explicit(p, 1, memory_order_relaxed)
-  #define ray_atomic_dec(p)   atomic_fetch_sub_explicit(p, 1, memory_order_acq_rel)
-  #define ray_atomic_load(p)  atomic_load_explicit(p, memory_order_acquire)
-  #define ray_atomic_store(p, v) atomic_store_explicit(p, v, memory_order_release)
+  #define ray_atomic_inc(p)   __atomic_fetch_add(p, 1, __ATOMIC_RELAXED)
+  #define ray_atomic_dec(p)   __atomic_fetch_sub(p, 1, __ATOMIC_ACQ_REL)
+  #define ray_atomic_load(p)  __atomic_load_n(p, __ATOMIC_ACQUIRE)
+  #define ray_atomic_store(p, v) __atomic_store_n(p, v, __ATOMIC_RELEASE)
   #define ray_atomic_cas(p, expected, desired) \
-      atomic_compare_exchange_strong_explicit(p, expected, desired, \
-          memory_order_acq_rel, memory_order_acquire)
+      __atomic_compare_exchange_n(p, expected, desired, 0, \
+          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
 #endif
 #endif /* !ray_atomic_inc */
 

@@ -32,6 +32,7 @@
  */
 
 #include <rayforce.h>
+#include <string.h>
 
 /* ===== Inline String Element (16 bytes) ===== */
 

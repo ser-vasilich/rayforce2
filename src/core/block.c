@@ -73,7 +73,7 @@ ray_t* ray_block_copy(ray_t* src) {
     memcpy(dst, src, sz);
     dst->mmod = new_mmod;
     dst->order = new_order;
-    atomic_store_explicit((_Atomic(uint32_t)*)&dst->rc, 1, memory_order_relaxed);
+    ray_atomic_store(&dst->rc, 1);
     ray_retain_owned_refs(dst);
     return dst;
 }

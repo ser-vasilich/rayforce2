@@ -55,7 +55,7 @@ static MunitResult test_table_new(const void* params, void* fixture) {
     munit_assert_int(ray_table_ncols(tbl), ==, 0);
     ray_t* schema = ray_table_schema(tbl);
     munit_assert_ptr_not_null(schema);
-    munit_assert_uint(atomic_load_explicit(&schema->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(schema->rc, ==, 1);
 
     ray_release(tbl);
     return MUNIT_OK;
@@ -336,9 +336,9 @@ static MunitResult test_table_release_drops_col_ref(const void* params, void* fi
     munit_assert_ptr_not_null(tbl);
     munit_assert_false(RAY_IS_ERR(tbl));
 
-    munit_assert_uint(atomic_load_explicit(&col->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(col->rc, ==, 2);
     ray_release(tbl);
-    munit_assert_uint(atomic_load_explicit(&col->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(col->rc, ==, 1);
 
     ray_release(col);
     return MUNIT_OK;

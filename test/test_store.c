@@ -30,6 +30,7 @@
 #include "store/splay.h"
 #include "store/part.h"
 #include "table/sym.h"
+#include "table/table.h"
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
@@ -141,7 +142,7 @@ static MunitResult test_col_mmap_cow(const void* params, void* fixture) {
 
     /* Retain so rc==2, forcing ray_cow to make a real copy */
     ray_retain(mapped);
-    munit_assert_uint(atomic_load_explicit(&mapped->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(mapped->rc, ==, 2);
 
     /* COW: ray_cow should produce a buddy-allocated copy */
     ray_t* copy = ray_cow(mapped);
@@ -178,15 +179,15 @@ static MunitResult test_col_mmap_refcount(const void* params, void* fixture) {
 
     ray_t* mapped = ray_col_mmap(TMP_COL_PATH);
     munit_assert_false(RAY_IS_ERR(mapped));
-    munit_assert_uint(atomic_load_explicit(&mapped->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(mapped->rc, ==, 1);
 
     /* Retain: rc should be 2 */
     ray_retain(mapped);
-    munit_assert_uint(atomic_load_explicit(&mapped->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(mapped->rc, ==, 2);
 
     /* Release once: rc==1, still readable */
     ray_release(mapped);
-    munit_assert_uint(atomic_load_explicit(&mapped->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(mapped->rc, ==, 1);
 
     int64_t* data = (int64_t*)ray_data(mapped);
     munit_assert_int(data[0], ==, 7);
@@ -430,13 +431,13 @@ static MunitResult test_parted_release(const void* params, void* fixture) {
     segs[1] = seg1; ray_retain(seg1);
 
     /* Segments should have rc=2 (original + parted ref) */
-    munit_assert_uint(atomic_load_explicit(&seg0->rc, memory_order_relaxed), ==, 2);
-    munit_assert_uint(atomic_load_explicit(&seg1->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(seg0->rc, ==, 2);
+    munit_assert_uint(seg1->rc, ==, 2);
 
     /* Release parted column — segments' rc should drop to 1 */
     ray_release(parted);
-    munit_assert_uint(atomic_load_explicit(&seg0->rc, memory_order_relaxed), ==, 1);
-    munit_assert_uint(atomic_load_explicit(&seg1->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(seg0->rc, ==, 1);
+    munit_assert_uint(seg1->rc, ==, 1);
 
     ray_release(seg0);
     ray_release(seg1);

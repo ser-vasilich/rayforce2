@@ -468,9 +468,7 @@ ray_err_t ray_col_save(ray_t* vec, const char* path) {
         header.order = 0;
         /* For RAY_SYM: store sym count in rc field (always 0 on disk otherwise).
          * This serves as O(1) fast-reject metadata on load. */
-        atomic_store_explicit(&header.rc,
-            (vec->type == RAY_SYM) ? ray_sym_count() : 0,
-            memory_order_relaxed);
+        header.rc = (vec->type == RAY_SYM) ? ray_sym_count() : 0;
 
         /* Clear slice field; preserve ext_nullmap flag for bitmap append */
         header.attrs &= ~RAY_ATTR_SLICE;
@@ -659,7 +657,7 @@ ray_t* ray_col_load(const char* path) {
     vec->attrs &= ~RAY_ATTR_SLICE;
     if (!has_ext_nullmap)
         vec->attrs &= ~RAY_ATTR_NULLMAP_EXT;
-    atomic_store_explicit((_Atomic(uint32_t)*)&vec->rc, 1, memory_order_relaxed);
+    ray_atomic_store(&vec->rc, 1);
 
     /* RAY_SYM: validate sym count footer + bounds check */
     if (vec->type == RAY_SYM) {
@@ -767,7 +765,7 @@ ray_t* ray_col_mmap(const char* path) {
     vec->attrs &= ~RAY_ATTR_SLICE;
     if (!has_ext_nullmap)
         vec->attrs &= ~RAY_ATTR_NULLMAP_EXT;
-    atomic_store_explicit((_Atomic(uint32_t)*)&vec->rc, 1, memory_order_relaxed);
+    ray_atomic_store(&vec->rc, 1);
 
     return vec;
 }

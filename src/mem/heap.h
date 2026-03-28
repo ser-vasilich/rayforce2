@@ -221,8 +221,7 @@ static inline ray_pool_hdr_t* ray_pool_of(ray_t* v) {
         ray_t* hdr_blk = (ray_t*)base;
         if (hdr_blk->order == RAY_ORDER_MIN &&
             hdr_blk->mmod == 0 &&
-            atomic_load_explicit((_Atomic(uint32_t)*)&hdr_blk->rc,
-                                 memory_order_relaxed) == 1) {
+            ray_atomic_load(&hdr_blk->rc) == 1) {
             if (hdr->pool_order >= RAY_HEAP_POOL_ORDER &&
                 hdr->pool_order <= RAY_HEAP_MAX_ORDER &&
                 (uintptr_t)v < base + BSIZEOF(hdr->pool_order))

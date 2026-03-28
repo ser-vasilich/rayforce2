@@ -204,10 +204,10 @@ static MunitResult test_atom_str_long(const void* params, void* fixture) {
 
     /* Keep one guard ref so we can observe atom-owned release. */
     ray_retain(chars);
-    munit_assert_uint(atomic_load_explicit(&chars->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(chars->rc, ==, 2);
 
     ray_release(v);
-    munit_assert_uint(atomic_load_explicit(&chars->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(chars->rc, ==, 1);
     ray_release(chars);
 
     return MUNIT_OK;
@@ -296,10 +296,10 @@ static MunitResult test_atom_guid(const void* params, void* fixture) {
     munit_assert_memory_equal(16, ray_data(vec), bytes);
 
     ray_retain(vec);
-    munit_assert_uint(atomic_load_explicit(&vec->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(vec->rc, ==, 2);
 
     ray_release(v);
-    munit_assert_uint(atomic_load_explicit(&vec->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(vec->rc, ==, 1);
     ray_release(vec);
 
     return MUNIT_OK;

@@ -234,10 +234,10 @@ static MunitResult test_list_release_drops_item_ref(const void* params, void* fi
     list = ray_list_append(list, item);
     munit_assert_ptr_not_null(list);
     munit_assert_false(RAY_IS_ERR(list));
-    munit_assert_uint(atomic_load_explicit(&item->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(item->rc, ==, 2);
 
     ray_release(list);
-    munit_assert_uint(atomic_load_explicit(&item->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(item->rc, ==, 1);
 
     ray_release(item);
     return MUNIT_OK;

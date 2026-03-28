@@ -49,15 +49,15 @@ static MunitResult test_retain_release(const void* params, void* fixture) {
     munit_assert_false(RAY_IS_ERR(v));
 
     /* rc starts at 1 */
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(v->rc, ==, 1);
 
     /* retain -> rc=2 */
     ray_retain(v);
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(v->rc, ==, 2);
 
     /* release -> rc=1 */
     ray_release(v);
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(v->rc, ==, 1);
 
     /* release -> rc=0, block freed (don't access v after this) */
     ray_release(v);
@@ -78,7 +78,7 @@ static MunitResult test_cow_sole_owner(const void* params, void* fixture) {
     /* rc=1, sole owner -> cow returns same pointer */
     ray_t* w = ray_cow(v);
     munit_assert_ptr_equal(v, w);
-    munit_assert_uint(atomic_load_explicit(&w->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(w->rc, ==, 1);
 
     ray_release(w);
     return MUNIT_OK;
@@ -96,7 +96,7 @@ static MunitResult test_cow_shared(const void* params, void* fixture) {
 
     /* retain to rc=2 (shared) */
     ray_retain(v);
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(v->rc, ==, 2);
 
     /* cow on shared object -> returns different pointer */
     ray_t* w = ray_cow(v);
@@ -105,10 +105,10 @@ static MunitResult test_cow_shared(const void* params, void* fixture) {
     munit_assert_true((void*)w != (void*)v);
 
     /* Copy should have rc=1 */
-    munit_assert_uint(atomic_load_explicit(&w->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(w->rc, ==, 1);
 
     /* Original should have rc=1 (cow decremented from 2 to 1) */
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(v->rc, ==, 1);
 
     /* Value should be preserved */
     munit_assert_int(w->type, ==, -RAY_I64);
@@ -197,7 +197,7 @@ static MunitResult test_block_copy_retains_children(const void* params, void* fi
 
     /* Get column ref count before copy */
     ray_t* col_before = ray_table_get_col_idx(tbl, 0);
-    uint32_t rc_before = atomic_load(&col_before->rc);
+    uint32_t rc_before = col_before->rc;
 
     /* Copy the table block */
     ray_t* copy = ray_block_copy(tbl);
@@ -205,7 +205,7 @@ static MunitResult test_block_copy_retains_children(const void* params, void* fi
     munit_assert_false(RAY_IS_ERR(copy));
 
     /* Column ref count should have increased by 1 */
-    uint32_t rc_after = atomic_load(&col_before->rc);
+    uint32_t rc_after = col_before->rc;
     munit_assert_uint(rc_after, ==, rc_before + 1);
 
     ray_release(copy);

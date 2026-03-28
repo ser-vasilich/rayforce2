@@ -50,7 +50,7 @@ static MunitResult test_alloc_basic(const void* params, void* fixture) {
     munit_assert_false(RAY_IS_ERR(v));
     munit_assert_uint(v->mmod, ==, 0);
     munit_assert_uint(v->order, >=, RAY_ORDER_MIN);
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(v->rc, ==, 1);
 
     ray_free(v);
     return MUNIT_OK;
@@ -129,7 +129,7 @@ static MunitResult test_header_zeroed(const void* params, void* fixture) {
     /* mmod should be 0 (heap) */
     munit_assert_uint(v->mmod, ==, 0);
     /* rc should be 1 */
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(v->rc, ==, 1);
 
     ray_free(v);
     return MUNIT_OK;
@@ -277,7 +277,7 @@ static MunitResult test_alloc_copy(const void* params, void* fixture) {
     }
 
     /* Copy should have rc=1, independent of original */
-    munit_assert_uint(atomic_load_explicit(&copy->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(copy->rc, ==, 1);
 
     ray_free(orig);
     ray_free(copy);

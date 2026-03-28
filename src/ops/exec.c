@@ -29,6 +29,7 @@
 #include "lftj.h"
 #include "mem/heap.h"
 #include "table/sym.h"
+#include "table/table.h"
 #include "vec/str.h"
 #include <string.h>
 #include <math.h>

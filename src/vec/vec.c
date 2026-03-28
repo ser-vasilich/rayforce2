@@ -515,7 +515,7 @@ void ray_vec_set_null(ray_t* vec, int64_t idx, bool is_null) {
 
 static ray_t* str_pool_cow(ray_t* vec) {
     if (!vec->str_pool || RAY_IS_ERR(vec->str_pool)) return vec;
-    uint32_t pool_rc = atomic_load_explicit(&vec->str_pool->rc, memory_order_acquire);
+    uint32_t pool_rc = ray_atomic_load(&vec->str_pool->rc);
     if (pool_rc <= 1) return vec;
 
     size_t pool_data_size = ((size_t)1 << vec->str_pool->order) - 32;
@@ -530,7 +530,7 @@ static ray_t* str_pool_cow(ray_t* vec) {
     memcpy(new_pool, vec->str_pool, 32 + copy_bytes);
     new_pool->order = saved_order;
     new_pool->mmod  = saved_mmod;
-    atomic_store_explicit((_Atomic(uint32_t)*)&new_pool->rc, 1, memory_order_relaxed);
+    ray_atomic_store(&new_pool->rc, 1);
 
     ray_release(vec->str_pool);
     vec->str_pool = new_pool;

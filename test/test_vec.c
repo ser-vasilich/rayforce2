@@ -311,15 +311,15 @@ static MunitResult test_vec_slice_release_parent_ref(const void* params, void* f
     munit_assert_ptr_not_null(v);
 
     ray_retain(v); /* guard ref for observing parent rc after slice release */
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(v->rc, ==, 2);
 
     ray_t* s = ray_vec_slice(v, 1, 2);
     munit_assert_ptr_not_null(s);
     munit_assert_false(RAY_IS_ERR(s));
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 3);
+    munit_assert_uint(v->rc, ==, 3);
 
     ray_release(s);
-    munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(v->rc, ==, 2);
 
     ray_release(v);
     ray_release(v);
@@ -346,10 +346,10 @@ static MunitResult test_vec_null_external_release_ext_ref(const void* params, vo
     munit_assert_ptr_not_null(ext);
 
     ray_retain(ext); /* guard ref */
-    munit_assert_uint(atomic_load_explicit(&ext->rc, memory_order_relaxed), ==, 2);
+    munit_assert_uint(ext->rc, ==, 2);
 
     ray_release(v);
-    munit_assert_uint(atomic_load_explicit(&ext->rc, memory_order_relaxed), ==, 1);
+    munit_assert_uint(ext->rc, ==, 1);
 
     ray_release(ext);
     return MUNIT_OK;
