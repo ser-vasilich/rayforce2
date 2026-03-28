@@ -174,19 +174,19 @@ ray_t* ray_neg_fn(ray_t* x) {
 static _Thread_local ray_t *__raise_val = NULL;
 
 /* (raise value) — raise an error with the given value */
-static ray_t* rfl_raise(ray_t* val) {
+ray_t* ray_raise(ray_t* val) {
     if (__raise_val) ray_release(__raise_val);
     ray_retain(val);
     __raise_val = val;
     return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 }
 
-/* Forward declaration for call_lambda (used by rfl_try) */
+/* Forward declaration for call_lambda (used by ray_try) */
 static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc);
 
 /* (try expr handler) — evaluate expr, if error call handler with error value.
  * Special form: receives unevaluated args. */
-static ray_t* rfl_try(ray_t* expr, ray_t* handler_expr) {
+ray_t* ray_try(ray_t* expr, ray_t* handler_expr) {
     ray_t* result = ray_eval(expr);
     if (!RAY_IS_ERR(result)) return result;
 
@@ -2384,7 +2384,7 @@ ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
  * ══════════════════════════════════════════ */
 
 /* (set name value) — bind in global env. Receives unevaluated args. */
-static ray_t* rfl_set(ray_t* name_obj, ray_t* val_expr) {
+ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
     if (name_obj->type != RAY_ATOM_SYM)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
@@ -2397,7 +2397,7 @@ static ray_t* rfl_set(ray_t* name_obj, ray_t* val_expr) {
 }
 
 /* (let name value) — bind in local scope. Receives unevaluated args. */
-static ray_t* rfl_let(ray_t* name_obj, ray_t* val_expr) {
+ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
     if (name_obj->type != RAY_ATOM_SYM)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
@@ -2408,7 +2408,7 @@ static ray_t* rfl_let(ray_t* name_obj, ray_t* val_expr) {
 }
 
 /* (if cond then else?) — conditional. Receives unevaluated args. */
-static ray_t* rfl_cond(ray_t** args, int64_t n) {
+ray_t* ray_cond(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* cond = ray_eval(args[0]);
     if (RAY_IS_ERR(cond)) return cond;
@@ -2424,7 +2424,7 @@ static ray_t* rfl_cond(ray_t** args, int64_t n) {
 }
 
 /* (do expr1 expr2 ...) — evaluate in sequence, return last. Pushes local scope. */
-static ray_t* rfl_do(ray_t** args, int64_t n) {
+ray_t* ray_do(ray_t** args, int64_t n) {
     if (n == 0) return make_i64(0);
     if (ray_env_push_scope() != RAY_OK) return RAY_ERR_PTR(RAY_ERR_OOM);
     ray_t* result = NULL;
@@ -2446,7 +2446,7 @@ static ray_t* rfl_do(ray_t** args, int64_t n) {
 
 /* (fn [params...] body...) — create a lambda object.
  * Stores params list and body expressions in data area. */
-static ray_t* rfl_fn(ray_t** args, int64_t n) {
+ray_t* ray_fn(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     /* args[0] = param vector (list of name symbols), args[1..n-1] = body exprs */
     ray_t* params_list = args[0];
@@ -3094,11 +3094,11 @@ static void ray_register_builtins(void) {
     register_unary("neg",  RAY_FN_ATOMIC, ray_neg_fn);
 
     /* Special forms */
-    register_binary("set", RAY_FN_SPECIAL_FORM, rfl_set);
-    register_binary("let", RAY_FN_SPECIAL_FORM, rfl_let);
-    register_vary("if",    RAY_FN_SPECIAL_FORM, rfl_cond);
-    register_vary("do",    RAY_FN_SPECIAL_FORM, rfl_do);
-    register_vary("fn",    RAY_FN_SPECIAL_FORM, rfl_fn);
+    register_binary("set", RAY_FN_SPECIAL_FORM, ray_set);
+    register_binary("let", RAY_FN_SPECIAL_FORM, ray_let);
+    register_vary("if",    RAY_FN_SPECIAL_FORM, ray_cond);
+    register_vary("do",    RAY_FN_SPECIAL_FORM, ray_do);
+    register_vary("fn",    RAY_FN_SPECIAL_FORM, ray_fn);
 
     /* Aggregation builtins */
     register_unary("sum",   RAY_FN_AGGR, ray_sum_fn);
@@ -3112,8 +3112,8 @@ static void ray_register_builtins(void) {
     register_unary("dev",   RAY_FN_AGGR, ray_dev);
 
     /* Error handling */
-    register_unary("raise", RAY_FN_NONE, rfl_raise);
-    register_binary("try",  RAY_FN_SPECIAL_FORM, rfl_try);
+    register_unary("raise", RAY_FN_NONE, ray_raise);
+    register_binary("try",  RAY_FN_SPECIAL_FORM, ray_try);
 
     /* Higher-order functions */
     register_vary("map",    RAY_FN_NONE, ray_map);

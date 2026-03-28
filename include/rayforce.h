@@ -1305,6 +1305,15 @@ ray_t* ray_write_file(ray_t* path_obj, ray_t* content);
 ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val);
 ray_t* ray_type_fn(ray_t* val);
 
+/* Special forms */
+ray_t* ray_set(ray_t* name_obj, ray_t* val_expr);
+ray_t* ray_let(ray_t* name_obj, ray_t* val_expr);
+ray_t* ray_cond(ray_t** args, int64_t n);
+ray_t* ray_do(ray_t** args, int64_t n);
+ray_t* ray_fn(ray_t** args, int64_t n);
+ray_t* ray_raise(ray_t* val);
+ray_t* ray_try(ray_t* expr, ray_t* handler_expr);
+
 #ifdef __cplusplus
 }
 #endif
