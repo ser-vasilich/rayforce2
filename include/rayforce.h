@@ -27,46 +27,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 #include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-/* ===== Platform Macros ===== */
-
-#ifndef RAY_LIKELY
-#if defined(__GNUC__) || defined(__clang__)
-  #define RAY_LIKELY(x)   __builtin_expect(!!(x), 1)
-  #define RAY_UNLIKELY(x) __builtin_expect(!!(x), 0)
-  #define RAY_ALIGN(n)    __attribute__((aligned(n)))
-  #define RAY_INLINE      static inline __attribute__((always_inline))
-#elif defined(_MSC_VER)
-  #define RAY_LIKELY(x)   (x)
-  #define RAY_UNLIKELY(x) (x)
-  #define RAY_ALIGN(n)    __declspec(align(n))
-  #define RAY_INLINE      static __forceinline
-#else
-  #define RAY_LIKELY(x)   (x)
-  #define RAY_UNLIKELY(x) (x)
-  #define RAY_ALIGN(n)
-  #define RAY_INLINE      static inline
-#endif
-#endif /* RAY_LIKELY */
-
-#ifndef RAY_ASSUME_ALIGNED
-#if defined(__GNUC__) || defined(__clang__)
-  #define RAY_ASSUME_ALIGNED(p, n) __builtin_assume_aligned((p), (n))
-#else
-  #define RAY_ASSUME_ALIGNED(p, n) (p)
-#endif
-#endif
-
-#if defined(_MSC_VER)
-  #define RAY_TLS __declspec(thread)
-#else
-  #define RAY_TLS _Thread_local
 #endif
 
 /* ===== Type Constants ===== */
@@ -187,7 +151,7 @@ const char* ray_err_str(ray_err_t e);
 
 /* ===== Core Type: ray_t (32-byte block/object header) ===== */
 
-typedef union RAY_ALIGN(32) ray_t {
+typedef union ray_t {
     /* Allocated: object header */
     struct {
         /* Bytes 0-15: nullable bitmask / slice / ext nullmap */
@@ -248,9 +212,7 @@ static inline bool ray_is_lazy(ray_t* x) {
 #define ray_is_atom(v)    ((v)->type < 0 || (v)->type >= RAY_LAMBDA)
 #define ray_is_vec(v)     ((v)->type > 0 && (v)->type < RAY_LAMBDA)
 #define ray_len(v)        ((v)->len)
-static inline void* ray_data_fn(ray_t* v) {
-    return RAY_ASSUME_ALIGNED((void*)v->data, 32);
-}
+static inline void* ray_data_fn(ray_t* v) { return (void*)v->data; }
 #define ray_data(v)       ray_data_fn(v)
 #define ray_elem_size(t)  (ray_type_sizes[(t)])
 
