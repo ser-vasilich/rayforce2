@@ -24,6 +24,7 @@
 #include "munit.h"
 #include <rayforce.h>
 #include "mem/heap.h"
+#include "io/csv.h"
 #include <stdio.h>
 #include <unistd.h>
 

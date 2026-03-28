@@ -35,4 +35,6 @@
 
 #include <rayforce.h>
 
+int64_t ray_parted_nrows(ray_t* parted_col);
+
 #endif /* RAY_TABLE_H */

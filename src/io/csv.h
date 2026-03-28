@@ -26,4 +26,9 @@
 
 #include <rayforce.h>
 
+ray_t* ray_read_csv(const char* path);
+ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
+                        const int8_t* col_types, int32_t n_types);
+ray_err_t ray_write_csv(ray_t* table, const char* path);
+
 #endif /* RAY_CSV_H */
