@@ -294,8 +294,22 @@ static ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
     return x;
 }
 
+/* Store a scalar result into a typed vector at position i.
+ * Returns 0 on success, -1 if the element type doesn't match. */
+static int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
+    switch (vec->type) {
+        case RAY_I64:  ((int64_t*)ray_data(vec))[i]  = elem->i64; return 0;
+        case RAY_F64:  ((double*)ray_data(vec))[i]    = elem->f64; return 0;
+        case RAY_I32:  ((int32_t*)ray_data(vec))[i]   = elem->i32; return 0;
+        case RAY_I16:  ((int16_t*)ray_data(vec))[i]   = elem->i16; return 0;
+        case RAY_BOOL: ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
+        default: return -1;
+    }
+}
+
 /* Map a binary function element-wise over collections.
- * Both args can be collections (zip-map) or one scalar (broadcast). */
+ * Both args can be collections (zip-map) or one scalar (broadcast).
+ * Produces typed vectors when output is numeric/bool, boxed lists otherwise. */
 static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     int left_coll = is_collection(left);
     int right_coll = is_collection(right);
@@ -309,13 +323,56 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
         len = left_coll ? ray_len(left) : ray_len(right);
     }
 
+    if (len == 0) {
+        /* Return empty I64 vector for empty input */
+        return ray_vec_new(RAY_I64, 0);
+    }
+
+    /* Probe first element to determine output type */
+    int la0 = 0, ra0 = 0;
+    ray_t* a0 = left_coll  ? collection_elem(left, 0, &la0)  : left;
+    ray_t* b0 = right_coll ? collection_elem(right, 0, &ra0) : right;
+    ray_t* e0 = (RAY_IS_ERR(a0) || RAY_IS_ERR(b0))
+               ? RAY_ERR_PTR(RAY_ERR_TYPE) : fn(a0, b0);
+    if (la0) ray_release(a0);
+    if (ra0) ray_release(b0);
+    if (RAY_IS_ERR(e0)) return e0;
+
+    int8_t out_type = -(e0->type);  /* atom type (-RAY_I64) → vector type (RAY_I64) */
+
+    /* Try typed vector path for numeric/bool output */
+    if (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
+        out_type == RAY_I16 || out_type == RAY_BOOL) {
+        ray_t* vec = ray_vec_new(out_type, len);
+        if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
+        vec->len = len;
+        store_typed_elem(vec, 0, e0);
+        ray_release(e0);
+
+        for (int64_t i = 1; i < len; i++) {
+            int la = 0, ra = 0;
+            ray_t* a = left_coll  ? collection_elem(left, i, &la)  : left;
+            ray_t* b = right_coll ? collection_elem(right, i, &ra) : right;
+            ray_t* elem = (RAY_IS_ERR(a) || RAY_IS_ERR(b))
+                         ? RAY_ERR_PTR(RAY_ERR_TYPE) : fn(a, b);
+            if (la) ray_release(a);
+            if (ra) ray_release(b);
+            if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+            store_typed_elem(vec, i, elem);
+            ray_release(elem);
+        }
+        return vec;
+    }
+
+    /* Fallback: boxed list for non-numeric output */
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { ray_release(e0); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
+    out[0] = e0;  /* first element already computed */
 
-    for (int64_t i = 0; i < len; i++) {
+    for (int64_t i = 1; i < len; i++) {
         int la = 0, ra = 0;
         ray_t* a = left_coll  ? collection_elem(left, i, &la)  : left;
         ray_t* b = right_coll ? collection_elem(right, i, &ra) : right;
@@ -333,18 +390,56 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return result;
 }
 
-/* Map a unary function element-wise over a collection. */
+/* Map a unary function element-wise over a collection.
+ * Produces typed vectors when output is numeric/bool, boxed lists otherwise. */
 static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
     if (!is_collection(arg)) return fn(arg);
 
     int64_t len = ray_len(arg);
+
+    if (len == 0) {
+        return ray_vec_new(RAY_I64, 0);
+    }
+
+    /* Probe first element to determine output type */
+    int alloc0 = 0;
+    ray_t* e0_in = collection_elem(arg, 0, &alloc0);
+    ray_t* e0 = RAY_IS_ERR(e0_in) ? e0_in : fn(e0_in);
+    if (alloc0) ray_release(e0_in);
+    if (RAY_IS_ERR(e0)) return e0;
+
+    int8_t out_type = -(e0->type);
+
+    /* Try typed vector path for numeric/bool output */
+    if (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
+        out_type == RAY_I16 || out_type == RAY_BOOL) {
+        ray_t* vec = ray_vec_new(out_type, len);
+        if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
+        vec->len = len;
+        store_typed_elem(vec, 0, e0);
+        ray_release(e0);
+
+        for (int64_t i = 1; i < len; i++) {
+            int alloc = 0;
+            ray_t* e = collection_elem(arg, i, &alloc);
+            ray_t* elem = RAY_IS_ERR(e) ? e : fn(e);
+            if (alloc) ray_release(e);
+            if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+            store_typed_elem(vec, i, elem);
+            ray_release(elem);
+        }
+        return vec;
+    }
+
+    /* Fallback: boxed list for non-numeric output */
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { ray_release(e0); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
+    out[0] = e0;
 
-    for (int64_t i = 0; i < len; i++) {
+    for (int64_t i = 1; i < len; i++) {
         int alloc = 0;
         ray_t* e = collection_elem(arg, i, &alloc);
         ray_t* elem = RAY_IS_ERR(e) ? e : fn(e);

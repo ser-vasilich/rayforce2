@@ -419,12 +419,12 @@ static MunitResult test_eval_vector_add(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(+ [1 2 3] 10)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_int(result->type, ==, RAY_I64);
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 11);
-    munit_assert_int(elems[1]->i64, ==, 12);
-    munit_assert_int(elems[2]->i64, ==, 13);
+    int64_t* elems = (int64_t*)ray_data(result);
+    munit_assert_int(elems[0], ==, 11);
+    munit_assert_int(elems[1], ==, 12);
+    munit_assert_int(elems[2], ==, 13);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -435,12 +435,12 @@ static MunitResult test_eval_vector_add_vec(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(+ [1 2 3] [4 5 6])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_int(result->type, ==, RAY_I64);
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 5);
-    munit_assert_int(elems[1]->i64, ==, 7);
-    munit_assert_int(elems[2]->i64, ==, 9);
+    int64_t* elems = (int64_t*)ray_data(result);
+    munit_assert_int(elems[0], ==, 5);
+    munit_assert_int(elems[1], ==, 7);
+    munit_assert_int(elems[2], ==, 9);
     ray_release(result);
     return MUNIT_OK;
 }
