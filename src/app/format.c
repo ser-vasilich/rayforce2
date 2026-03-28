@@ -1,5 +1,6 @@
 #include "app/format.h"
 #include "table/sym.h"
+#include "lang/eval.h"  /* RAY_ATTR_DICT */
 #include "mem/heap.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -318,44 +319,179 @@ static void fmt_str_atom(fmt_buf_t* b, ray_t* obj, int full) {
     }
 }
 
-ray_t* ray_fmt(ray_t* obj, int mode) {
-    if (!obj) return ray_str("null", 4);
-    if (RAY_IS_ERR(obj)) {
-        fmt_buf_t b;
-        fmt_init(&b);
-        ray_err_t code = RAY_ERR_CODE(obj);
-        fmt_puts(&b, "error: ");
-        fmt_puts(&b, ray_err_str(code));
-        return fmt_to_str(&b);
+/* ===== Forward declarations ===== */
+
+static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode);
+
+/* ===== Vector element formatter ===== */
+
+static void fmt_raw_elem(fmt_buf_t* b, ray_t* vec, int64_t idx) {
+    /* Check for null */
+    if (ray_vec_is_null(vec, idx)) {
+        switch (vec->type) {
+        case RAY_I16:       fmt_puts(b, "0Nh"); return;
+        case RAY_I32:       fmt_puts(b, "0Ni"); return;
+        case RAY_DATE:      fmt_puts(b, "0Nd"); return;
+        case RAY_TIME:      fmt_puts(b, "0Nt"); return;
+        case RAY_I64:       fmt_puts(b, "0Nl"); return;
+        case RAY_TIMESTAMP: fmt_puts(b, "0Np"); return;
+        case RAY_F64:       fmt_puts(b, "0Nf"); return;
+        case RAY_SYM:       fmt_puts(b, "0Ns"); return;
+        default:            fmt_puts(b, "null"); return;
+        }
     }
 
-    (void)g_row_width;
+    switch (vec->type) {
+    case RAY_BOOL:      fmt_bool(b, ((bool*)ray_data(vec))[idx]); break;
+    case RAY_U8:        fmt_u8(b, ((uint8_t*)ray_data(vec))[idx]); break;
+    case RAY_CHAR:      fmt_char(b, ((char*)ray_data(vec))[idx], 0); break;
+    case RAY_I16:       fmt_i16(b, ((int16_t*)ray_data(vec))[idx]); break;
+    case RAY_I32:       fmt_i32(b, ((int32_t*)ray_data(vec))[idx]); break;
+    case RAY_I64:       fmt_i64(b, ((int64_t*)ray_data(vec))[idx]); break;
+    case RAY_F64:       fmt_f64(b, ((double*)ray_data(vec))[idx]); break;
+    case RAY_DATE:      fmt_date(b, ((int32_t*)ray_data(vec))[idx]); break;
+    case RAY_TIME:      fmt_time(b, ((int32_t*)ray_data(vec))[idx]); break;
+    case RAY_TIMESTAMP: fmt_timestamp(b, ((int64_t*)ray_data(vec))[idx]); break;
+    case RAY_SYM: {
+        int64_t sym_id = ray_read_sym(ray_data(vec), idx, vec->type, vec->attrs);
+        fmt_sym(b, sym_id);
+        break;
+    }
+    case RAY_STR: {
+        size_t slen = 0;
+        const char* p = ray_str_vec_get(vec, idx, &slen);
+        if (p) fmt_putn(b, p, (int32_t)slen);
+        break;
+    }
+    default:
+        fmt_puts(b, "?");
+        break;
+    }
+}
 
-    fmt_buf_t b;
-    fmt_init(&b);
+/* ===== Vector formatter ===== */
+
+static void fmt_vector(fmt_buf_t* b, ray_t* vec, int limit) {
+    int64_t len = ray_len(vec);
+    if (len == 0) { fmt_puts(b, "[]"); return; }
+
+    fmt_puts(b, "[");
+    int32_t start_len = b->len;
+
+    for (int64_t i = 0; i < len; i++) {
+        if (i > 0) fmt_putc(b, ' ');
+
+        int32_t before = b->len;
+        fmt_raw_elem(b, vec, i);
+
+        /* Width limiting: check if we exceeded the limit */
+        if (limit > 0 && (b->len - start_len) > limit) {
+            /* Rewind to before this element and truncate */
+            b->len = before;
+            fmt_puts(b, "..]");
+            return;
+        }
+    }
+
+    fmt_puts(b, "]");
+}
+
+/* ===== List formatter ===== */
+
+static void fmt_dict(fmt_buf_t* b, ray_t* dict, int mode);
+
+static void fmt_list(fmt_buf_t* b, ray_t* list, int mode) {
+    int64_t len = ray_len(list);
+    if (len == 0) { fmt_puts(b, "()"); return; }
+
+    /* Dict check */
+    if (list->attrs & RAY_ATTR_DICT) {
+        fmt_dict(b, list, mode);
+        return;
+    }
+
+    fmt_puts(b, "(");
+    int64_t max_elems = (mode == 1) ? FMT_LIST_MAX_HEIGHT : len;
+    int64_t show = len < max_elems ? len : max_elems;
+
+    for (int64_t i = 0; i < show; i++) {
+        if (i > 0) fmt_putc(b, ' ');
+        ray_t* elem = ray_list_get(list, i);
+        fmt_obj(b, elem, mode);
+    }
+
+    if (len > show) fmt_puts(b, " ..");
+    fmt_puts(b, ")");
+}
+
+/* ===== Dict formatter ===== */
+
+static void fmt_dict(fmt_buf_t* b, ray_t* dict, int mode) {
+    int64_t len = ray_len(dict);
+    int64_t npairs = len / 2;
+    if (npairs == 0) { fmt_puts(b, "{}"); return; }
+
+    int64_t max_pairs = (mode == 1) ? FMT_LIST_MAX_HEIGHT : npairs;
+    int64_t show = npairs < max_pairs ? npairs : max_pairs;
+
+    fmt_puts(b, "{");
+    for (int64_t i = 0; i < show; i++) {
+        if (i > 0) fmt_putc(b, ' ');
+        ray_t* key = ray_list_get(dict, i * 2);
+        ray_t* val = ray_list_get(dict, i * 2 + 1);
+        fmt_obj(b, key, mode);
+        fmt_puts(b, ": ");
+        fmt_obj(b, val, mode);
+    }
+    if (npairs > show) fmt_puts(b, " ..");
+    fmt_puts(b, "}");
+}
+
+/* ===== Core dispatch ===== */
+
+static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
+    if (!obj) { fmt_puts(b, "null"); return; }
+    if (RAY_IS_ERR(obj)) {
+        ray_err_t code = RAY_ERR_CODE(obj);
+        fmt_puts(b, "error: ");
+        fmt_puts(b, ray_err_str(code));
+        return;
+    }
 
     int8_t type = obj->type;
     if (type < 0) {
         /* Atom: type is negated */
         switch (-type) {
-        case RAY_BOOL: fmt_bool(&b, obj->b8); break;
-        case RAY_U8:   fmt_u8(&b, obj->u8); break;
-        case RAY_CHAR: fmt_char(&b, obj->c8, mode > 0); break;
-        case RAY_I16:  fmt_i16(&b, obj->i16); break;
-        case RAY_I32:  fmt_i32(&b, obj->i32); break;
-        case RAY_I64:  fmt_i64(&b, obj->i64); break;
-        case RAY_F64:       fmt_f64(&b, obj->f64); break;
-        case RAY_DATE:      fmt_date(&b, obj->i32); break;
-        case RAY_TIME:      fmt_time(&b, obj->i32); break;
-        case RAY_TIMESTAMP: fmt_timestamp(&b, obj->i64); break;
-        case RAY_SYM:  fmt_sym(&b, obj->i64); break;
-        case RAY_STR:  fmt_str_atom(&b, obj, mode > 0); break;
-        default:       fmt_puts(&b, "?"); break;
+        case RAY_BOOL: fmt_bool(b, obj->b8); break;
+        case RAY_U8:   fmt_u8(b, obj->u8); break;
+        case RAY_CHAR: fmt_char(b, obj->c8, mode > 0); break;
+        case RAY_I16:  fmt_i16(b, obj->i16); break;
+        case RAY_I32:  fmt_i32(b, obj->i32); break;
+        case RAY_I64:  fmt_i64(b, obj->i64); break;
+        case RAY_F64:       fmt_f64(b, obj->f64); break;
+        case RAY_DATE:      fmt_date(b, obj->i32); break;
+        case RAY_TIME:      fmt_time(b, obj->i32); break;
+        case RAY_TIMESTAMP: fmt_timestamp(b, obj->i64); break;
+        case RAY_SYM:  fmt_sym(b, obj->i64); break;
+        case RAY_STR:  fmt_str_atom(b, obj, mode > 0); break;
+        default:       fmt_puts(b, "?"); break;
         }
+    } else if (ray_is_vec(obj)) {
+        int limit = (mode == 1) ? g_row_width : -1;
+        fmt_vector(b, obj, limit);
+    } else if (type == RAY_LIST) {
+        fmt_list(b, obj, mode);
+    } else if (type == RAY_TABLE) {
+        fmt_puts(b, "<table>");
     } else {
-        fmt_puts(&b, "<todo>"); /* vectors/tables later */
+        fmt_puts(b, "<todo>");
     }
+}
 
+ray_t* ray_fmt(ray_t* obj, int mode) {
+    fmt_buf_t b;
+    fmt_init(&b);
+    fmt_obj(&b, obj, mode);
     return fmt_to_str(&b);
 }
 
