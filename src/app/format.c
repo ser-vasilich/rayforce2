@@ -1,8 +1,12 @@
 #include "app/format.h"
+#include "table/sym.h"
 #include "mem/heap.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include <inttypes.h>
+#include <limits.h>
 
 /* ===== Internal growable buffer ===== */
 
@@ -44,7 +48,6 @@ static void fmt_ensure(fmt_buf_t* b, int32_t extra) {
     b->cap   = new_cap;
 }
 
-__attribute__((unused))
 static void fmt_putc(fmt_buf_t* b, char c) {
     fmt_ensure(b, 1);
     b->buf[b->len++] = c;
@@ -57,7 +60,6 @@ static void fmt_puts(fmt_buf_t* b, const char* s) {
     b->len += slen;
 }
 
-__attribute__((unused))
 static void fmt_printf(fmt_buf_t* b, const char* fmt, ...) {
     va_list ap;
 
@@ -79,6 +81,12 @@ static void fmt_printf(fmt_buf_t* b, const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(b->buf + b->len, (size_t)(b->cap - b->len), fmt, ap);
     va_end(ap);
+    b->len += n;
+}
+
+static void fmt_putn(fmt_buf_t* b, const char* s, int32_t n) {
+    fmt_ensure(b, n);
+    memcpy(b->buf + b->len, s, (size_t)n);
     b->len += n;
 }
 
@@ -128,14 +136,122 @@ const char* ray_type_name(int8_t type) {
     }
 }
 
+/* ===== Atom formatters ===== */
+
+static void fmt_bool(fmt_buf_t* b, uint8_t val) {
+    fmt_puts(b, val ? "true" : "false");
+}
+
+static void fmt_u8(fmt_buf_t* b, uint8_t val) {
+    fmt_printf(b, "0x%02x", val);
+}
+
+static void fmt_char(fmt_buf_t* b, char val, int full) {
+    if (!full) {
+        if (val) fmt_putc(b, val);
+        return;
+    }
+    fmt_putc(b, '\'');
+    switch (val) {
+    case '\0': /* empty char literal */ break;
+    case '\n': fmt_puts(b, "\\n"); break;
+    case '\t': fmt_puts(b, "\\t"); break;
+    case '\r': fmt_puts(b, "\\r"); break;
+    case '"':  fmt_puts(b, "\\\""); break;
+    default:   fmt_putc(b, val); break;
+    }
+    fmt_putc(b, '\'');
+}
+
+static void fmt_i16(fmt_buf_t* b, int16_t val) {
+    if (val == INT16_MIN) { fmt_puts(b, "0Nh"); return; }
+    fmt_printf(b, "%d", (int)val);
+}
+
+static void fmt_i32(fmt_buf_t* b, int32_t val) {
+    if (val == INT32_MIN) { fmt_puts(b, "0Ni"); return; }
+    fmt_printf(b, "%d", (int)val);
+}
+
+static void fmt_i64(fmt_buf_t* b, int64_t val) {
+    if (val == INT64_MIN) { fmt_puts(b, "0Nl"); return; }
+    fmt_printf(b, "%" PRId64, val);
+}
+
+static void fmt_f64(fmt_buf_t* b, double val) {
+    if (isnan(val)) { fmt_puts(b, "0Nf"); return; }
+    if (val == -0.0 && signbit(val)) {
+        fmt_printf(b, "%.*f", g_precision, 0.0);
+        return;
+    }
+    double absval = val < 0 ? -val : val;
+    double order = log10(absval);
+    if (val != 0.0 && (order > 6 || order < -1))
+        fmt_printf(b, "%.*e", g_precision, val);
+    else
+        fmt_printf(b, "%.*f", g_precision, val);
+}
+
+static void fmt_sym(fmt_buf_t* b, int64_t sym_id) {
+    if (sym_id == INT64_MIN) { fmt_puts(b, "0Ns"); return; }
+    ray_t* s = ray_sym_str(sym_id);
+    if (s && !RAY_IS_ERR(s)) {
+        const char* p = ray_str_ptr(s);
+        size_t      n = ray_str_len(s);
+        fmt_putn(b, p, (int32_t)n);
+        ray_release(s);
+    } else {
+        fmt_puts(b, "0Ns");
+    }
+}
+
+static void fmt_str_atom(fmt_buf_t* b, ray_t* obj, int full) {
+    const char* p = ray_str_ptr(obj);
+    size_t      n = ray_str_len(obj);
+    if (full) {
+        fmt_putc(b, '"');
+        fmt_putn(b, p, (int32_t)n);
+        fmt_putc(b, '"');
+    } else {
+        fmt_putn(b, p, (int32_t)n);
+    }
+}
+
 ray_t* ray_fmt(ray_t* obj, int mode) {
-    (void)obj;
-    (void)mode;
-    (void)g_precision;
+    if (!obj) return ray_str("null", 4);
+    if (RAY_IS_ERR(obj)) {
+        fmt_buf_t b;
+        fmt_init(&b);
+        ray_err_t code = RAY_ERR_CODE(obj);
+        fmt_puts(&b, "error: ");
+        fmt_puts(&b, ray_err_str(code));
+        return fmt_to_str(&b);
+    }
+
     (void)g_row_width;
+
     fmt_buf_t b;
     fmt_init(&b);
-    fmt_puts(&b, "<todo>");
+
+    int8_t type = obj->type;
+    if (type < 0) {
+        /* Atom: type is negated */
+        switch (-type) {
+        case RAY_BOOL: fmt_bool(&b, obj->b8); break;
+        case RAY_U8:   fmt_u8(&b, obj->u8); break;
+        case RAY_CHAR: fmt_char(&b, obj->c8, mode > 0); break;
+        case RAY_I16:  fmt_i16(&b, obj->i16); break;
+        case RAY_I32:  fmt_i32(&b, obj->i32); break;
+        case RAY_I64:  fmt_i64(&b, obj->i64); break;
+        case RAY_F64:  fmt_f64(&b, obj->f64); break;
+        case RAY_SYM:  fmt_sym(&b, obj->i64); break;
+        case RAY_STR:  fmt_str_atom(&b, obj, mode > 0); break;
+        default:       fmt_puts(&b, "?"); break;
+        }
+    } else {
+        fmt_puts(&b, "<todo>"); /* vectors/tables later */
+    }
+
     return fmt_to_str(&b);
 }
 
