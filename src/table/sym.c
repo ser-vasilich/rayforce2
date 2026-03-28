@@ -22,6 +22,7 @@
  */
 
 #include "sym.h"
+#include "core/platform.h"
 #include "store/fileio.h"
 #include "mem/sys.h"
 #include "mem/arena.h"

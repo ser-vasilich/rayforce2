@@ -23,7 +23,10 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "part.h"
+#include "core/platform.h"
 #include "mem/sys.h"
+#include "ops/ops.h"
+#include "table/sym.h"
 #include <string.h>
 #include <stdio.h>
 #include <dirent.h>

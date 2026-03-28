@@ -24,6 +24,7 @@
 #include "heap.h"
 #include "sys.h"
 #include "core/platform.h"
+#include "table/sym.h"
 #include <string.h>
 
 /* --------------------------------------------------------------------------

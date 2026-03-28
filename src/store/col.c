@@ -22,7 +22,9 @@
  */
 
 #include "col.h"
+#include "core/platform.h"
 #include "store/fileio.h"
+#include "table/sym.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>

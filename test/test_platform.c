@@ -23,6 +23,8 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "core/platform.h"
+#include "mem/heap.h"
 #include <stdatomic.h>
 #include <string.h>
 

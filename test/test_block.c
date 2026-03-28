@@ -24,6 +24,7 @@
 #include "munit.h"
 #include <rayforce.h>
 #include "core/block.h"
+#include "table/sym.h"
 
 /* ---- Accessor macro tests ---------------------------------------------- */
 

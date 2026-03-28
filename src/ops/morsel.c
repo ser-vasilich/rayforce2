@@ -22,6 +22,8 @@
  */
 
 #include "morsel.h"
+#include "core/platform.h"
+#include "table/sym.h"
 #include <string.h>
 
 /* --------------------------------------------------------------------------

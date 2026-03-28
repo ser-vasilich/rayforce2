@@ -88,4 +88,8 @@ void ray_pool_dispatch_n(ray_pool_t* pool, ray_pool_fn fn, void* ctx, uint32_t n
 /* Global pool lifecycle (lazy singleton) */
 ray_pool_t* ray_pool_get(void);
 
+/* Public pool init/destroy (moved from rayforce.h) */
+ray_err_t ray_pool_init(uint32_t n_workers);
+void     ray_pool_destroy(void);
+
 #endif /* RAY_POOL_H */

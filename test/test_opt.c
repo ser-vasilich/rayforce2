@@ -1,5 +1,6 @@
 #include "munit.h"
 #include <rayforce.h>
+#include "mem/heap.h"
 #include "ops/ops.h"
 #include <string.h>
 

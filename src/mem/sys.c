@@ -22,6 +22,7 @@
  */
 
 #include "sys.h"
+#include "core/platform.h"
 #include <rayforce.h>
 #include <string.h>
 #include <stdatomic.h>

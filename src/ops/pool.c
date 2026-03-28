@@ -22,6 +22,7 @@
  */
 
 #include "pool.h"
+#include "mem/heap.h"
 #include "mem/sys.h"
 #include <string.h>
 #include <sched.h>

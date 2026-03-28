@@ -22,8 +22,10 @@
  */
 
 #include "block.h"
+#include "core/platform.h"
 #include "../mem/heap.h"
 #include "../ops/ops.h"
+#include "../table/sym.h"
 
 /* Weak stub for ray_alloc — replaced by buddy allocator at link time.
  * Uses ray_vm_alloc (mmap) — page-aligned and zero-filled. */

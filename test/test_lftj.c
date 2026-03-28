@@ -23,6 +23,7 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "mem/heap.h"
 #include "store/csr.h"
 #include "ops/lftj.h"
 #include <string.h>

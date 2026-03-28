@@ -23,6 +23,8 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "mem/heap.h"
+#include "vec/str.h"
 #include <string.h>
 
 /* ---- Setup / Teardown -------------------------------------------------- */

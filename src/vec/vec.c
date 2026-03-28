@@ -22,6 +22,8 @@
  */
 
 #include "vec.h"
+#include "table/sym.h"
+#include "vec/embedding.h"
 #include <string.h>
 
 /* --------------------------------------------------------------------------

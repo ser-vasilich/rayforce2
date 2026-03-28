@@ -12,6 +12,7 @@
  */
 
 #include <rayforce.h>
+#include "mem/heap.h"
 #include "ops/ops.h"
 #include <stdio.h>
 

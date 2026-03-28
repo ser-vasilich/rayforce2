@@ -1,5 +1,6 @@
 #include "app/repl.h"
 #include "lang/eval.h"
+#include "mem/heap.h"
 #include <rayforce.h>
 
 int main(int argc, char** argv) {

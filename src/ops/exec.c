@@ -28,6 +28,8 @@
 #include "store/hnsw.h"
 #include "lftj.h"
 #include "mem/heap.h"
+#include "table/sym.h"
+#include "vec/str.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>

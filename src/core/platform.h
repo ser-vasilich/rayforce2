@@ -98,10 +98,43 @@
 #endif /* !ray_atomic_inc */
 
 /* --------------------------------------------------------------------------
- * Pull in the public header for ray_err_t, ray_thread_t, VM API, etc.
- * This ensures all type/function declarations are consistent with rayforce.h.
+ * Pull in the public header for ray_err_t, ray_t, etc.
  * -------------------------------------------------------------------------- */
 #include <rayforce.h>
+
+/* --------------------------------------------------------------------------
+ * Thread types
+ * -------------------------------------------------------------------------- */
+#if defined(_WIN32)
+  typedef void* ray_thread_t;
+#else
+  typedef unsigned long ray_thread_t;
+#endif
+
+typedef void (*ray_thread_fn)(void* arg);
+
+/* --------------------------------------------------------------------------
+ * Platform VM API
+ * -------------------------------------------------------------------------- */
+void* ray_vm_alloc(size_t size);
+void  ray_vm_free(void* ptr, size_t size);
+void* ray_vm_map_file(const char* path, size_t* out_size);
+void  ray_vm_unmap_file(void* ptr, size_t size);
+void  ray_vm_advise_seq(void* ptr, size_t size);
+void  ray_vm_advise_willneed(void* ptr, size_t size);
+void  ray_vm_release(void* ptr, size_t size);
+void* ray_vm_alloc_aligned(size_t size, size_t alignment);
+
+/* --------------------------------------------------------------------------
+ * Threading API
+ * -------------------------------------------------------------------------- */
+ray_err_t ray_thread_create(ray_thread_t* t, ray_thread_fn fn, void* arg);
+ray_err_t ray_thread_join(ray_thread_t t);
+uint32_t ray_thread_count(void);
+
+void ray_parallel_begin(void);
+void ray_parallel_end(void);
+extern _Atomic(uint32_t) ray_parallel_flag;
 
 /* --------------------------------------------------------------------------
  * Semaphore (platform-specific, not in the public header)

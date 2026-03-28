@@ -44,6 +44,42 @@
 #include "ops/ops.h"
 #include <stdint.h>
 
+/* ===== Memory Statistics ===== */
+
+typedef struct {
+    size_t alloc_count;      /* ray_alloc calls */
+    size_t free_count;       /* ray_free calls */
+    size_t bytes_allocated;  /* currently allocated */
+    size_t peak_bytes;       /* high-water mark */
+    size_t slab_hits;        /* slab cache hits */
+    size_t direct_count;     /* active direct mmaps */
+    size_t direct_bytes;     /* bytes in direct mmaps */
+    size_t sys_current;      /* sys allocator: current mmap'd bytes */
+    size_t sys_peak;         /* sys allocator: peak mmap'd bytes */
+} ray_mem_stats_t;
+
+/* ===== Forward Declarations (internal types) ===== */
+
+typedef struct ray_heap      ray_heap_t;
+typedef struct ray_sym_table ray_sym_table_t;
+typedef struct ray_sym_map   ray_sym_map_t;
+typedef struct ray_task      ray_task_t;
+typedef struct ray_dispatch  ray_dispatch_t;
+
+/* ===== Heap Lifecycle ===== */
+
+void     ray_heap_init(void);
+void     ray_heap_destroy(void);
+void     ray_heap_merge(ray_heap_t* src);
+void     ray_heap_flush_foreign(void);
+void     ray_heap_push_pending(ray_heap_t* heap);
+void     ray_heap_drain_pending(void);
+uint8_t  ray_order_for_size(size_t data_size);
+void     ray_mem_stats(ray_mem_stats_t* out);
+
+void ray_heap_gc(void);
+void ray_heap_release_pages(void);
+
 /* --------------------------------------------------------------------------
  * Constants
  * -------------------------------------------------------------------------- */

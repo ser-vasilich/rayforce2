@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 199309L
 #include <rayforce.h>
+#include "mem/heap.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>

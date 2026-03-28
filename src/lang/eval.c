@@ -4,6 +4,7 @@
 #include "io/csv.h"
 #include "ops/ops.h"
 #include "ops/pool.h"
+#include "table/sym.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

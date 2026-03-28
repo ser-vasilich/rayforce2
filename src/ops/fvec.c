@@ -23,6 +23,7 @@
 
 #include "fvec.h"
 #include "mem/sys.h"
+#include "table/sym.h"
 #include <string.h>
 #include <stdio.h>
 

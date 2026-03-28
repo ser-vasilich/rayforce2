@@ -91,18 +91,6 @@ extern "C" {
   #define RAY_TLS _Thread_local
 #endif
 
-/* ===== Atomic Helpers ===== */
-
-#if defined(_MSC_VER)
-  #define ray_atomic_inc(p)   _InterlockedIncrement((volatile long*)(p))
-  #define ray_atomic_dec(p)   _InterlockedDecrement((volatile long*)(p))
-  #define ray_atomic_load(p)  _InterlockedOr((volatile long*)(p), 0)
-#else
-  #define ray_atomic_inc(p)   atomic_fetch_add_explicit(p, 1, memory_order_relaxed)
-  #define ray_atomic_dec(p)   atomic_fetch_sub_explicit(p, 1, memory_order_acq_rel)
-  #define ray_atomic_load(p)  atomic_load_explicit(p, memory_order_acquire)
-#endif
-
 /* ===== Type Constants ===== */
 
 #define RAY_LIST       0
@@ -166,18 +154,6 @@ typedef union ray_t* (*ray_vary_fn)(union ray_t**, int64_t);
 /* Helper macros */
 #define RAY_IS_SYM(t)         ((t) == RAY_SYM)
 #define RAY_SYM_ELEM(attrs)   (1u << ((attrs) & RAY_SYM_W_MASK))  /* 1,2,4,8 */
-
-/* Parted types: composite of RAY_PARTED_BASE + base type */
-#define RAY_PARTED_BASE   32
-#define RAY_MAPCOMMON     64   /* virtual partition column */
-
-/* MAPCOMMON inferred sub-types (stored in attrs field) */
-#define RAY_MC_SYM    0   /* opaque partition key strings */
-#define RAY_MC_DATE   1   /* YYYY.MM.DD partition directories */
-#define RAY_MC_I64    2   /* pure integer partition keys */
-
-#define RAY_IS_PARTED(t)       ((t) >= RAY_PARTED_BASE && (t) < RAY_MAPCOMMON)
-#define RAY_PARTED_BASETYPE(t) ((t) - RAY_PARTED_BASE)
 
 /* Number of types (positive range): must be > max type ID */
 #define RAY_TYPE_COUNT 22
@@ -300,35 +276,6 @@ static inline void* ray_data_fn(ray_t* v) {
 #define ray_data(v)       ray_data_fn(v)
 #define ray_elem_size(t)  (ray_type_sizes[(t)])
 
-/* SYM-aware element size: returns adaptive width for RAY_SYM columns */
-static inline uint8_t ray_sym_elem_size(int8_t type, uint8_t attrs) {
-    if (type == RAY_SYM) return (uint8_t)RAY_SYM_ELEM(attrs);
-    return ray_elem_size(type);
-}
-
-/* Read a dictionary index from a RAY_SYM column (adaptive width) */
-static inline int64_t ray_read_sym(const void* data, int64_t row, int8_t type, uint8_t attrs) {
-    (void)type; /* only RAY_SYM now */
-    switch (attrs & RAY_SYM_W_MASK) {
-        case RAY_SYM_W8:  return ((const uint8_t*)data)[row];
-        case RAY_SYM_W16: return ((const uint16_t*)data)[row];
-        case RAY_SYM_W32: return ((const uint32_t*)data)[row];
-        case RAY_SYM_W64: return ((const int64_t*)data)[row];
-    }
-    return 0;
-}
-
-/* Write a dictionary index into a RAY_SYM column (adaptive width) */
-static inline void ray_write_sym(void* data, int64_t row, uint64_t val, int8_t type, uint8_t attrs) {
-    (void)type; /* only RAY_SYM now */
-    switch (attrs & RAY_SYM_W_MASK) {
-        case RAY_SYM_W8:  ((uint8_t*)data)[row]  = (uint8_t)val;  break;
-        case RAY_SYM_W16: ((uint16_t*)data)[row] = (uint16_t)val; break;
-        case RAY_SYM_W32: ((uint32_t*)data)[row] = (uint32_t)val; break;
-        case RAY_SYM_W64: ((int64_t*)data)[row]  = (int64_t)val;  break;
-    }
-}
-
 /* ===== Inline String Element (16 bytes) ===== */
 
 typedef union {
@@ -352,122 +299,12 @@ static inline const char* ray_str_t_ptr(const ray_str_t* s, const char* pool_bas
     return pool_base + s->pool_off;
 }
 
-/* Equality: fast reject on len, then prefix, then full compare.
- * pool_a/pool_b: pool bases for elements a and b respectively (NULL if inline) */
-static inline bool ray_str_t_eq(const ray_str_t* a, const char* pool_a,
-                               const ray_str_t* b, const char* pool_b) {
-    if (a->len != b->len) return false;
-    if (a->len == 0) return true;
-    if (ray_str_is_inline(a)) {
-        return memcmp(a->data, b->data, a->len) == 0;
-    }
-    /* Both pooled: check prefix first */
-    if (memcmp(a->prefix, b->prefix, 4) != 0) return false;
-    return memcmp(pool_a + a->pool_off, pool_b + b->pool_off, a->len) == 0;
-}
+/* ===== Forward Declarations (types referenced in public API) ===== */
 
-/* Ordering: lexicographic, shorter string is less on prefix tie.
- * pool_a/pool_b: pool bases for elements a and b respectively (NULL if inline) */
-static inline int ray_str_t_cmp(const ray_str_t* a, const char* pool_a,
-                               const ray_str_t* b, const char* pool_b) {
-    const char* pa = ray_str_t_ptr(a, pool_a);
-    const char* pb = ray_str_t_ptr(b, pool_b);
-    uint32_t min_len = a->len < b->len ? a->len : b->len;
-    int r = memcmp(pa, pb, min_len);
-    if (r != 0) return r;
-    return (a->len > b->len) - (a->len < b->len);
-}
-
-/* Hash a ray_str_t element.  Uses FNV-1a which is self-contained and fast for
- * the typical short-to-medium strings stored in ray_str_t.
- * pool_base: pool base pointer for pooled strings (NULL when inline-only). */
-static inline uint64_t ray_str_t_hash(const ray_str_t* s, const char* pool_base) {
-    if (s->len == 0) return 0x9E3779B97F4A7C15ULL; /* golden ratio constant for empty */
-    if (!ray_str_is_inline(s)) {
-        assert(pool_base != NULL && "ray_str_t_hash: pooled string requires non-NULL pool_base");
-    }
-    const char* p = ray_str_is_inline(s) ? s->data : pool_base + s->pool_off;
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (uint32_t i = 0; i < s->len; i++) {
-        h ^= (uint64_t)(unsigned char)p[i];
-        h *= 0x100000001b3ULL;
-    }
-    return h;
-}
-
-/* Determine optimal SYM width for a given dictionary size */
-static inline uint8_t ray_sym_dict_width(int64_t dict_size) {
-    if (dict_size <= 255)        return RAY_SYM_W8;
-    if (dict_size <= 65535)      return RAY_SYM_W16;
-    if (dict_size <= 4294967295) return RAY_SYM_W32;
-    return RAY_SYM_W64;
-}
-
-/* ===== Memory Statistics ===== */
-
-typedef struct {
-    size_t alloc_count;      /* ray_alloc calls */
-    size_t free_count;       /* ray_free calls */
-    size_t bytes_allocated;  /* currently allocated */
-    size_t peak_bytes;       /* high-water mark */
-    size_t slab_hits;        /* slab cache hits */
-    size_t direct_count;     /* active direct mmaps */
-    size_t direct_bytes;     /* bytes in direct mmaps */
-    size_t sys_current;      /* sys allocator: current mmap'd bytes */
-    size_t sys_peak;         /* sys allocator: peak mmap'd bytes */
-} ray_mem_stats_t;
-
-/* ===== Forward Declarations (internal types) ===== */
-
-typedef struct ray_heap      ray_heap_t;
-typedef struct ray_sym_table ray_sym_table_t;
-typedef struct ray_sym_map   ray_sym_map_t;
 typedef struct ray_pool      ray_pool_t;
-typedef struct ray_task      ray_task_t;
-typedef struct ray_dispatch  ray_dispatch_t;
 typedef struct ray_csr       ray_csr_t;
 typedef struct ray_rel       ray_rel_t;
 typedef struct ray_hnsw      ray_hnsw_t;
-
-/* ===== Thread Types ===== */
-
-#if defined(_WIN32)
-  typedef void* ray_thread_t;
-#else
-  typedef unsigned long ray_thread_t;
-#endif
-
-typedef void (*ray_thread_fn)(void* arg);
-
-/* ===== Platform API ===== */
-
-void* ray_vm_alloc(size_t size);
-void  ray_vm_free(void* ptr, size_t size);
-void* ray_vm_map_file(const char* path, size_t* out_size);
-void  ray_vm_unmap_file(void* ptr, size_t size);
-void  ray_vm_advise_seq(void* ptr, size_t size);
-void  ray_vm_advise_willneed(void* ptr, size_t size);
-void  ray_vm_release(void* ptr, size_t size);
-void* ray_vm_alloc_aligned(size_t size, size_t alignment);
-
-/* ===== Threading API ===== */
-
-ray_err_t ray_thread_create(ray_thread_t* t, ray_thread_fn fn, void* arg);
-ray_err_t ray_thread_join(ray_thread_t t);
-uint32_t ray_thread_count(void);
-
-void ray_parallel_begin(void);
-void ray_parallel_end(void);
-extern _Atomic(uint32_t) ray_parallel_flag;
-
-/* Reclaim fully-free pools by munmapping their regions. Called at
- * control points (e.g. between queries, end of parallel sections). */
-void ray_heap_gc(void);
-
-/* Release physical pages for large free blocks (madvise DONTNEED).
- * Explicit opt-in — NOT called automatically by ray_heap_gc(). Use
- * after long idle periods to reduce RSS. */
-void ray_heap_release_pages(void);
 
 /* ===== Memory Allocator API ===== */
 
@@ -479,16 +316,6 @@ void     ray_free(ray_t* v);
 ray_t*    ray_alloc_copy(ray_t* v);
 ray_t*    ray_scratch_alloc(size_t data_size);
 ray_t*    ray_scratch_realloc(ray_t* v, size_t new_data_size);
-
-void     ray_heap_init(void);
-void     ray_heap_destroy(void);
-void     ray_heap_merge(ray_heap_t* src);
-void     ray_heap_flush_foreign(void);
-void     ray_heap_push_pending(ray_heap_t* heap);
-void     ray_heap_drain_pending(void);
-
-uint8_t  ray_order_for_size(size_t data_size);
-void     ray_mem_stats(ray_mem_stats_t* out);
 
 /* ===== COW / Ref Counting API ===== */
 
@@ -627,36 +454,8 @@ ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
 ray_err_t ray_write_csv(ray_t* table, const char* path);
 
 
-/* ===== Embedding Column Helpers ===== */
+/* ===== Pool / Cancel API ===== */
 
-/* An embedding column is a RAY_F32 vector of length N*D where D is the
- * embedding dimension.  D is stored in a separate I32 atom that the
- * caller keeps alongside the column.  Access helpers: */
-
-/* Create an embedding column for N rows of D-dimensional vectors. */
-ray_t* ray_embedding_new(int64_t nrows, int32_t dim);
-
-/* Get the raw float pointer for row `row` (0-indexed). */
-static inline float* ray_embedding_row(ray_t* col, int32_t dim, int64_t row) {
-    return (float*)ray_data(col) + row * dim;
-}
-
-/* Set one row's embedding from a float array. */
-static inline void ray_embedding_set(ray_t* col, int32_t dim,
-                                     int64_t row, const float* vec) {
-    float* dst = ray_embedding_row(col, dim, row);
-    memcpy(dst, vec, (size_t)dim * sizeof(float));
-}
-
-/* Number of rows in an embedding column. */
-static inline int64_t ray_embedding_nrows(ray_t* col, int32_t dim) {
-    return col->len / dim;
-}
-
-/* ===== Pool / Parallel API ===== */
-
-ray_err_t ray_pool_init(uint32_t n_workers);
-void     ray_pool_destroy(void);
 void     ray_cancel(void);
 
 /* ===== Rayfall Builtin Functions ===== */

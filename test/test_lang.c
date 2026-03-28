@@ -1,5 +1,6 @@
 #include "munit.h"
 #include <rayforce.h>
+#include "mem/heap.h"
 #include <string.h>
 
 /* Forward declarations for lang modules */

@@ -23,6 +23,7 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "mem/heap.h"
 #include "ops/fvec.h"
 
 static MunitResult test_ftable_new_free(const void* params, void* data) {
