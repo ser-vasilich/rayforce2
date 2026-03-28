@@ -1760,6 +1760,7 @@ typedef struct {
     double sum_f, min_f, max_f, prod_f, first_f, last_f, sum_sq_f;
     int64_t sum_i, min_i, max_i, prod_i, first_i, last_i, sum_sq_i;
     int64_t cnt;
+    int64_t null_count;
     bool has_first;
 } reduce_acc_t;
 
@@ -1768,14 +1769,20 @@ static void reduce_acc_init(reduce_acc_t* acc) {
     acc->prod_f = 1.0; acc->first_f = 0; acc->last_f = 0; acc->sum_sq_f = 0;
     acc->sum_i = 0; acc->min_i = INT64_MAX; acc->max_i = INT64_MIN;
     acc->prod_i = 1; acc->first_i = 0; acc->last_i = 0; acc->sum_sq_i = 0;
-    acc->cnt = 0; acc->has_first = false;
+    acc->cnt = 0; acc->null_count = 0; acc->has_first = false;
 }
 
-static void reduce_range(ray_t* input, int64_t start, int64_t end, reduce_acc_t* acc) {
+static void reduce_range(ray_t* input, int64_t start, int64_t end,
+                         reduce_acc_t* acc, bool has_nulls,
+                         const uint8_t* null_bm) {
     int8_t in_type = input->type;
     void* base = ray_data(input);
 
     for (int64_t row = start; row < end; row++) {
+        if (has_nulls && (null_bm[row / 8] >> (row % 8)) & 1) {
+            acc->null_count++;
+            continue;
+        }
         if (in_type == RAY_F64) {
             double v = ((double*)base)[row];
             acc->sum_f += v;
@@ -1802,12 +1809,15 @@ static void reduce_range(ray_t* input, int64_t start, int64_t end, reduce_acc_t*
 /* Context for parallel reduction */
 typedef struct {
     ray_t*         input;
-    reduce_acc_t* accs;   /* one per worker */
+    reduce_acc_t*  accs;   /* one per worker */
+    bool           has_nulls;
+    const uint8_t* null_bm;
 } par_reduce_ctx_t;
 
 static void par_reduce_fn(void* ctx, uint32_t worker_id, int64_t start, int64_t end) {
     par_reduce_ctx_t* c = (par_reduce_ctx_t*)ctx;
-    reduce_range(c->input, start, end, &c->accs[worker_id]);
+    reduce_range(c->input, start, end, &c->accs[worker_id],
+                 c->has_nulls, c->null_bm);
 }
 
 static void reduce_merge(reduce_acc_t* dst, const reduce_acc_t* src, int8_t in_type) {
@@ -1825,6 +1835,7 @@ static void reduce_merge(reduce_acc_t* dst, const reduce_acc_t* src, int8_t in_t
         if (src->max_i > dst->max_i) dst->max_i = src->max_i;
     }
     dst->cnt += src->cnt;
+    dst->null_count += src->null_count;
     /* reduce_merge does not merge first/last; caller handles these separately.
      * Since workers process sequential ranges, worker 0's first is the global first,
      * and the last worker's last is the global last. */
@@ -1913,6 +1924,16 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     int8_t in_type = input->type;
     int64_t len = input->len;
 
+    /* Resolve null bitmap once before dispatching */
+    bool has_nulls = (input->attrs & RAY_ATTR_HAS_NULLS) != 0;
+    const uint8_t* null_bm = NULL;
+    if (has_nulls) {
+        if (input->attrs & RAY_ATTR_NULLMAP_EXT)
+            null_bm = (const uint8_t*)ray_data(input->ext_nullmap);
+        else
+            null_bm = input->nullmap;
+    }
+
     ray_pool_t* pool = ray_pool_get();
     if (pool && len >= RAY_PARALLEL_THRESHOLD) {
         uint32_t nw = ray_pool_total_workers(pool);
@@ -1921,7 +1942,8 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         if (!accs) return RAY_ERR_PTR(RAY_ERR_OOM);
         for (uint32_t i = 0; i < nw; i++) reduce_acc_init(&accs[i]);
 
-        par_reduce_ctx_t ctx = { .input = input, .accs = accs };
+        par_reduce_ctx_t ctx = { .input = input, .accs = accs,
+                                 .has_nulls = has_nulls, .null_bm = null_bm };
         ray_pool_dispatch(pool, par_reduce_fn, &ctx, len);
 
         /* Merge: worker 0 is the base, merge the rest in order */
@@ -1980,7 +2002,7 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
 
     reduce_acc_t acc;
     reduce_acc_init(&acc);
-    reduce_range(input, 0, len, &acc);
+    reduce_range(input, 0, len, &acc, has_nulls, null_bm);
 
     switch (op->opcode) {
         case OP_SUM:   return in_type == RAY_F64 ? ray_f64(acc.sum_f) : ray_i64(acc.sum_i);
