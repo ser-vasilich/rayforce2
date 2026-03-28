@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #endif
 
+
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
@@ -31,7 +32,7 @@ typedef struct _stat hist_stat_t;
 #include <sys/stat.h>
 #define hist_open(p, f, m)  open((p), (f), (m))
 #define hist_read(fd, b, n) read((fd), (b), (n))
-#define hist_write(fd, b, n) write((fd), (b), (n))
+#define hist_write(fd, b, n) do { ssize_t r_ = write((fd), (b), (n)); (void)r_; } while(0)
 #define hist_close(fd)      close(fd)
 #define hist_fstat(fd, st)  fstat((fd), (st))
 typedef struct stat hist_stat_t;
@@ -41,6 +42,14 @@ typedef struct stat hist_stat_t;
 /* Recover ray_t* block pointer from a ray_data() result pointer.
  * ray_data() returns bytes immediately after the 32-byte ray_t header. */
 #define RAY_BLOCK_FROM_DATA(ptr) ((ray_t*)((char*)(ptr) - sizeof(ray_t)))
+
+/* Suppress -Wunused-result for terminal I/O writes to stdout. */
+#if !defined(_WIN32)
+static inline void term_write(const void* buf, size_t len) {
+    ssize_t r = write(STDOUT_FILENO, buf, len);
+    (void)r;
+}
+#endif
 
 /* ===== Signal handling ===== */
 
@@ -556,13 +565,13 @@ void ray_hist_save(ray_hist_t* hist, const char* path) {
     for (int32_t i = start; i < hist->count; i++) {
         const char* entry = hist->entries[i];
         int32_t len = (int32_t)strlen(entry);
-        (void)hist_write(fd, entry, (size_t)len);
+        hist_write(fd, entry, (size_t)len);
         if (i < hist->count - 1) {
-            (void)hist_write(fd, "\0", 1);
+            hist_write(fd, "\0", 1);
         }
     }
     /* Write trailing null so load knows where last entry ends */
-    (void)hist_write(fd, "\0", 1);
+    hist_write(fd, "\0", 1);
 
     hist_close(fd);
 }
@@ -1100,12 +1109,12 @@ int32_t ray_term_count_unmatched(ray_term_t* term) {
 #define CONT_PROMPT_VIS  2  /* visual: … + space */
 
 void ray_term_prompt(ray_term_t* term) {
-    write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
+    term_write(PROMPT_STR, PROMPT_LEN);
     term->prompt_len = PROMPT_VIS;
 }
 
 void ray_term_continuation_prompt(ray_term_t* term) {
-    write(STDOUT_FILENO, CONT_PROMPT_STR, CONT_PROMPT_LEN);
+    term_write(CONT_PROMPT_STR, CONT_PROMPT_LEN);
     term->prompt_len = CONT_PROMPT_VIS;
 }
 
@@ -1178,7 +1187,7 @@ void ray_term_redraw(ray_term_t* term) {
             }
         }
         fflush(stdout);
-        write(STDOUT_FILENO, hlbuf, (size_t)hlen);
+        term_write(hlbuf, (size_t)hlen);
     }
 
     /* Track rows used — include ghost text width for row calculation */
@@ -1226,10 +1235,10 @@ static void ray_term_search_redraw(ray_term_t* term) {
     fflush(stdout);
 
     /* Write search prompt: (search) `query`: matched_entry */
-    write(STDOUT_FILENO, SEARCH_PROMPT, SEARCH_PROMPT_LEN);
+    term_write(SEARCH_PROMPT, SEARCH_PROMPT_LEN);
     if (term->search_len > 0)
-        write(STDOUT_FILENO, term->search_buf, (size_t)term->search_len);
-    write(STDOUT_FILENO, "': ", 3);
+        term_write(term->search_buf, (size_t)term->search_len);
+    term_write("': ", 3);
 
     /* Show matching entry with highlighted match substring */
     if (term->search_match_idx >= 0) {
@@ -1250,17 +1259,17 @@ static void ray_term_search_redraw(ray_term_t* term) {
         if (match_pos >= 0) {
             /* Before match */
             if (match_pos > 0)
-                write(STDOUT_FILENO, entry, (size_t)match_pos);
+                term_write(entry, (size_t)match_pos);
             /* Highlighted match */
-            write(STDOUT_FILENO, SEARCH_HIGHLIGHT, 4);
-            write(STDOUT_FILENO, entry + match_pos, (size_t)term->search_len);
-            write(STDOUT_FILENO, SEARCH_RESET, 4);
+            term_write(SEARCH_HIGHLIGHT, 4);
+            term_write(entry + match_pos, (size_t)term->search_len);
+            term_write(SEARCH_RESET, 4);
             /* After match */
             int32_t after = match_pos + term->search_len;
             if (after < elen)
-                write(STDOUT_FILENO, entry + after, (size_t)(elen - after));
+                term_write(entry + after, (size_t)(elen - after));
         } else {
-            write(STDOUT_FILENO, entry, (size_t)elen);
+            term_write(entry, (size_t)elen);
         }
     }
 
@@ -1379,7 +1388,7 @@ ray_t* ray_term_read(ray_term_t* term) {
         term->buf_len = 0;
         term->buf_pos = 0;
         term->multiline_len = 0;
-        write(STDOUT_FILENO, "^C\n", 3);
+        term_write("^C\n", 3);
         ray_term_prompt(term);
         fflush(stdout);
         continue;
@@ -1496,7 +1505,7 @@ ray_t* ray_term_read(ray_term_t* term) {
                                 (int32_t)sizeof(hlbuf) - hlen,
                                 term->buf, term->buf_len, -1, -1);
                 fflush(stdout);
-                write(STDOUT_FILENO, hlbuf, (size_t)hlen);
+                term_write(hlbuf, (size_t)hlen);
                 ray_cursor_show();
                 fflush(stdout);
             }
@@ -1547,7 +1556,7 @@ ray_t* ray_term_read(ray_term_t* term) {
             term->buf_len = 0;
             term->buf_pos = 0;
             term->multiline_len = 0;
-            write(STDOUT_FILENO, "^C\n", 3);
+            term_write("^C\n", 3);
             ray_term_prompt(term);
             fflush(stdout);
             continue;
@@ -1616,7 +1625,7 @@ ray_t* ray_term_read(ray_term_t* term) {
                         term->buf_len = 0;
                         term->buf_pos = 0;
                         term->multiline_len = 0;
-                        write(STDOUT_FILENO, "^C\n", 3);
+                        term_write("^C\n", 3);
                         ray_term_prompt(term);
                         fflush(stdout);
                     } else {
@@ -1661,7 +1670,7 @@ ray_t* ray_term_read(ray_term_t* term) {
                     term->buf_len = 0;
                     term->buf_pos = 0;
                     term->multiline_len = 0;
-                    write(STDOUT_FILENO, "^C\n", 3);
+                    term_write("^C\n", 3);
                     ray_term_prompt(term);
                     fflush(stdout);
                     break;
