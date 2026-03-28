@@ -2,6 +2,10 @@
 #include "lang/env.h"
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <stdint.h>
+#include <math.h>
+#include <errno.h>
 
 /* ══════════════════════════════════════════
  * ASCII dispatch table (128 bytes)
@@ -69,15 +73,173 @@ static void skip_ws_and_comments(ray_parser_t *p) {
 /* Forward declarations */
 static ray_t* parse_expr(ray_parser_t *p);
 
-/* ── Number parsing ── */
+/* ── Date/time/timestamp helpers for parser ── */
+
+static const uint32_t PARSE_MONTHDAYS[2][13] = {
+    {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365},
+    {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366},
+};
+
+static int parse_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+static int32_t parse_years_by_days(int yy) {
+    return (int32_t)((int64_t)yy * 365 + yy / 4 - yy / 100 + yy / 400);
+}
+
+#define PARSE_DATE_EPOCH 2000
+
+static int32_t parse_ymd_to_days(int year, int month, int day) {
+    int yy = (year > 0) ? year - 1 : 0;
+    int32_t ydays = parse_years_by_days(yy);
+    int leap = parse_leap_year(year);
+    int mm = (month > 0) ? month - 1 : 0;
+    int32_t mdays = (int32_t)PARSE_MONTHDAYS[leap][mm];
+    return ydays - parse_years_by_days(PARSE_DATE_EPOCH - 1) + mdays + day - 1;
+}
+
+#define PARSE_NSECS_IN_DAY ((int64_t)24 * 60 * 60 * 1000000000LL)
+
+/* Try to parse a time literal starting from 'start'.
+ * Returns the char past the end on success, NULL on failure.
+ * Writes the millisecond value into *ms_out, including sign. */
+static const char* try_parse_time(const char* start, int32_t *ms_out) {
+    const char* c = start;
+    int sign = 1;
+    if (*c == '-') { sign = -1; c++; }
+
+    /* HH */
+    if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;
+    int hh = (c[0] - '0') * 10 + (c[1] - '0'); c += 2;
+    if (*c != ':') return NULL; c++;
+
+    /* MM */
+    if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;
+    int mm = (c[0] - '0') * 10 + (c[1] - '0'); c += 2;
+    if (*c != ':') return NULL; c++;
+
+    /* SS */
+    if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;
+    int ss = (c[0] - '0') * 10 + (c[1] - '0'); c += 2;
+
+    /* .mmm (milliseconds) */
+    int ms = 0;
+    if (*c == '.') {
+        c++;
+        if (!(*c >= '0' && *c <= '9')) return NULL;
+        ms = (*c - '0'); c++;
+        if (*c >= '0' && *c <= '9') { ms = ms * 10 + (*c - '0'); c++; }
+        if (*c >= '0' && *c <= '9') { ms = ms * 10 + (*c - '0'); c++; }
+    }
+
+    *ms_out = sign * (int32_t)((hh * 3600 + mm * 60 + ss) * 1000 + ms);
+    return c;
+}
+
+/* ── Number parsing (with hex, nulls, typed suffixes, date/time/timestamp) ── */
 static ray_t* parse_number(ray_parser_t *p) {
     const char *start = p->pos;
-    if (*p->pos == '-') p->pos++;
+    int is_neg = 0;
+    if (*p->pos == '-') { is_neg = 1; p->pos++; }
+
+    /* Hex literal: 0x.. */
+    if (p->pos[0] == '0' && p->pos[1] == 'x') {
+        p->pos += 2;
+        char *end;
+        unsigned long v = strtoul(p->pos, &end, 16);
+        if (end == p->pos) return RAY_ERR_PTR(RAY_ERR_PARSE);
+        p->pos = end;
+        return ray_u8((uint8_t)v);
+    }
+
+    /* Null literal: 0N{h,i,d,t,p,l,f,s} */
+    if (!is_neg && p->pos[0] == '0' && p->pos[1] == 'N') {
+        switch (p->pos[2]) {
+        case 'h': p->pos += 3; return ray_i16(INT16_MIN);
+        case 'i': p->pos += 3; return ray_i32(INT32_MIN);
+        case 'd': p->pos += 3; return ray_date(INT32_MIN);
+        case 't': p->pos += 3; return ray_time(INT32_MIN);
+        case 'p': p->pos += 3; return ray_timestamp(INT64_MIN);
+        case 'l': p->pos += 3; return ray_i64(INT64_MIN);
+        case 'f': p->pos += 3; return ray_f64(__builtin_nan(""));
+        case 's': p->pos += 3; { ray_t* s = ray_sym(INT64_MIN); return s; }
+        }
+    }
 
     /* Scan digits */
+    const char *dstart = p->pos;
     while (*p->pos >= '0' && *p->pos <= '9') p->pos++;
+    int ndigits = (int)(p->pos - dstart);
 
-    /* Check for float */
+    /* Date/Timestamp: YYYY.MM.DD or YYYY.MM.DDDhh:mm:ss.nnnnnnnnn */
+    if (ndigits == 4 && !is_neg && *p->pos == '.' &&
+        p->pos[1] >= '0' && p->pos[1] <= '9' &&
+        p->pos[2] >= '0' && p->pos[2] <= '9' &&
+        p->pos[3] == '.') {
+        int year = (int)strtol(dstart, NULL, 10);
+        p->pos++; /* skip first '.' */
+        int month = (p->pos[0] - '0') * 10 + (p->pos[1] - '0');
+        p->pos += 2;
+        if (*p->pos != '.') { p->pos = start; goto plain_number; }
+        p->pos++; /* skip second '.' */
+        if (!(p->pos[0] >= '0' && p->pos[0] <= '9' &&
+              p->pos[1] >= '0' && p->pos[1] <= '9')) {
+            p->pos = start; goto plain_number;
+        }
+        int day = (p->pos[0] - '0') * 10 + (p->pos[1] - '0');
+        p->pos += 2;
+
+        int32_t days = parse_ymd_to_days(year, month, day);
+
+        /* Check for timestamp separator 'D' */
+        if (*p->pos == 'D') {
+            p->pos++; /* skip D */
+            /* Parse HH:MM:SS.nnnnnnnnn */
+            if (!(p->pos[0] >= '0' && p->pos[0] <= '9' &&
+                  p->pos[1] >= '0' && p->pos[1] <= '9'))
+                return RAY_ERR_PTR(RAY_ERR_PARSE);
+            int hh = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
+            if (*p->pos != ':') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            p->pos++;
+            int mi = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
+            if (*p->pos != ':') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            p->pos++;
+            int ss = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
+            if (*p->pos != '.') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            p->pos++;
+            /* Parse fractional seconds (up to 9 digits for nanoseconds) */
+            const char* fstart = p->pos;
+            while (*p->pos >= '0' && *p->pos <= '9') p->pos++;
+            int flen = (int)(p->pos - fstart);
+            uint64_t nanos = 0;
+            for (int i = 0; i < flen && i < 9; i++)
+                nanos = nanos * 10 + (uint64_t)(fstart[i] - '0');
+            /* Pad to 9 digits */
+            for (int i = flen; i < 9; i++) nanos *= 10;
+
+            int64_t day_ns = (int64_t)days * PARSE_NSECS_IN_DAY;
+            int64_t time_ns = ((int64_t)hh * 3600 + mi * 60 + ss) * 1000000000LL + (int64_t)nanos;
+            return ray_timestamp(day_ns + time_ns);
+        }
+
+        return ray_date(days);
+    }
+
+    /* Time literal: HH:MM:SS.mmm (detected by colon after 2 digits from digit-start) */
+    if (ndigits == 2 && *p->pos == ':') {
+        p->pos = start; /* reset — let try_parse_time handle sign */
+        int32_t ms;
+        const char* end = try_parse_time(start, &ms);
+        if (end) { p->pos = end; return ray_time(ms); }
+        /* Not a valid time — fall through to regular number parsing */
+        p->pos = start;
+        if (is_neg) p->pos++;
+        while (*p->pos >= '0' && *p->pos <= '9') p->pos++;
+    }
+
+plain_number:;
+    /* At this point p->pos is past the digits. Check for float */
     int is_float = 0;
     if (*p->pos == '.' && p->pos[1] >= '0' && p->pos[1] <= '9') {
         is_float = 1;
@@ -96,7 +258,27 @@ static ray_t* parse_number(ray_parser_t *p) {
         return ray_f64(v);
     }
 
-    int64_t v = strtoll(start, NULL, 10);
+    /* Check for integer overflow → promote to f64 */
+    errno = 0;
+    char* endp;
+    int64_t v = strtoll(start, &endp, 10);
+    if (errno == ERANGE) {
+        double fv = strtod(start, NULL);
+        return ray_f64(fv);
+    }
+
+    /* Type suffix: h (i16), i (i32) */
+    if (*p->pos == 'h') {
+        p->pos++;
+        if (v < -32767 || v > 32767) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        return ray_i16((int16_t)v);
+    }
+    if (*p->pos == 'i') {
+        p->pos++;
+        if (v < -2147483647LL || v > 2147483647LL) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        return ray_i32((int32_t)v);
+    }
+
     return ray_i64(v);
 }
 
@@ -130,15 +312,26 @@ static ray_t* parse_string(ray_parser_t *p) {
         if (*r == '\\' && r + 1 < end) {
             r++;
             switch (*r) {
-            case 'n':  buf[out++] = '\n'; break;
-            case 't':  buf[out++] = '\t'; break;
-            case 'r':  buf[out++] = '\r'; break;
-            case '\\': buf[out++] = '\\'; break;
-            case '"':  buf[out++] = '"';  break;
-            case '0':  buf[out++] = '\0'; break;
-            default:   buf[out++] = '\\'; buf[out++] = *r; break;
+            case 'n':  buf[out++] = '\n'; r++; break;
+            case 't':  buf[out++] = '\t'; r++; break;
+            case 'r':  buf[out++] = '\r'; r++; break;
+            case '\\': buf[out++] = '\\'; r++; break;
+            case '"':  buf[out++] = '"';  r++; break;
+            case '0': case '1': case '2': case '3':
+            case '4': case '5': case '6': case '7': {
+                /* Octal escape: \OOO (1-3 digits) */
+                char ch = (char)(*r - '0'); r++;
+                if (r < end && *r >= '0' && *r <= '7') {
+                    ch = (char)((ch << 3) | (*r - '0')); r++;
+                    if (r < end && *r >= '0' && *r <= '7') {
+                        ch = (char)((ch << 3) | (*r - '0')); r++;
+                    }
+                }
+                buf[out++] = ch;
+                break;
             }
-            r++;
+            default:   buf[out++] = '\\'; buf[out++] = *r; r++; break;
+            }
         } else {
             buf[out++] = *r++;
         }
@@ -146,13 +339,65 @@ static ray_t* parse_string(ray_parser_t *p) {
     return ray_str(buf, out);
 }
 
-/* ── Symbol parsing: 'name ── */
+/* ── Symbol/char parsing: 'name or 'a' ── */
 static ray_t* parse_symbol(ray_parser_t *p) {
     p->pos++; /* skip ' */
     const char *start = p->pos;
+
+    /* Empty symbol (bare tick at end or before terminator) */
+    if (*p->pos == 0 || *p->pos == ' ' || *p->pos == '\t' || *p->pos == '\n' ||
+        *p->pos == ')' || *p->pos == ']' || *p->pos == '}') {
+        /* Null symbol 0Ns */
+        return ray_sym(INT64_MIN);
+    }
+
+    /* Char literal: 'X' or '\n' etc. */
+    if (*p->pos == '\\') {
+        /* Escape sequence char literal */
+        const char *esc = p->pos + 1;
+        char ch;
+        int esc_len = 1;
+        switch (*esc) {
+        case 'n':  ch = '\n'; break;
+        case 'r':  ch = '\r'; break;
+        case 't':  ch = '\t'; break;
+        case '\\': ch = '\\'; break;
+        case '\'': ch = '\''; break;
+        case '0': case '1': case '2': case '3':
+        case '4': case '5': case '6': case '7': {
+            /* Octal escape: \OOO */
+            ch = (char)(*esc - '0');
+            if (esc[1] >= '0' && esc[1] <= '7') {
+                ch = (char)((ch << 3) | (esc[1] - '0'));
+                if (esc[2] >= '0' && esc[2] <= '7') {
+                    ch = (char)((ch << 3) | (esc[2] - '0'));
+                    esc_len = 3;
+                } else {
+                    esc_len = 2;
+                }
+            }
+            break;
+        }
+        default: ch = *esc; break;
+        }
+        if (esc[esc_len] == '\'') {
+            /* Closing quote found — it's a char literal */
+            p->pos = esc + esc_len + 1;
+            return ray_char(ch);
+        }
+        /* Not a char literal — fall through to symbol parsing */
+    } else if (start[1] == '\'') {
+        /* Simple char literal like 'a' */
+        char ch = *start;
+        p->pos = start + 2; /* skip char + closing quote */
+        return ray_char(ch);
+    }
+
+    /* Regular symbol */
     while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT || *p->pos == '_' || *p->pos == '.')
         p->pos++;
     size_t len = (size_t)(p->pos - start);
+    if (len == 0) return ray_sym(INT64_MIN); /* empty symbol */
     int64_t id = ray_sym_intern(start, len);
     return ray_sym(id);
 }
@@ -174,6 +419,7 @@ static ray_t* parse_name(ray_parser_t *p) {
     /* Check for true/false */
     if (len == 4 && memcmp(start, "true", 4) == 0)  return ray_bool(true);
     if (len == 5 && memcmp(start, "false", 5) == 0) return ray_bool(false);
+    /* null is handled as a name that resolves to NULL at eval time */
 
     /* Return as name symbol (with RAY_ATTR_NAME flag) */
     int64_t id = ray_sym_intern(start, len);
@@ -275,6 +521,11 @@ static ray_t* parse_vector(ray_parser_t *p) {
             case RAY_SYM: {
                 int64_t* d = (int64_t*)ray_data(vec);
                 for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i64;
+                break;
+            }
+            case RAY_U8: {
+                uint8_t* d = (uint8_t*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->u8;
                 break;
             }
             case RAY_STR: {

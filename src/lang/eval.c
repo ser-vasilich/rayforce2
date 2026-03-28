@@ -5,6 +5,8 @@
 #include "ops/ops.h"
 #include "ops/pool.h"
 #include "table/sym.h"
+#include "mem/heap.h"
+#include "app/format.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +44,18 @@ static ray_t* make_f64(double v) {
     return obj;
 }
 
+static ray_t* make_i16(int16_t v) {
+    return ray_i16(v);
+}
+
+static ray_t* make_i32(int32_t v) {
+    return ray_i32(v);
+}
+
+static ray_t* make_u8(uint8_t v) {
+    return ray_u8(v);
+}
+
 static ray_t* make_bool(uint8_t v) {
     ray_t* obj = ray_alloc(0);
     if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
@@ -52,44 +66,250 @@ static ray_t* make_bool(uint8_t v) {
 
 /* Helpers to extract numeric value as double */
 static int is_numeric(ray_t* x) {
-    return x->type == -RAY_I64 || x->type == -RAY_F64;
+    return x->type == -RAY_I64 || x->type == -RAY_F64 ||
+           x->type == -RAY_I16 || x->type == -RAY_I32 ||
+           x->type == -RAY_U8;
+}
+
+/* Check if an atom is a temporal type */
+static int is_temporal(ray_t* x) {
+    return x->type == -RAY_DATE || x->type == -RAY_TIME || x->type == -RAY_TIMESTAMP;
+}
+
+/* Extract integer value from any integer atom as int64_t */
+static int64_t as_i64(ray_t* x) {
+    if (x->type == -RAY_I64)  return x->i64;
+    if (x->type == -RAY_I32)  return (int64_t)x->i32;
+    if (x->type == -RAY_I16)  return (int64_t)x->i16;
+    if (x->type == -RAY_U8)   return (int64_t)x->u8;
+    return x->i64; /* fallback */
 }
 
 static double as_f64(ray_t* x) {
-    return (x->type == -RAY_F64) ? x->f64 : (double)x->i64;
+    if (x->type == -RAY_F64) return x->f64;
+    if (x->type == -RAY_I64) return (double)x->i64;
+    if (x->type == -RAY_I32) return (double)x->i32;
+    if (x->type == -RAY_I16) return (double)x->i16;
+    if (x->type == -RAY_U8)  return (double)x->u8;
+    if (x->type == -RAY_CHAR) return (double)(unsigned char)x->c8;
+    if (x->type == -RAY_BOOL) return (double)x->b8;
+    if (x->type == -RAY_DATE || x->type == -RAY_TIME) return (double)x->i32;
+    if (x->type == -RAY_TIMESTAMP) return (double)x->i64;
+    return (double)x->i64;
 }
 
 static int is_float_op(ray_t* a, ray_t* b) {
     return a->type == -RAY_F64 || b->type == -RAY_F64;
 }
 
+/* Null sentinel checks */
+static int is_null_atom(ray_t* x) {
+    if (x->type == -RAY_I64)  return x->i64 == INT64_MIN;
+    if (x->type == -RAY_I32)  return x->i32 == INT32_MIN;
+    if (x->type == -RAY_I16)  return x->i16 == INT16_MIN;
+    if (x->type == -RAY_F64)  return isnan(x->f64);
+    return 0;
+}
+
+/* Return the null value for the promoted result type of two operands */
+static ray_t* null_for_promoted(ray_t* a, ray_t* b) {
+    /* If either is f64, or one is f64 and other is int, result is f64 null */
+    if (a->type == -RAY_F64 || b->type == -RAY_F64)
+        return make_f64(NAN);
+    /* Promote: i16 < i32 < i64.  Result type is the wider of the two */
+    if (a->type == -RAY_I64 || b->type == -RAY_I64)
+        return make_i64(INT64_MIN);
+    if (a->type == -RAY_I32 || b->type == -RAY_I32)
+        return make_i32(INT32_MIN);
+    if (a->type == -RAY_I16 || b->type == -RAY_I16)
+        return make_i16(INT16_MIN);
+    if (a->type == -RAY_U8 || b->type == -RAY_U8)
+        return make_i64(INT64_MIN);
+    return make_i64(INT64_MIN);
+}
+
+/* Determine the promoted integer result type for two numeric operands.
+ * Returns atom type code (negative). */
+static int8_t promote_int_type(ray_t* a, ray_t* b) {
+    if (a->type == -RAY_I64 || b->type == -RAY_I64) return -RAY_I64;
+    if (a->type == -RAY_I32 || b->type == -RAY_I32) return -RAY_I32;
+    if (a->type == -RAY_U8 || b->type == -RAY_U8) {
+        /* u8 op u8 → u8, but u8 op i16 → i16 etc */
+        if (a->type == -RAY_U8 && b->type == -RAY_U8) return -RAY_U8;
+        return (a->type == -RAY_I16 || b->type == -RAY_I16) ? -RAY_I16 : -RAY_I64;
+    }
+    if (a->type == -RAY_I16 || b->type == -RAY_I16) return -RAY_I16;
+    return -RAY_I64;
+}
+
+/* Promote integer type following right-operand's type (K/q semantics for sub) */
+static int8_t promote_int_type_right(ray_t* a, ray_t* b) {
+    (void)a;
+    int8_t bt = b->type;
+    if (bt == -RAY_I32 || bt == -RAY_I16 || bt == -RAY_U8 || bt == -RAY_I64)
+        return bt;
+    int8_t at = a->type;
+    if (at == -RAY_I32 || at == -RAY_I16 || at == -RAY_U8 || at == -RAY_I64)
+        return at;
+    return -RAY_I64;
+}
+
+/* Create a result atom of the given type from an int64_t value */
+static ray_t* make_typed_int(int8_t atom_type, int64_t val) {
+    switch (atom_type) {
+    case -RAY_I16: return make_i16((int16_t)val);
+    case -RAY_I32: return make_i32((int32_t)val);
+    case -RAY_U8:  return make_u8((uint8_t)val);
+    default:       return make_i64(val);
+    }
+}
+
 /* Binary arithmetic */
 ray_t* ray_add_fn(ray_t* a, ray_t* b) {
+    /* Temporal + integer arithmetic (only int types, not float) */
+    if (is_temporal(a) && is_numeric(b) && b->type != -RAY_F64) {
+        if (is_null_atom(b)) {
+            /* null int + temporal → null of temporal type */
+            if (a->type == -RAY_DATE)      return ray_date(INT32_MIN);
+            if (a->type == -RAY_TIME)      return ray_time(INT32_MIN);
+            if (a->type == -RAY_TIMESTAMP) return ray_timestamp(INT64_MIN);
+        }
+        int64_t v = as_i64(b);
+        if (a->type == -RAY_DATE)      return ray_date(a->i64 + v);
+        if (a->type == -RAY_TIME)      return ray_time(a->i64 + v);
+        if (a->type == -RAY_TIMESTAMP) return ray_timestamp(a->i64 + v);
+    }
+    if (is_numeric(a) && a->type != -RAY_F64 && is_temporal(b)) {
+        if (is_null_atom(a)) {
+            if (b->type == -RAY_DATE)      return ray_date(INT32_MIN);
+            if (b->type == -RAY_TIME)      return ray_time(INT32_MIN);
+            if (b->type == -RAY_TIMESTAMP) return ray_timestamp(INT64_MIN);
+        }
+        int64_t v = as_i64(a);
+        if (b->type == -RAY_DATE)      return ray_date(b->i64 + v);
+        if (b->type == -RAY_TIME)      return ray_time(b->i64 + v);
+        if (b->type == -RAY_TIMESTAMP) return ray_timestamp(b->i64 + v);
+    }
+    /* Reject float + temporal */
+    if ((a->type == -RAY_F64 && is_temporal(b)) || (is_temporal(a) && b->type == -RAY_F64))
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* Reject null_numeric + temporal (for null floats etc) */
+    if (is_numeric(a) && is_null_atom(a) && is_temporal(b))
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (is_temporal(a) && is_numeric(b) && is_null_atom(b))
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* DATE + TIME → TIMESTAMP */
+    if (a->type == -RAY_DATE && b->type == -RAY_TIME)
+        return ray_timestamp(a->i64 * 86400000000000LL + b->i64 * 1000000LL);
+    if (a->type == -RAY_TIME && b->type == -RAY_DATE)
+        return ray_timestamp(b->i64 * 86400000000000LL + a->i64 * 1000000LL);
+    /* TIME + TIME → TIME */
+    if (a->type == -RAY_TIME && b->type == -RAY_TIME)
+        return ray_time(a->i64 + b->i64);
+    /* TIME + TIMESTAMP → TIMESTAMP (add ms as ns) */
+    if (a->type == -RAY_TIME && b->type == -RAY_TIMESTAMP)
+        return ray_timestamp(b->i64 + a->i64 * 1000000LL);
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME)
+        return ray_timestamp(a->i64 + b->i64 * 1000000LL);
+
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* Null propagation */
+    if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) + as_f64(b));
-    return make_i64(a->i64 + b->i64);
+    int8_t rt = promote_int_type(a, b);
+    return make_typed_int(rt, as_i64(a) + as_i64(b));
 }
 
 ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
+    /* DATE - int → DATE */
+    if (a->type == -RAY_DATE && is_numeric(b)) {
+        if (is_null_atom(b)) return ray_date(INT32_MIN);
+        return ray_date(a->i64 - as_i64(b));
+    }
+    /* DATE - DATE → i64 (days difference) */
+    if (a->type == -RAY_DATE && b->type == -RAY_DATE)
+        return make_i64(a->i64 - b->i64);
+    /* DATE - TIME → TIMESTAMP */
+    if (a->type == -RAY_DATE && b->type == -RAY_TIME)
+        return ray_timestamp(a->i64 * 86400000000000LL - b->i64 * 1000000LL);
+    /* TIME - int → TIME */
+    if (a->type == -RAY_TIME && is_numeric(b)) {
+        if (is_null_atom(b)) return ray_time(INT32_MIN);
+        return ray_time(a->i64 - as_i64(b));
+    }
+    /* int - TIME → TIME (negative) */
+    if (is_numeric(a) && b->type == -RAY_TIME) {
+        if (is_null_atom(a)) return ray_time(INT32_MIN);
+        return ray_time(as_i64(a) - b->i64);
+    }
+    /* TIME - TIME → TIME */
+    if (a->type == -RAY_TIME && b->type == -RAY_TIME)
+        return ray_time(a->i64 - b->i64);
+    /* TIMESTAMP - int → TIMESTAMP */
+    if (a->type == -RAY_TIMESTAMP && is_numeric(b)) {
+        if (is_null_atom(b)) return ray_timestamp(INT64_MIN);
+        return ray_timestamp(a->i64 - as_i64(b));
+    }
+    /* TIMESTAMP - TIME → TIMESTAMP */
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME)
+        return ray_timestamp(a->i64 - b->i64 * 1000000LL);
+    /* TIMESTAMP - TIMESTAMP → int (nanos difference) */
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIMESTAMP)
+        return make_i64(a->i64 - b->i64);
+    /* TIMESTAMP - DATE → error */
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_DATE)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (is_float_op(a, b)) return make_f64(as_f64(a) - as_f64(b));
-    return make_i64(a->i64 - b->i64);
+    /* Null propagation */
+    if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
+    if (is_float_op(a, b)) {
+        double r = as_f64(a) - as_f64(b);
+        if (r == 0.0) r = 0.0; /* normalize -0.0 to +0.0 */
+        return make_f64(r);
+    }
+    int8_t rt = promote_int_type_right(a, b);
+    return make_typed_int(rt, as_i64(a) - as_i64(b));
 }
 
 ray_t* ray_mul_fn(ray_t* a, ray_t* b) {
+    /* int * TIME → TIME, TIME * int → TIME */
+    if (is_numeric(a) && b->type == -RAY_TIME) {
+        if (is_null_atom(a)) return ray_time(INT32_MIN);
+        return ray_time(as_i64(a) * b->i64);
+    }
+    if (a->type == -RAY_TIME && is_numeric(b)) {
+        if (is_null_atom(b)) return ray_time(INT32_MIN);
+        return ray_time(a->i64 * as_i64(b));
+    }
+    /* TIME * TIME → error */
+    if (a->type == -RAY_TIME && b->type == -RAY_TIME)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* Null propagation */
+    if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) * as_f64(b));
-    return make_i64(a->i64 * b->i64);
+    int8_t rt = promote_int_type(a, b);
+    return make_typed_int(rt, as_i64(a) * as_i64(b));
 }
 
 ray_t* ray_div_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* Null propagation — null or zero divisor → null (i64 null) */
+    if (is_null_atom(a) || is_null_atom(b)) return make_i64(INT64_MIN);
     if (is_float_op(a, b)) {
-        if (as_f64(b) == 0.0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        return make_f64(as_f64(a) / as_f64(b));
+        double bv = as_f64(b);
+        if (bv == 0.0) return make_i64(INT64_MIN); /* div by zero → 0Nl */
+        double result = as_f64(a) / bv;
+        /* If result is exactly integer, return i64 */
+        if (result == (double)(int64_t)result && result >= (double)INT64_MIN && result <= (double)INT64_MAX)
+            return make_i64((int64_t)result);
+        return make_f64(result);
     }
-    if (b->i64 == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-    return make_i64(a->i64 / b->i64);
+    int64_t bv = as_i64(b);
+    if (bv == 0) return make_i64(INT64_MIN); /* div by zero → 0Nl */
+    return make_i64(as_i64(a) / bv);
 }
 
 ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
@@ -99,47 +319,82 @@ ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
     return make_i64(a->i64 % b->i64);
 }
 
+/* Helper: compare char atom vs string atom.
+ * Returns: -1 if no char/string pair, else memcmp-like result via *out. */
+static int char_str_cmp(ray_t* a, ray_t* b, int *out) {
+    const char *ap, *bp;
+    size_t al, bl;
+    char abuf, bbuf;
+    int a_cs = (a->type == -RAY_CHAR || a->type == -RAY_STR);
+    int b_cs = (b->type == -RAY_CHAR || b->type == -RAY_STR);
+    if (!a_cs || !b_cs) return -1;
+    if (a->type == -RAY_CHAR) { abuf = a->c8; ap = &abuf; al = 1; }
+    else { ap = ray_str_ptr(a); al = ray_str_len(a); }
+    if (b->type == -RAY_CHAR) { bbuf = b->c8; bp = &bbuf; bl = 1; }
+    else { bp = ray_str_ptr(b); bl = ray_str_len(b); }
+    size_t mn = al < bl ? al : bl;
+    int c = memcmp(ap, bp, mn);
+    if (c != 0) { *out = c; return 0; }
+    *out = (al > bl) ? 1 : (al < bl) ? -1 : 0;
+    return 0;
+}
+
 /* Comparison */
 ray_t* ray_gt_fn(ray_t* a, ray_t* b) {
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c > 0 ? 1 : 0); }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) > as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c < 0 ? 1 : 0); }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) < as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_gte(ray_t* a, ray_t* b) {
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c >= 0 ? 1 : 0); }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) >= as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_lte(ray_t* a, ray_t* b) {
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c <= 0 ? 1 : 0); }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) <= as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
+    /* Handle C NULL (null keyword) */
+    if (!a && !b) return make_bool(1);
+    if (!a || !b) return make_bool(0);
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c == 0 ? 1 : 0); }
     if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 == b->b8 ? 1 : 0);
     if (a->type == -RAY_SYM && b->type == -RAY_SYM)
         return make_bool(a->i64 == b->i64 ? 1 : 0);
+    /* null == null → true */
+    if (is_numeric(a) && is_numeric(b) && is_null_atom(a) && is_null_atom(b))
+        return make_bool(1);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (a->type == -RAY_I64 && b->type == -RAY_I64)
-        return make_bool(a->i64 == b->i64 ? 1 : 0);
-    return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
+    if (is_float_op(a, b))
+        return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
+    return make_bool(as_i64(a) == as_i64(b) ? 1 : 0);
 }
 
 ray_t* ray_neq(ray_t* a, ray_t* b) {
+    /* Handle C NULL (null keyword) */
+    if (!a && !b) return make_bool(0);
+    if (!a || !b) return make_bool(1);
+    { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c != 0 ? 1 : 0); }
     if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 != b->b8 ? 1 : 0);
     if (a->type == -RAY_SYM && b->type == -RAY_SYM)
         return make_bool(a->i64 != b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (a->type == -RAY_I64 && b->type == -RAY_I64)
-        return make_bool(a->i64 != b->i64 ? 1 : 0);
-    return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
+    if (is_float_op(a, b))
+        return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
+    return make_bool(as_i64(a) != as_i64(b) ? 1 : 0);
 }
 
 /* Logical — coerce to truthiness (0/nil/false = falsy, else truthy) */
@@ -151,15 +406,96 @@ static inline int is_truthy(ray_t* x) {
 }
 
 ray_t* ray_and_fn(ray_t* a, ray_t* b) {
+    /* Element-wise for bool vectors */
+    if (ray_is_vec(a) && a->type == RAY_BOOL && ray_is_vec(b) && b->type == RAY_BOOL) {
+        int64_t n = a->len < b->len ? a->len : b->len;
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* da = (bool*)ray_data(a);
+        bool* db = (bool*)ray_data(b);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = da[i] && db[i];
+        r->len = n;
+        return r;
+    }
+    /* Scalar broadcast: vec and scalar */
+    if (ray_is_vec(a) && a->type == RAY_BOOL && ray_is_atom(b)) {
+        int64_t n = a->len;
+        bool bv = is_truthy(b);
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* da = (bool*)ray_data(a);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = da[i] && bv;
+        r->len = n;
+        return r;
+    }
+    if (ray_is_atom(a) && ray_is_vec(b) && b->type == RAY_BOOL) {
+        int64_t n = b->len;
+        bool av = is_truthy(a);
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* db = (bool*)ray_data(b);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = av && db[i];
+        r->len = n;
+        return r;
+    }
     return make_bool((is_truthy(a) && is_truthy(b)) ? 1 : 0);
 }
 
 ray_t* ray_or_fn(ray_t* a, ray_t* b) {
+    /* Element-wise for bool vectors */
+    if (ray_is_vec(a) && a->type == RAY_BOOL && ray_is_vec(b) && b->type == RAY_BOOL) {
+        int64_t n = a->len < b->len ? a->len : b->len;
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* da = (bool*)ray_data(a);
+        bool* db = (bool*)ray_data(b);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = da[i] || db[i];
+        r->len = n;
+        return r;
+    }
+    /* Scalar broadcast */
+    if (ray_is_vec(a) && a->type == RAY_BOOL && ray_is_atom(b)) {
+        int64_t n = a->len;
+        bool bv = is_truthy(b);
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* da = (bool*)ray_data(a);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = da[i] || bv;
+        r->len = n;
+        return r;
+    }
+    if (ray_is_atom(a) && ray_is_vec(b) && b->type == RAY_BOOL) {
+        int64_t n = b->len;
+        bool av = is_truthy(a);
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* db = (bool*)ray_data(b);
+        bool* dr = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dr[i] = av || db[i];
+        r->len = n;
+        return r;
+    }
     return make_bool((is_truthy(a) || is_truthy(b)) ? 1 : 0);
 }
 
 /* Unary */
 ray_t* ray_not_fn(ray_t* x) {
+    /* Element-wise for bool vectors */
+    if (ray_is_vec(x) && x->type == RAY_BOOL) {
+        int64_t n = x->len;
+        ray_t* r = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(r)) return r;
+        bool* src = (bool*)ray_data(x);
+        bool* dst = (bool*)ray_data(r);
+        for (int64_t i = 0; i < n; i++) dst[i] = !src[i];
+        r->len = n;
+        return r;
+    }
     return make_bool(is_truthy(x) ? 0 : 1);
 }
 
@@ -245,13 +581,22 @@ static ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
     }
     *allocated = 1;
     switch (coll->type) {
-        case RAY_I64:  return ray_i64(((int64_t*)ray_data(coll))[i]);
-        case RAY_F64:  return ray_f64(((double*)ray_data(coll))[i]);
-        case RAY_I32:  return ray_i32(((int32_t*)ray_data(coll))[i]);
-        case RAY_I16:  return ray_i16(((int16_t*)ray_data(coll))[i]);
-        case RAY_BOOL: return ray_bool(((bool*)ray_data(coll))[i]);
-        case RAY_SYM:  return ray_sym(((int64_t*)ray_data(coll))[i]);
-        default:       *allocated = 0; return RAY_ERR_PTR(RAY_ERR_TYPE);
+        case RAY_I64:       return ray_i64(((int64_t*)ray_data(coll))[i]);
+        case RAY_F64:       return ray_f64(((double*)ray_data(coll))[i]);
+        case RAY_I32:       return ray_i32(((int32_t*)ray_data(coll))[i]);
+        case RAY_I16:       return ray_i16(((int16_t*)ray_data(coll))[i]);
+        case RAY_BOOL:      return ray_bool(((bool*)ray_data(coll))[i]);
+        case RAY_SYM:       return ray_sym(((int64_t*)ray_data(coll))[i]);
+        case RAY_U8:        return ray_u8(((uint8_t*)ray_data(coll))[i]);
+        case RAY_DATE:      return ray_date((int64_t)((int32_t*)ray_data(coll))[i]);
+        case RAY_TIME:      return ray_time((int64_t)((int32_t*)ray_data(coll))[i]);
+        case RAY_TIMESTAMP: return ray_timestamp(((int64_t*)ray_data(coll))[i]);
+        case RAY_GUID: {
+            const uint8_t* gd = ((uint8_t*)ray_data(coll)) + i * 16;
+            return ray_guid(gd);
+        }
+        case RAY_CHAR:      return ray_char(((char*)ray_data(coll))[i]);
+        default:            *allocated = 0; return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
 }
 
@@ -296,13 +641,33 @@ static ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
 
 /* Store a scalar result into a typed vector at position i.
  * Returns 0 on success, -1 if the element type doesn't match. */
+/* Extract a value from an atom for storage, handling cross-type casting.
+ * Returns the value as int64_t (for integer/temporal types). */
+static int64_t elem_as_i64(ray_t* elem) {
+    if (elem->type == -RAY_I64 || elem->type == -RAY_TIMESTAMP ||
+        elem->type == -RAY_DATE || elem->type == -RAY_TIME ||
+        elem->type == -RAY_SYM) return elem->i64;
+    if (elem->type == -RAY_I32)  return (int64_t)elem->i32;
+    if (elem->type == -RAY_I16)  return (int64_t)elem->i16;
+    if (elem->type == -RAY_U8)   return (int64_t)elem->u8;
+    if (elem->type == -RAY_F64)  return (int64_t)elem->f64;
+    return elem->i64;
+}
+
 static int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
     switch (vec->type) {
-        case RAY_I64:  ((int64_t*)ray_data(vec))[i]  = elem->i64; return 0;
-        case RAY_F64:  ((double*)ray_data(vec))[i]    = elem->f64; return 0;
-        case RAY_I32:  ((int32_t*)ray_data(vec))[i]   = elem->i32; return 0;
-        case RAY_I16:  ((int16_t*)ray_data(vec))[i]   = elem->i16; return 0;
-        case RAY_BOOL: ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
+        case RAY_I64:       ((int64_t*)ray_data(vec))[i]  = elem_as_i64(elem); return 0;
+        case RAY_F64:       ((double*)ray_data(vec))[i]    = (elem->type == -RAY_F64) ? elem->f64 : (double)elem_as_i64(elem); return 0;
+        case RAY_I32:       ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
+        case RAY_I16:       ((int16_t*)ray_data(vec))[i]   = (int16_t)elem_as_i64(elem); return 0;
+        case RAY_BOOL:      ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
+        case RAY_U8:        ((uint8_t*)ray_data(vec))[i]   = (uint8_t)elem_as_i64(elem); return 0;
+        case RAY_CHAR:      ((char*)ray_data(vec))[i]      = elem->c8; return 0;
+        case RAY_DATE:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
+        case RAY_TIME:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
+        case RAY_TIMESTAMP: ((int64_t*)ray_data(vec))[i]   = elem_as_i64(elem); return 0;
+        case RAY_SYM:       ((int64_t*)ray_data(vec))[i]   = elem->i64; return 0;
+        case RAY_GUID:      if (elem->obj) memcpy(((uint8_t*)ray_data(vec)) + i * 16, ray_data(elem->obj), 16); return 0;
         default: return -1;
     }
 }
@@ -340,9 +705,60 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
 
     int8_t out_type = -(e0->type);  /* atom type (-RAY_I64) → vector type (RAY_I64) */
 
-    /* Try typed vector path for numeric/bool output */
-    if (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
-        out_type == RAY_I16 || out_type == RAY_BOOL) {
+    /* If either input is a boxed list (mixed types), always use boxed list output
+     * to preserve type heterogeneity */
+    int force_boxed = (left_coll && left->type == RAY_LIST) ||
+                      (right_coll && right->type == RAY_LIST);
+
+    /* When LEFT is scalar broadcast to RIGHT vector, the output type follows
+     * the RIGHT vector's element type (q/kdb+ semantics) for integer types,
+     * unless float or temporal promotion is involved. */
+    if (!left_coll && right_coll && ray_is_vec(right) && out_type != RAY_F64) {
+        int8_t vec_type = right->type;
+        /* Only override for integer family: if probed type is wider int, downcast */
+        int out_is_int = (out_type == RAY_I64 || out_type == RAY_I32 || out_type == RAY_I16 || out_type == RAY_U8);
+        int vec_is_int = (vec_type == RAY_I64 || vec_type == RAY_I32 || vec_type == RAY_I16 || vec_type == RAY_U8);
+        if (out_is_int && vec_is_int)
+            out_type = vec_type;
+        /* For temporal: only override if both are same temporal family */
+        if ((vec_type == RAY_DATE || vec_type == RAY_TIME || vec_type == RAY_TIMESTAMP) &&
+            out_type == vec_type)
+            out_type = vec_type; /* no-op, just keep it */
+    }
+    /* When LEFT is vector and RIGHT is scalar, output follows WIDER integer
+     * type between left vector and right scalar (q/kdb+ semantics) */
+    if (left_coll && !right_coll && ray_is_vec(left) && out_type != RAY_F64 &&
+        ray_is_atom(right)) {
+        int8_t vt = left->type, st = -(right->type);
+        int vt_int = (vt == RAY_I64 || vt == RAY_I32 || vt == RAY_I16 || vt == RAY_U8);
+        int st_int = (st == RAY_I64 || st == RAY_I32 || st == RAY_I16 || st == RAY_U8);
+        int out_is_int = (out_type == RAY_I64 || out_type == RAY_I32 || out_type == RAY_I16 || out_type == RAY_U8);
+        if (out_is_int && vt_int && st_int)
+            out_type = (vt >= st) ? vt : st; /* wider wins */
+    }
+    /* When both are vectors, output type follows wider integer type */
+    if (left_coll && right_coll && ray_is_vec(left) && ray_is_vec(right) && out_type != RAY_F64) {
+        int8_t lt = left->type, rt = right->type;
+        int lt_int = (lt == RAY_I64 || lt == RAY_I32 || lt == RAY_I16 || lt == RAY_U8);
+        int rt_int = (rt == RAY_I64 || rt == RAY_I32 || rt == RAY_I16 || rt == RAY_U8);
+        if (lt_int && rt_int) {
+            /* Pick wider: I64 > I32 > I16 > U8 (using type tag ordering) */
+            out_type = (lt >= rt) ? lt : rt;
+        }
+    }
+
+    /* When LEFT is a vector collection, override i32 output to match the
+     * left vector type or i64 (e.g., [DATE]-DATE → i64, [i64]-i32 → i64).
+     * Keeps i32 only when left vector is actually i32. */
+    if (out_type == RAY_I32 && left_coll && ray_is_vec(left) && left->type != RAY_I32) {
+        out_type = RAY_I64;
+    }
+
+    /* Try typed vector path for numeric/bool/temporal output (but not for boxed list inputs) */
+    if (!force_boxed &&
+        (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
+         out_type == RAY_I16 || out_type == RAY_BOOL || out_type == RAY_U8 ||
+         out_type == RAY_DATE || out_type == RAY_TIME || out_type == RAY_TIMESTAMP)) {
         ray_t* vec = ray_vec_new(out_type, len);
         if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
         vec->len = len;
@@ -364,7 +780,32 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
         return vec;
     }
 
-    /* Fallback: boxed list for non-numeric output */
+    /* Determine scalar int type for list+scalar coercion.
+     * When a boxed list is combined with a scalar, integer results
+     * are coerced to the scalar's integer type (K/q semantics). */
+    int8_t scalar_int_type = 0;
+    if (force_boxed) {
+        ray_t* scalar = (!left_coll) ? left : (!right_coll ? right : NULL);
+        if (scalar && ray_is_atom(scalar)) {
+            int8_t st = scalar->type;
+            if (st == -RAY_I16 || st == -RAY_I32 || st == -RAY_I64 || st == -RAY_U8)
+                scalar_int_type = st;
+        }
+    }
+
+    /* Coerce an integer atom to the scalar's integer type */
+    #define COERCE_TO_SCALAR(elem) do { \
+        if (scalar_int_type && ray_is_atom(elem) && elem->type != scalar_int_type && \
+            elem->type != -RAY_F64 && is_numeric(elem)) { \
+            int64_t _v = as_i64(elem); \
+            ray_t* _coerced = make_typed_int(scalar_int_type, _v); \
+            ray_release(elem); \
+            elem = _coerced; \
+        } \
+    } while(0)
+
+    /* Fallback: boxed list for non-numeric output or mixed-type input */
+    COERCE_TO_SCALAR(e0);
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
     if (!result) { ray_release(e0); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
@@ -385,8 +826,10 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
             ray_release(result);
             return elem;
         }
+        COERCE_TO_SCALAR(elem);
         out[i] = elem;
     }
+    #undef COERCE_TO_SCALAR
     return result;
 }
 
@@ -410,9 +853,10 @@ static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
 
     int8_t out_type = -(e0->type);
 
-    /* Try typed vector path for numeric/bool output */
+    /* Try typed vector path for numeric/bool/temporal output */
     if (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
-        out_type == RAY_I16 || out_type == RAY_BOOL) {
+        out_type == RAY_I16 || out_type == RAY_BOOL || out_type == RAY_U8 ||
+        out_type == RAY_DATE || out_type == RAY_TIME || out_type == RAY_TIMESTAMP) {
         ray_t* vec = ray_vec_new(out_type, len);
         if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
         vec->len = len;
@@ -462,6 +906,21 @@ ray_t* ray_sum_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_SUM);
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
+        /* For i32/i16 vectors, compute directly to preserve type */
+        if (x->type == RAY_I32) {
+            int64_t n = x->len;
+            int32_t* d = (int32_t*)ray_data(x);
+            int32_t sum = 0;
+            for (int64_t i = 0; i < n; i++) sum += d[i];
+            return make_i32(sum);
+        }
+        if (x->type == RAY_I16) {
+            int64_t n = x->len;
+            int16_t* d = (int16_t*)ray_data(x);
+            int16_t sum = 0;
+            for (int64_t i = 0; i < n; i++) sum += d[i];
+            return make_i16(sum);
+        }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -486,20 +945,35 @@ ray_t* ray_sum_fn(ray_t* x) {
 ray_t* ray_count_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_COUNT);
     if (x->type == RAY_TABLE) return make_i64(ray_table_nrows(x));
+    /* String atom: count = string length */
+    if (ray_is_atom(x) && (-x->type) == RAY_STR)
+        return make_i64((int64_t)ray_str_len(x));
     if (ray_is_vec(x)) {
+        /* GUID vectors: return length directly (DAG count doesn't handle GUID) */
+        if (x->type == RAY_GUID) return make_i64(x->len);
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
         ray_op_t* op = ray_count(g, in);
         return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
-    if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!is_list(x)) {
+        /* Scalar atom → count 1 */
+        if (ray_is_atom(x)) return make_i64(1);
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Dict: count = number of key-value pairs */
+    if (x->attrs & RAY_ATTR_DICT)
+        return make_i64(ray_len(x) / 2);
     return make_i64(ray_len(x));
 }
 
 ray_t* ray_avg_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_AVG);
-    if (ray_is_atom(x)) { ray_retain(x); return x; }
+    if (ray_is_atom(x)) {
+        if (is_numeric(x)) return make_f64(as_f64(x));
+        ray_retain(x); return x;
+    }
     if (ray_is_vec(x)) {
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
@@ -523,6 +997,14 @@ ray_t* ray_min(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MIN);
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
+        if (x->type == RAY_I32) {
+            int64_t n = x->len;
+            if (n == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            int32_t* d = (int32_t*)ray_data(x);
+            int32_t m = d[0];
+            for (int64_t i = 1; i < n; i++) if (d[i] < m) m = d[i];
+            return make_i32(m);
+        }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -550,6 +1032,14 @@ ray_t* ray_max(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MAX);
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
+        if (x->type == RAY_I32) {
+            int64_t n = x->len;
+            if (n == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            int32_t* d = (int32_t*)ray_data(x);
+            int32_t m = d[0];
+            for (int64_t i = 1; i < n; i++) if (d[i] > m) m = d[i];
+            return make_i32(m);
+        }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -575,8 +1065,33 @@ ray_t* ray_max(ray_t* x) {
 
 ray_t* ray_first_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_FIRST);
+    /* String first: return first char */
+    if (ray_is_atom(x) && (-x->type) == RAY_STR) {
+        size_t slen = ray_str_len(x);
+        if (slen == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_t* c = ray_alloc(0);
+        if (!c) return RAY_ERR_PTR(RAY_ERR_OOM);
+        c->type = -RAY_CHAR;
+        c->c8 = ray_str_ptr(x)[0];
+        return c;
+    }
     if (ray_is_atom(x)) { ray_retain(x); return x; }
+    /* Table first: return first row as dict */
+    if (x->type == RAY_TABLE) {
+        if (ray_table_nrows(x) == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_t* idx = make_i64(0);
+        ray_t* result = ray_at(x, idx);
+        ray_release(idx);
+        return result;
+    }
     if (ray_is_vec(x)) {
+        if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
+        /* For SYM, GUID and other non-numeric types, use collection_elem directly */
+        if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
+            x->type == RAY_GUID) {
+            int alloc = 0;
+            return collection_elem(x, 0, &alloc);
+        }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -584,7 +1099,7 @@ ray_t* ray_first_fn(ray_t* x) {
         return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (ray_len(x) == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty list */
     ray_t* elem = ((ray_t**)ray_data(x))[0];
     ray_retain(elem);
     return elem;
@@ -592,8 +1107,33 @@ ray_t* ray_first_fn(ray_t* x) {
 
 ray_t* ray_last_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_LAST);
+    /* String last: return last char */
+    if (ray_is_atom(x) && (-x->type) == RAY_STR) {
+        size_t slen = ray_str_len(x);
+        if (slen == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_t* c = ray_alloc(0);
+        if (!c) return RAY_ERR_PTR(RAY_ERR_OOM);
+        c->type = -RAY_CHAR;
+        c->c8 = ray_str_ptr(x)[slen - 1];
+        return c;
+    }
     if (ray_is_atom(x)) { ray_retain(x); return x; }
+    /* Table last: return last row as dict */
+    if (x->type == RAY_TABLE) {
+        int64_t nrows = ray_table_nrows(x);
+        if (nrows == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_t* idx = make_i64(nrows - 1);
+        ray_t* result = ray_at(x, idx);
+        ray_release(idx);
+        return result;
+    }
     if (ray_is_vec(x)) {
+        if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
+        if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
+            x->type == RAY_GUID) {
+            int alloc = 0;
+            return collection_elem(x, ray_len(x) - 1, &alloc);
+        }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -602,7 +1142,7 @@ ray_t* ray_last_fn(ray_t* x) {
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
-    if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (len == 0) return make_i64(INT64_MIN); /* 0Nl for empty list */
     ray_t* elem = ((ray_t**)ray_data(x))[len - 1];
     ray_retain(elem);
     return elem;
@@ -907,6 +1447,74 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
 ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (ray_is_lazy(mask)) mask = ray_lazy_materialize(mask);
+
+    /* Table filter: apply mask to each column */
+    if (vec->type == RAY_TABLE && ray_is_vec(mask) && mask->type == RAY_BOOL) {
+        int64_t ncols = vec->len;
+        int64_t nrows = ray_table_nrows(vec);
+        if (nrows != mask->len) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_t* schema = ray_table_schema(vec);
+        ray_t* result = ray_table_new((int32_t)ncols);
+        if (RAY_IS_ERR(result)) return result;
+        if (schema) { ray_retain(schema); *(ray_t**)ray_data(result) = schema; }
+        ray_t** src_cols = (ray_t**)((char*)ray_data(vec) + sizeof(ray_t*));
+        ray_t** dst_cols = (ray_t**)((char*)ray_data(result) + sizeof(ray_t*));
+        for (int64_t c = 0; c < ncols; c++) {
+            ray_t* filtered = ray_filter_fn(src_cols[c], mask);
+            if (RAY_IS_ERR(filtered)) { ray_release(result); return filtered; }
+            dst_cols[c] = filtered;
+        }
+        result->len = ncols;
+        return result;
+    }
+
+    /* String filter: STR atom + bool mask → filter characters */
+    if (ray_is_atom(vec) && (-vec->type) == RAY_STR && ray_is_vec(mask) && mask->type == RAY_BOOL) {
+        const char* sp = ray_str_ptr(vec);
+        size_t slen = ray_str_len(vec);
+        int64_t mlen = mask->len;
+        if ((int64_t)slen != mlen) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        bool* mb = (bool*)ray_data(mask);
+        int64_t count = 0;
+        for (int64_t i = 0; i < mlen; i++) if (mb[i]) count++;
+        char buf[8192];
+        if ((size_t)count > sizeof(buf)) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        int64_t j = 0;
+        for (int64_t i = 0; i < mlen; i++) {
+            if (mb[i]) buf[j++] = sp[i];
+        }
+        return ray_str(buf, (size_t)count);
+    }
+
+    /* Fast path: typed vector + typed bool mask */
+    if (ray_is_vec(vec) && ray_is_vec(mask) && mask->type == RAY_BOOL) {
+        int64_t len = vec->len;
+        int64_t mlen = mask->len;
+        if (len != mlen) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        bool* mb = (bool*)ray_data(mask);
+
+        /* Count true values */
+        int64_t count = 0;
+        for (int64_t i = 0; i < len; i++) if (mb[i]) count++;
+
+        int8_t vtype = vec->type;
+        int esz = ray_elem_size(vtype);
+        ray_t* result = ray_vec_new(vtype, count);
+        if (RAY_IS_ERR(result)) return result;
+        char* src = (char*)ray_data(vec);
+        char* dst = (char*)ray_data(result);
+        int64_t j = 0;
+        for (int64_t i = 0; i < len; i++) {
+            if (mb[i]) {
+                memcpy(dst + j * esz, src + i * esz, esz);
+                j++;
+            }
+        }
+        result->len = count;
+        return result;
+    }
+
+    /* Fallback: boxed list path */
     ray_t *_bx1 = NULL, *_bx2 = NULL;
     vec = unbox_vec_arg(vec, &_bx1);
     if (RAY_IS_ERR(vec)) return vec;
@@ -920,10 +1528,14 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     ray_t** velems = (ray_t**)ray_data(vec);
     ray_t** melems = (ray_t**)ray_data(mask);
 
+    /* Validate mask is all booleans */
+    for (int64_t i = 0; i < len; i++) {
+        if (melems[i]->type != -RAY_BOOL) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    }
     /* Count true values */
     int64_t count = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (melems[i]->type == -RAY_BOOL && melems[i]->b8) count++;
+        if (melems[i]->b8) count++;
     }
 
     ray_t* result = ray_alloc(count * sizeof(ray_t*));
@@ -933,7 +1545,7 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     ray_t** out = (ray_t**)ray_data(result);
     int64_t j = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (melems[i]->type == -RAY_BOOL && melems[i]->b8) {
+        if (melems[i]->b8) {
             ray_retain(velems[i]);
             out[j++] = velems[i];
         }
@@ -988,22 +1600,124 @@ ray_t* ray_apply(ray_t** args, int64_t n) {
 /* Helper: compare two atoms for equality (value-based) */
 static int atom_eq(ray_t* a, ray_t* b) {
     if (a->type != b->type) {
-        if (is_numeric(a) && is_numeric(b))
+        if (is_numeric(a) && is_numeric(b)) {
+            int a_null = is_null_atom(a);
+            int b_null = is_null_atom(b);
+            if (a_null && b_null) return 1;
+            if (a_null || b_null) return 0;
             return as_f64(a) == as_f64(b);
+        }
         return 0;
     }
     switch (a->type) {
     case -RAY_I64:  return a->i64 == b->i64;
+    case -RAY_I32:  return a->i32 == b->i32;
+    case -RAY_I16:  return a->i16 == b->i16;
+    case -RAY_U8:   return a->u8 == b->u8;
     case -RAY_F64:  return a->f64 == b->f64;
     case -RAY_BOOL: return a->b8 == b->b8;
     case -RAY_SYM:  return a->i64 == b->i64;
-    default: return 0;
+    case -RAY_DATE: case -RAY_TIME:
+        return a->i32 == b->i32;
+    case -RAY_TIMESTAMP:
+        return a->i64 == b->i64;
+    case -RAY_CHAR:
+        return a->c8 == b->c8;
+    case -RAY_GUID: {
+        const uint8_t* ga = a->obj ? (const uint8_t*)ray_data(a->obj) : (const uint8_t*)ray_data((ray_t*)a);
+        const uint8_t* gb = b->obj ? (const uint8_t*)ray_data(b->obj) : (const uint8_t*)ray_data((ray_t*)b);
+        return memcmp(ga, gb, 16) == 0;
+    }
+    case -RAY_STR:
+        return ray_str_len(a) == ray_str_len(b) &&
+               memcmp(ray_str_ptr(a), ray_str_ptr(b), ray_str_len(a)) == 0;
+    default:
+        /* Vector equality: same type and length, element-wise comparison */
+        if (a->type > 0 && a->type == b->type && a->len == b->len) {
+            int esz = ray_elem_size(a->type);
+            return memcmp(ray_data(a), ray_data(b), (size_t)(a->len * esz)) == 0;
+        }
+        return 0;
     }
 }
+
+/* Forward declaration */
+static ray_t* list_to_typed_vec(ray_t* list, int8_t orig_vec_type);
 
 /* (distinct vec) — remove duplicates, preserving first occurrence */
 ray_t* ray_distinct_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
+
+    /* String distinct: unique chars, sorted */
+    if (ray_is_atom(x) && (-x->type) == RAY_STR) {
+        const char* sp = ray_str_ptr(x);
+        size_t slen = ray_str_len(x);
+        if (slen == 0) { ray_retain(x); return x; }
+        char uniq[256];
+        int nu = 0;
+        for (size_t i = 0; i < slen; i++) {
+            int dup = 0;
+            for (int j = 0; j < nu; j++) { if (uniq[j] == sp[i]) { dup = 1; break; } }
+            if (!dup && nu < 256) uniq[nu++] = sp[i];
+        }
+        /* Sort */
+        for (int i = 0; i < nu - 1; i++)
+            for (int j = i + 1; j < nu; j++)
+                if ((unsigned char)uniq[i] > (unsigned char)uniq[j]) { char t = uniq[i]; uniq[i] = uniq[j]; uniq[j] = t; }
+        return ray_str(uniq, (size_t)nu);
+    }
+
+    /* Typed vector path: convert to boxed list, deduplicate, convert back */
+    if (ray_is_vec(x)) {
+        int64_t len = ray_len(x);
+        if (len == 0) { ray_retain(x); return x; }
+        int8_t vtype = x->type;
+
+        /* Convert to boxed list for dedup */
+        ray_t* blist = to_boxed_list(x);
+        if (RAY_IS_ERR(blist)) return blist;
+        ray_t** elems = (ray_t**)ray_data(blist);
+
+        ray_t* result = ray_alloc(len * sizeof(ray_t*));
+        if (!result) { ray_release(blist); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        result->type = RAY_LIST;
+        ray_t** out = (ray_t**)ray_data(result);
+        int64_t count = 0;
+
+        for (int64_t i = 0; i < len; i++) {
+            /* Skip null values */
+            if (is_null_atom(elems[i])) continue;
+            int dup = 0;
+            for (int64_t j = 0; j < count; j++) {
+                if (atom_eq(out[j], elems[i])) { dup = 1; break; }
+            }
+            if (!dup) {
+                ray_retain(elems[i]);
+                out[count++] = elems[i];
+            }
+        }
+        result->len = count;
+
+        /* Sort the deduped elements for numeric/char types (bubble sort, small n) */
+        if (vtype != RAY_SYM && vtype != RAY_GUID && vtype != RAY_STR) {
+            for (int64_t i = 0; i < count - 1; i++) {
+                for (int64_t j = i + 1; j < count; j++) {
+                    double a_v = as_f64(out[i]);
+                    double b_v = as_f64(out[j]);
+                    if (a_v > b_v) {
+                        ray_t* tmp = out[i]; out[i] = out[j]; out[j] = tmp;
+                    }
+                }
+            }
+        }
+
+        /* Convert back to typed vector (promote i16 to i64 for set operations) */
+        int8_t out_type = (vtype == RAY_I16) ? RAY_I64 : vtype;
+        ray_t* tvec = list_to_typed_vec(result, out_type);
+        ray_release(blist);
+        return tvec;
+    }
+
     ray_t* _bx = NULL;
     x = unbox_vec_arg(x, &_bx);
     if (RAY_IS_ERR(x)) return x;
@@ -1029,6 +1743,16 @@ ray_t* ray_distinct_fn(ray_t* x) {
         }
     }
     result->len = count;
+    /* Sort: atoms before vectors (scalars have negative type) */
+    for (int64_t i = 0; i < count - 1; i++) {
+        for (int64_t j = i + 1; j < count; j++) {
+            int ai = ray_is_atom(out[i]);
+            int aj = ray_is_atom(out[j]);
+            if (!ai && aj) {
+                ray_t* tmp = out[i]; out[i] = out[j]; out[j] = tmp;
+            }
+        }
+    }
     if (_bx) ray_release(_bx);
     return result;
 }
@@ -1037,6 +1761,123 @@ ray_t* ray_distinct_fn(ray_t* x) {
 ray_t* ray_in(ray_t* val, ray_t* vec) {
     if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
+    /* CHAR in STR: check if character appears in string */
+    if (ray_is_atom(val) && (-val->type) == RAY_CHAR && ray_is_atom(vec) && (-vec->type) == RAY_STR) {
+        const char* sp = ray_str_ptr(vec);
+        size_t slen = ray_str_len(vec);
+        char c = val->c8;
+        for (size_t i = 0; i < slen; i++)
+            if (sp[i] == c) return make_bool(1);
+        return make_bool(0);
+    }
+    /* STR in STR: for each char of val, check membership in vec string */
+    if (ray_is_atom(val) && (-val->type) == RAY_STR && ray_is_atom(vec) && (-vec->type) == RAY_STR) {
+        const char* vp = ray_str_ptr(val);
+        size_t vlen = ray_str_len(val);
+        const char* sp = ray_str_ptr(vec);
+        size_t slen = ray_str_len(vec);
+        ray_t* result = ray_vec_new(RAY_BOOL, (int64_t)vlen);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = (int64_t)vlen;
+        bool* out = (bool*)ray_data(result);
+        for (size_t i = 0; i < vlen; i++) {
+            out[i] = false;
+            for (size_t j = 0; j < slen; j++) {
+                if (vp[i] == sp[j]) { out[i] = true; break; }
+            }
+        }
+        return result;
+    }
+    /* STR in CHAR: for each char of val, check if it equals vec char */
+    if (ray_is_atom(val) && (-val->type) == RAY_STR && ray_is_atom(vec) && (-vec->type) == RAY_CHAR) {
+        const char* vp = ray_str_ptr(val);
+        size_t vlen = ray_str_len(val);
+        char c = vec->c8;
+        ray_t* result = ray_vec_new(RAY_BOOL, (int64_t)vlen);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = (int64_t)vlen;
+        bool* out = (bool*)ray_data(result);
+        for (size_t i = 0; i < vlen; i++)
+            out[i] = (vp[i] == c);
+        return result;
+    }
+    /* Scalar in scalar: equality check */
+    if (ray_is_atom(val) && ray_is_atom(vec))
+        return make_bool(atom_eq(val, vec) ? 1 : 0);
+    /* STR in LIST: for each char of val, check membership in list elements */
+    if (ray_is_atom(val) && (-val->type) == RAY_STR && (vec->type == RAY_LIST)) {
+        const char* vp = ray_str_ptr(val);
+        size_t vlen = ray_str_len(val);
+        ray_t* result = ray_vec_new(RAY_BOOL, (int64_t)vlen);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = (int64_t)vlen;
+        bool* out_b = (bool*)ray_data(result);
+        ray_t** list_elems = (ray_t**)ray_data(vec);
+        int64_t list_len = ray_len(vec);
+        for (size_t i = 0; i < vlen; i++) {
+            out_b[i] = false;
+            ray_t* ch = ray_char(vp[i]);
+            for (int64_t j = 0; j < list_len; j++) {
+                if (atom_eq(ch, list_elems[j])) { out_b[i] = true; break; }
+            }
+            ray_release(ch);
+        }
+        return result;
+    }
+    /* Vector val: map in over each element */
+    if (is_collection(val) && !ray_is_atom(val)) {
+        int64_t vlen = ray_len(val);
+        if (vlen == 0) {
+            /* Empty collection → return empty list */
+            return ray_list_new(0);
+        }
+        /* Probe first element to check if result is scalar or vector */
+        int alloc0 = 0;
+        ray_t* e0 = collection_elem(val, 0, &alloc0);
+        if (RAY_IS_ERR(e0)) return e0;
+        ray_t* r0 = ray_in(e0, vec);
+        if (alloc0) ray_release(e0);
+        if (RAY_IS_ERR(r0)) return r0;
+        if (ray_is_atom(r0) && r0->type == -RAY_BOOL) {
+            /* All results are scalar bools — use typed bool vector */
+            ray_t* result = ray_vec_new(RAY_BOOL, vlen);
+            if (RAY_IS_ERR(result)) { ray_release(r0); return result; }
+            result->len = vlen;
+            bool* out = (bool*)ray_data(result);
+            out[0] = r0->b8;
+            ray_release(r0);
+            for (int64_t i = 1; i < vlen; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(result); return elem; }
+                ray_t* r = ray_in(elem, vec);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(r)) { ray_release(result); return r; }
+                out[i] = r->b8;
+                ray_release(r);
+            }
+            return result;
+        } else {
+            /* Results are non-scalar — collect as list */
+            ray_t* result = ray_list_new(vlen);
+            if (RAY_IS_ERR(result)) { ray_release(r0); return result; }
+            result = ray_list_append(result, r0);
+            ray_release(r0);
+            if (RAY_IS_ERR(result)) return result;
+            for (int64_t i = 1; i < vlen; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(result); return elem; }
+                ray_t* r = ray_in(elem, vec);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(r)) { ray_release(result); return r; }
+                result = ray_list_append(result, r);
+                ray_release(r);
+                if (RAY_IS_ERR(result)) return result;
+            }
+            return result;
+        }
+    }
     ray_t* _bx = NULL;
     vec = unbox_vec_arg(vec, &_bx);
     if (RAY_IS_ERR(vec)) return vec;
@@ -1050,10 +1891,71 @@ ray_t* ray_in(ray_t* val, ray_t* vec) {
     return make_bool(0);
 }
 
+/* Helper: convert a boxed list result back to a typed vector if the original was typed */
+static ray_t* list_to_typed_vec(ray_t* list, int8_t orig_vec_type) {
+    if (!list || RAY_IS_ERR(list) || list->type != RAY_LIST) return list;
+    int64_t count = list->len;
+    /* For SYM and STR types, only convert when empty (to get [] instead of ()) */
+    if (orig_vec_type == RAY_SYM || orig_vec_type == RAY_STR) {
+        if (count == 0) {
+            ray_release(list);
+            return ray_vec_new(orig_vec_type, 0);
+        }
+        return list; /* Keep as boxed list for non-empty SYM/STR */
+    }
+    ray_t* vec = ray_vec_new(orig_vec_type, count);
+    if (RAY_IS_ERR(vec)) return vec;
+    vec->len = count;
+    ray_t** elems = (ray_t**)ray_data(list);
+    for (int64_t i = 0; i < count; i++)
+        store_typed_elem(vec, i, elems[i]);
+    /* Release the list (ray_release_owned_refs handles child elements) */
+    ray_release(list);
+    return vec;
+}
+
 /* (except vec1 vec2) — elements in vec1 not in vec2 */
 ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
+    int8_t orig_type = ray_is_vec(vec1) ? vec1->type : -1;
+    /* Handle scalar vec2: treat as single-element filter */
+    if (ray_is_atom(vec2) && !ray_is_atom(vec1)) {
+        ray_t *_bx1 = NULL;
+        ray_t* v1 = unbox_vec_arg(vec1, &_bx1);
+        if (RAY_IS_ERR(v1)) return v1;
+        if (!is_list(v1)) { if (_bx1) ray_release(_bx1); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+        int64_t len = ray_len(v1);
+        ray_t** e1 = (ray_t**)ray_data(v1);
+        ray_t* result = ray_alloc(len * sizeof(ray_t*));
+        if (!result) { if (_bx1) ray_release(_bx1); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        result->type = RAY_LIST;
+        ray_t** out = (ray_t**)ray_data(result);
+        int64_t count = 0;
+        for (int64_t i = 0; i < len; i++) {
+            if (!atom_eq(e1[i], vec2)) {
+                ray_retain(e1[i]);
+                out[count++] = e1[i];
+            }
+        }
+        result->len = count;
+        if (_bx1) ray_release(_bx1);
+        if (orig_type >= 0 && orig_type != RAY_SYM && orig_type != RAY_STR) {
+            ray_t* vec = ray_vec_new(orig_type, count);
+            if (!RAY_IS_ERR(vec)) {
+                vec->len = count;
+                ray_t** elems = (ray_t**)ray_data(result);
+                for (int64_t i = 0; i < count; i++) {
+                    store_typed_elem(vec, i, elems[i]);
+                    ray_release(elems[i]);
+                }
+                result->len = 0;
+                ray_release(result);
+                return vec;
+            }
+        }
+        return result;
+    }
     ray_t *_bx1 = NULL, *_bx2 = NULL;
     vec1 = unbox_vec_arg(vec1, &_bx1);
     if (RAY_IS_ERR(vec1)) return vec1;
@@ -1084,6 +1986,25 @@ ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
     result->len = count;
     if (_bx1) ray_release(_bx1);
     if (_bx2) ray_release(_bx2);
+    /* Convert back to typed vector if original was typed */
+    if (orig_type >= 0 && orig_type != RAY_SYM && orig_type != RAY_STR) {
+        ray_t* vec = ray_vec_new(orig_type, count);
+        if (!RAY_IS_ERR(vec)) {
+            vec->len = count;
+            ray_t** elems = (ray_t**)ray_data(result);
+            for (int64_t i = 0; i < count; i++) {
+                store_typed_elem(vec, i, elems[i]);
+                ray_release(elems[i]);
+            }
+            result->len = 0; /* prevent double-free of elements */
+            ray_release(result);
+            return vec;
+        }
+    }
+    if (orig_type >= 0 && count == 0) {
+        ray_release(result);
+        return ray_vec_new(orig_type, 0);
+    }
     return result;
 }
 
@@ -1091,6 +2012,7 @@ ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
 ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
+    int8_t orig_type = ray_is_vec(vec1) ? vec1->type : -1;
     ray_t *_bx1 = NULL, *_bx2 = NULL;
     vec1 = unbox_vec_arg(vec1, &_bx1);
     if (RAY_IS_ERR(vec1)) return vec1;
@@ -1125,6 +2047,24 @@ ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
     result->len = count;
     if (_bx1) ray_release(_bx1);
     if (_bx2) ray_release(_bx2);
+    if (orig_type >= 0 && orig_type != RAY_SYM && orig_type != RAY_STR) {
+        ray_t* vec = ray_vec_new(orig_type, count);
+        if (!RAY_IS_ERR(vec)) {
+            vec->len = count;
+            ray_t** elems = (ray_t**)ray_data(result);
+            for (int64_t i = 0; i < count; i++) {
+                store_typed_elem(vec, i, elems[i]);
+                ray_release(elems[i]);
+            }
+            result->len = 0;
+            ray_release(result);
+            return vec;
+        }
+    }
+    if (orig_type >= 0 && count == 0) {
+        ray_release(result);
+        return ray_vec_new(orig_type, 0);
+    }
     return result;
 }
 
@@ -1132,6 +2072,7 @@ ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
 ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
+    int8_t orig_type = ray_is_vec(vec1) ? vec1->type : -1;
     ray_t *_bx1 = NULL, *_bx2 = NULL;
     vec1 = unbox_vec_arg(vec1, &_bx1);
     if (RAY_IS_ERR(vec1)) return vec1;
@@ -1161,19 +2102,107 @@ ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
     result->len = count;
     if (_bx1) ray_release(_bx1);
     if (_bx2) ray_release(_bx2);
+    if (orig_type >= 0 && orig_type != RAY_SYM && orig_type != RAY_STR) {
+        ray_t* vec = ray_vec_new(orig_type, count);
+        if (!RAY_IS_ERR(vec)) {
+            vec->len = count;
+            ray_t** elems = (ray_t**)ray_data(result);
+            for (int64_t i = 0; i < count; i++) {
+                store_typed_elem(vec, i, elems[i]);
+                ray_release(elems[i]);
+            }
+            result->len = 0;
+            ray_release(result);
+            return vec;
+        }
+    }
+    if (orig_type >= 0 && count == 0) {
+        ray_release(result);
+        return ray_vec_new(orig_type, 0);
+    }
     return result;
 }
 
 /* (take vec n) — first n elements (positive) or last |n| elements (negative) */
 ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
+    /* Char take: (take 'a' n) → string of n copies of char */
+    if (ray_is_atom(vec) && (-vec->type) == RAY_CHAR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
+        int64_t n = as_i64(n_obj);
+        int64_t count = n < 0 ? -n : n;
+        char buf[8192];
+        if (count > (int64_t)sizeof(buf)) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        for (int64_t i = 0; i < count; i++) buf[i] = vec->c8;
+        return ray_str(buf, (size_t)count);
+    }
+    /* Scalar take: (take value n) → repeat value n times */
+    if (ray_is_atom(vec) && (-vec->type) != RAY_STR && (-vec->type) != RAY_CHAR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
+        int64_t n = as_i64(n_obj);
+        int64_t count = n < 0 ? -n : n;
+        int8_t vtype = -(vec->type);
+        ray_t* result = ray_vec_new(vtype, count);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = count;
+        for (int64_t i = 0; i < count; i++)
+            store_typed_elem(result, i, vec);
+        return result;
+    }
+    /* String take: (take "hello" 3) → "hel", with wrapping extension */
+    if (ray_is_atom(vec) && (-vec->type) == RAY_STR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
+        const char* s = ray_str_ptr(vec);
+        int64_t slen = (int64_t)ray_str_len(vec);
+        int64_t n = as_i64(n_obj);
+        int64_t abs_n = n < 0 ? -n : n;
+        char buf[8192];
+        if (abs_n > (int64_t)sizeof(buf)) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        if (slen == 0) {
+            return ray_str("", 0);
+        }
+        if (n >= 0) {
+            for (int64_t i = 0; i < abs_n; i++) buf[i] = s[i % slen];
+        } else {
+            for (int64_t i = 0; i < abs_n; i++) {
+                int64_t si = slen - (abs_n - i) % slen;
+                if (si == slen) si = 0;
+                buf[i] = s[si];
+            }
+        }
+        return ray_str(buf, (size_t)abs_n);
+    }
+    /* Typed vector take with extension */
+    if (ray_is_vec(vec) && is_numeric(n_obj)) {
+        int64_t len = ray_len(vec);
+        int64_t n = as_i64(n_obj);
+        int64_t abs_n = n < 0 ? -n : n;
+        int8_t vtype = vec->type;
+        int esz = ray_elem_size(vtype);
+        ray_t* result = ray_vec_new(vtype, abs_n);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = abs_n;
+        char* src = (char*)ray_data(vec);
+        char* dst = (char*)ray_data(result);
+        if (len == 0) {
+            memset(dst, 0, (size_t)(abs_n * esz));
+        } else if (n >= 0) {
+            for (int64_t i = 0; i < abs_n; i++)
+                memcpy(dst + i * esz, src + (i % len) * esz, esz);
+        } else {
+            /* Negative: take from end with wrap */
+            for (int64_t i = 0; i < abs_n; i++) {
+                int64_t si = len - (abs_n - i) % len;
+                if (si == len) si = 0;
+                memcpy(dst + i * esz, src + si * esz, esz);
+            }
+        }
+        return result;
+    }
     ray_t* _bx = NULL;
     vec = unbox_vec_arg(vec, &_bx);
     if (RAY_IS_ERR(vec)) return vec;
-    if (!is_list(vec) || n_obj->type != -RAY_I64)
+    if (!is_list(vec) || !is_numeric(n_obj))
         { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
-    int64_t n = n_obj->i64;
+    int64_t n = as_i64(n_obj);
     ray_t** elems = (ray_t**)ray_data(vec);
 
     int64_t start, count;
@@ -1242,13 +2271,120 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
         return result;
     }
 
-    if (idx->type != -RAY_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    int64_t i = idx->i64;
+    /* Table row access by integer index: (at table 0) → {col1: val1, col2: val2} */
+    if (vec->type == RAY_TABLE && ray_is_atom(idx) &&
+        (idx->type == -RAY_I64 || idx->type == -RAY_I32 ||
+         idx->type == -RAY_I16 || idx->type == -RAY_U8)) {
+        int64_t row = as_i64(idx);
+        int64_t nrows = ray_table_nrows(vec);
+        if (row < 0 || row >= nrows) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        int64_t ncols = vec->len;
+        ray_t* schema = ray_table_schema(vec);
+        /* Columns are stored after the schema pointer in data region */
+        ray_t** cols = (ray_t**)((char*)ray_data(vec) + sizeof(ray_t*));
+        /* Build a dict: alternating key, value pairs */
+        ray_t* dict = ray_list_new(0);
+        if (RAY_IS_ERR(dict)) return dict;
+        dict->attrs |= RAY_ATTR_DICT;
+        for (int64_t c = 0; c < ncols; c++) {
+            /* Add key */
+            int64_t key_id = schema ? ((int64_t*)ray_data(schema))[c] : c;
+            ray_t* k = ray_sym(key_id);
+            if (RAY_IS_ERR(k)) { ray_release(dict); return k; }
+            dict = ray_list_append(dict, k);
+            ray_release(k);
+            if (RAY_IS_ERR(dict)) return dict;
+            /* Add value */
+            int alloc = 0;
+            ray_t* val = collection_elem(cols[c], row, &alloc);
+            if (RAY_IS_ERR(val)) { ray_release(dict); return val; }
+            dict = ray_list_append(dict, val);
+            if (alloc) ray_release(val);
+            if (RAY_IS_ERR(dict)) return dict;
+        }
+        return dict;
+    }
+
+    /* Dict key access: (at dict key) → value or 0Nl if missing */
+    if (vec->type == RAY_LIST && (vec->attrs & RAY_ATTR_DICT) && idx->type == -RAY_SYM) {
+        ray_t** items = (ray_t**)ray_data(vec);
+        int64_t n2 = vec->len;
+        for (int64_t i = 0; i < n2; i += 2) {
+            if (items[i]->type == -RAY_SYM && items[i]->i64 == idx->i64) {
+                ray_retain(items[i + 1]);
+                return items[i + 1];
+            }
+        }
+        return make_i64(INT64_MIN); /* 0Nl for missing key */
+    }
+
+    /* String indexing: (at "hello" 1) → 'e', (at "hello" [0 4]) → "ho" */
+    if (ray_is_atom(vec) && (-vec->type) == RAY_STR) {
+        const char* s = ray_str_ptr(vec);
+        size_t slen = ray_str_len(vec);
+        if (is_collection(idx)) {
+            /* Multiple indices → build string from chars */
+            int64_t idxlen = ray_len(idx);
+            char buf[8192];
+            if ((size_t)idxlen > sizeof(buf)) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+            for (int64_t j = 0; j < idxlen; j++) {
+                int alloc = 0;
+                ray_t* ie = collection_elem(idx, j, &alloc);
+                int64_t k = as_i64(ie);
+                if (alloc) ray_release(ie);
+                if (k < 0 || (size_t)k >= slen) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+                buf[j] = s[k];
+            }
+            return ray_str(buf, (size_t)idxlen);
+        }
+        int64_t i = as_i64(idx);
+        if (i < 0 || (size_t)i >= slen) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        /* Return char atom */
+        ray_t* c = ray_alloc(0);
+        if (!c) return RAY_ERR_PTR(RAY_ERR_OOM);
+        c->type = -RAY_CHAR;
+        c->c8 = s[i];
+        return c;
+    }
+
+    /* Vector index: (at vec [i j k]) → vector of values */
+    if (is_collection(idx) && idx->type != -RAY_SYM) {
+        int64_t idxlen = ray_len(idx);
+        ray_t* result = ray_alloc(idxlen * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = idxlen;
+        ray_t** out = (ray_t**)ray_data(result);
+        for (int64_t j = 0; j < idxlen; j++) {
+            int alloc = 0;
+            ray_t* idx_elem = collection_elem(idx, j, &alloc);
+            if (RAY_IS_ERR(idx_elem)) {
+                for (int64_t k = 0; k < j; k++) ray_release(out[k]);
+                ray_release(result);
+                return idx_elem;
+            }
+            ray_t* sub_idx = idx_elem;
+            ray_t* val = ray_at(vec, sub_idx);
+            if (alloc) ray_release(idx_elem);
+            if (RAY_IS_ERR(val)) {
+                for (int64_t k = 0; k < j; k++) ray_release(out[k]);
+                ray_release(result);
+                return val;
+            }
+            out[j] = val;
+        }
+        return result;
+    }
+
+    if (idx->type != -RAY_I64 && idx->type != -RAY_I32 &&
+        idx->type != -RAY_I16 && idx->type != -RAY_U8)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t i = as_i64(idx);
 
     /* Typed vector: extract element directly */
     if (ray_is_vec(vec)) {
         int64_t len = ray_len(vec);
-        if (i < 0 || i >= len) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        if (i < 0 || i >= len) return make_i64(INT64_MIN); /* out of bounds → 0Nl */
         int alloc = 0;
         ray_t* elem = collection_elem(vec, i, &alloc);
         /* collection_elem always allocates for typed vecs, so elem is owned */
@@ -1257,7 +2393,7 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
 
     if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
-    if (i < 0 || i >= len) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (i < 0 || i >= len) return make_i64(INT64_MIN); /* out of bounds → 0Nl */
     ray_t* elem = ((ray_t**)ray_data(vec))[i];
     ray_retain(elem);
     return elem;
@@ -1266,6 +2402,41 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
 /* (find vec val) — index of first occurrence, or -1 */
 ray_t* ray_find(ray_t* vec, ray_t* val) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
+    if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
+    /* String find: (find "hello" 'l') → index of char in string */
+    if (ray_is_atom(vec) && (-vec->type) == RAY_STR && ray_is_atom(val) && val->type == -RAY_CHAR) {
+        const char* s = ray_str_ptr(vec);
+        size_t slen = ray_str_len(vec);
+        char c = val->c8;
+        for (size_t i = 0; i < slen; i++) {
+            if (s[i] == c) return make_i64((int64_t)i);
+        }
+        return make_i64(INT64_MIN);
+    }
+    /* Vector val: (find vec [v1 v2]) → [idx1 idx2] */
+    if (is_collection(val)) {
+        /* If vec is empty, return empty vector */
+        if (is_collection(vec) && ray_len(vec) == 0)
+            return ray_vec_new(RAY_I64, 0);
+        int64_t vlen = ray_len(val);
+        ray_t* result = ray_alloc(vlen * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = vlen;
+        ray_t** out = (ray_t**)ray_data(result);
+        for (int64_t j = 0; j < vlen; j++) {
+            int alloc = 0;
+            ray_t* ve = collection_elem(val, j, &alloc);
+            out[j] = ray_find(vec, ve);
+            if (alloc) ray_release(ve);
+            if (RAY_IS_ERR(out[j])) {
+                for (int64_t k = 0; k < j; k++) ray_release(out[k]);
+                ray_release(result);
+                return out[j];
+            }
+        }
+        return result;
+    }
     ray_t* _bx = NULL;
     vec = unbox_vec_arg(vec, &_bx);
     if (RAY_IS_ERR(vec)) return vec;
@@ -1276,7 +2447,7 @@ ray_t* ray_find(ray_t* vec, ray_t* val) {
         if (atom_eq(elems[i], val)) { if (_bx) ray_release(_bx); return make_i64(i); }
     }
     if (_bx) ray_release(_bx);
-    return make_i64(-1);
+    return make_i64(INT64_MIN); /* 0Nl = not found */
 }
 
 /* (til n) — generate integer sequence [0, 1, ..., n-1] */
@@ -1457,6 +2628,18 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
 
 /* (key table) — return column names as a list of symbols */
 ray_t* ray_key(ray_t* x) {
+    /* Dict: extract keys as SYM vector */
+    if (x->type == RAY_LIST && (x->attrs & RAY_ATTR_DICT)) {
+        int64_t n2 = x->len / 2;
+        ray_t* vec = ray_vec_new(RAY_SYM, n2);
+        if (RAY_IS_ERR(vec)) return vec;
+        vec->len = n2;
+        int64_t* out = (int64_t*)ray_data(vec);
+        ray_t** items = (ray_t**)ray_data(x);
+        for (int64_t i = 0; i < n2; i++)
+            out[i] = items[i * 2]->i64;
+        return vec;
+    }
     if (x->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t ncols = ray_table_ncols(x);
     ray_t* result = ray_alloc(ncols * sizeof(ray_t*));
@@ -1475,8 +2658,24 @@ ray_t* ray_key(ray_t* x) {
     return result;
 }
 
-/* (value dict) — extract values from a dict as a list */
+/* (value dict/table) — extract values */
 ray_t* ray_value(ray_t* x) {
+    /* Table: return list of column vectors */
+    if (x->type == RAY_TABLE) {
+        int64_t ncols = x->len;
+        ray_t* result = ray_alloc(ncols * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = ncols;
+        /* Columns start after the schema pointer */
+        ray_t** cols = (ray_t**)((char*)ray_data(x) + sizeof(ray_t*));
+        ray_t** dst = (ray_t**)ray_data(result);
+        for (int64_t i = 0; i < ncols; i++) {
+            ray_retain(cols[i]);
+            dst[i] = cols[i];
+        }
+        return result;
+    }
     if (x->type != RAY_LIST || !(x->attrs & RAY_ATTR_DICT))
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t n = ray_len(x);
@@ -1784,7 +2983,87 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
     ray_t* result = ray_execute(g, root);
 
     ray_graph_free(g);
+
+    /* Post-process: reorder GROUP BY BOOL results to match first-occurrence
+     * order in the original table (exec.c radix sort puts false before true) */
+    if (by_expr && result && !RAY_IS_ERR(result) && result->type == RAY_TABLE) {
+        if (ray_is_lazy(result)) result = ray_lazy_materialize(result);
+        if (result && !RAY_IS_ERR(result) && result->type == RAY_TABLE) {
+            ray_t* key_col = ray_table_get_col_idx(result, 0);
+            if (key_col && key_col->type == RAY_BOOL && key_col->len >= 2) {
+                /* Find first-occurrence order of bool values in original table */
+                int64_t by_sym = -1;
+                if (by_expr->type == -RAY_SYM) by_sym = by_expr->i64;
+                ray_t* orig_key = (by_sym >= 0) ? ray_table_get_col(tbl, by_sym) : NULL;
+                if (orig_key && orig_key->type == RAY_BOOL && orig_key->len > 0) {
+                    bool first_val = ((bool*)ray_data(orig_key))[0];
+                    bool result_first = ((bool*)ray_data(key_col))[0];
+                    if (first_val != result_first) {
+                        /* Swap rows: reverse row order in all columns */
+                        int64_t nrows_r = ray_table_nrows(result);
+                        int64_t ncols_r = ray_table_ncols(result);
+                        ray_t* reordered = ray_table_new((int32_t)ncols_r);
+                        if (reordered && !RAY_IS_ERR(reordered)) {
+                            int ok = 1;
+                            for (int64_t c = 0; c < ncols_r && ok; c++) {
+                                int64_t cn = ray_table_col_name(result, c);
+                                ray_t* col = ray_table_get_col_idx(result, c);
+                                int esz = ray_elem_size(col->type);
+                                ray_t* new_col = ray_vec_new(col->type, nrows_r);
+                                if (RAY_IS_ERR(new_col)) { ok = 0; break; }
+                                new_col->len = nrows_r;
+                                char* src = (char*)ray_data(col);
+                                char* dst = (char*)ray_data(new_col);
+                                for (int64_t r = 0; r < nrows_r; r++)
+                                    memcpy(dst + r * esz, src + (nrows_r - 1 - r) * esz, esz);
+                                reordered = ray_table_add_col(reordered, cn, new_col);
+                                ray_release(new_col);
+                                if (RAY_IS_ERR(reordered)) { ok = 0; break; }
+                            }
+                            if (ok) {
+                                ray_release(result);
+                                result = reordered;
+                            } else if (reordered && !RAY_IS_ERR(reordered)) {
+                                ray_release(reordered);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     ray_release(tbl);
+
+    /* Rename output columns if user specified names */
+    if (result && !RAY_IS_ERR(result) && n_out > 0) {
+        /* Materialize lazy results if needed */
+        if (ray_is_lazy(result)) result = ray_lazy_materialize(result);
+    }
+    if (result && !RAY_IS_ERR(result) && result->type == RAY_TABLE && n_out > 0) {
+        ray_t* schema = ray_table_schema(result);
+        if (schema && !RAY_IS_ERR(schema) && schema->type > 0 && schema->type < RAY_TYPE_COUNT) {
+            int64_t ncols = schema->len;
+            /* Count key columns in by clause */
+            int n_key_cols = 0;
+            if (by_expr) {
+                if (ray_is_vec(by_expr) && by_expr->type == RAY_SYM) n_key_cols = (int)ray_len(by_expr);
+                else n_key_cols = 1;
+            }
+            /* User-defined output column names */
+            int64_t user_names[16];
+            int n_user = 0;
+            for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+                int64_t kid = dict_elems[i]->i64;
+                if (kid != from_id && kid != where_id && kid != by_id && n_user < 16)
+                    user_names[n_user++] = kid;
+            }
+            /* Rename agg columns (after key columns) using table API */
+            for (int j = 0; j < n_user && n_key_cols + j < ncols; j++)
+                ray_table_set_col_name(result, n_key_cols + j, user_names[j]);
+        }
+    }
+
     return result;
 }
 
@@ -1850,6 +3129,10 @@ static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
  * Special form — receives unevaluated dict arg.
  * For rows matching where (or all if no where), evaluate column expressions
  * and replace those column values. Returns a new table. */
+/* Forward declarations */
+static ray_t* ray_group_fn(ray_t* x);
+static ray_t* ray_concat_fn(ray_t* a, ray_t* b);
+
 ray_t* ray_update(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* dict = args[0];
@@ -1858,11 +3141,154 @@ ray_t* ray_update(ray_t** args, int64_t n) {
 
     ray_t* from_expr = dict_get(dict, "from");
     if (!from_expr) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    /* Detect in-place update: from: 't means quoted symbol */
+    int64_t inplace_sym = -1;
     ray_t* tbl = ray_eval(from_expr);
     if (RAY_IS_ERR(tbl)) return tbl;
+    if (tbl->type == -RAY_SYM) {
+        /* from: 't — resolve symbol to table variable */
+        inplace_sym = tbl->i64;
+        ray_release(tbl);
+        tbl = ray_env_get(inplace_sym);
+        if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_retain(tbl);
+    }
     if (tbl->type != RAY_TABLE) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_TYPE); }
 
     ray_t* where_expr = dict_get(dict, "where");
+    ray_t* by_expr = dict_get(dict, "by");
+
+    /* UPDATE WITH BY: group, compute aggregate, broadcast back */
+    if (by_expr && !where_expr) {
+        int64_t dict_n = ray_len(dict);
+        ray_t** dict_elems = (ray_t**)ray_data(dict);
+        int64_t from_id  = ray_sym_intern("from",  4);
+        int64_t where_id = ray_sym_intern("where", 5);
+        int64_t by_id    = ray_sym_intern("by",    2);
+
+        /* Resolve group key column name.
+         * by_expr is a name reference (not evaluated) — extract sym_id directly */
+        int64_t by_col_name = -1;
+        if (by_expr->type == -RAY_SYM) {
+            by_col_name = by_expr->i64;
+        }
+        if (by_col_name < 0) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+        /* Find group column in table */
+        ray_t* grp_col = ray_table_get_col(tbl, by_col_name);
+        if (!grp_col) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        int64_t nrows2 = ray_table_nrows(tbl);
+
+        /* Use ray_group_fn to get group indices: {key: [indices]} */
+        ray_t* groups = NULL;
+        {
+            groups = ray_group_fn(grp_col);
+            if (!groups || RAY_IS_ERR(groups)) { ray_release(tbl); return groups ? groups : RAY_ERR_PTR(RAY_ERR_OOM); }
+        }
+
+        /* Start with a copy of the original table */
+        int64_t ncols = ray_table_ncols(tbl);
+        ray_t* result = ray_table_new((int32_t)ncols);
+        if (RAY_IS_ERR(result)) { ray_release(groups); ray_release(tbl); return result; }
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t cn = ray_table_col_name(tbl, c);
+            ray_t* col = ray_table_get_col_idx(tbl, c);
+            ray_retain(col);
+            result = ray_table_add_col(result, cn, col);
+            ray_release(col);
+            if (RAY_IS_ERR(result)) { ray_release(groups); ray_release(tbl); return result; }
+        }
+
+        /* For each aggregate expression, compute per group and broadcast */
+        for (int64_t d = 0; d + 1 < dict_n; d += 2) {
+            int64_t kid = dict_elems[d]->i64;
+            if (kid == from_id || kid == where_id || kid == by_id) continue;
+            ray_t* agg_expr = dict_elems[d + 1];
+
+            /* Evaluate the aggregate for each group and broadcast */
+            ray_t* grp_items = (ray_t**)ray_data(groups) ? groups : NULL;
+            if (!grp_items) { ray_release(result); ray_release(groups); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_OOM); }
+            int64_t ngroups = groups->len / 2;
+            ray_t** gdata = (ray_t**)ray_data(groups);
+
+            /* We need to evaluate the aggregate per group.
+             * Build the result column by evaluating the expression on each group's subset. */
+            ray_t* out_col = ray_vec_new(RAY_I64, nrows2); /* will be resized to correct type */
+            if (RAY_IS_ERR(out_col)) { ray_release(result); ray_release(groups); ray_release(tbl); return out_col; }
+
+            int8_t out_type = RAY_I64;
+            int first_group = 1;
+
+            for (int64_t gi = 0; gi < ngroups; gi++) {
+                ray_t* idx_vec = gdata[gi * 2 + 1]; /* index vector for this group */
+                int64_t gsize = ray_len(idx_vec);
+
+                /* Build a sub-table for this group */
+                ray_t* sub_tbl = ray_table_new((int32_t)ncols);
+                if (RAY_IS_ERR(sub_tbl)) { ray_release(out_col); ray_release(result); ray_release(groups); ray_release(tbl); return sub_tbl; }
+                for (int64_t c = 0; c < ncols; c++) {
+                    int64_t cn = ray_table_col_name(tbl, c);
+                    ray_t* full_col = ray_table_get_col_idx(tbl, c);
+                    int8_t ct = full_col->type;
+                    ray_t* sub_col = ray_vec_new(ct, gsize);
+                    if (RAY_IS_ERR(sub_col)) { ray_release(sub_tbl); ray_release(out_col); ray_release(result); ray_release(groups); ray_release(tbl); return sub_col; }
+                    sub_col->len = gsize;
+                    int esz = ray_elem_size(ct);
+                    char* src = (char*)ray_data(full_col);
+                    char* dst = (char*)ray_data(sub_col);
+                    int64_t* idxs = (int64_t*)ray_data(idx_vec);
+                    for (int64_t r = 0; r < gsize; r++)
+                        memcpy(dst + r * esz, src + idxs[r] * esz, esz);
+                    sub_tbl = ray_table_add_col(sub_tbl, cn, sub_col);
+                    ray_release(sub_col);
+                    if (RAY_IS_ERR(sub_tbl)) { ray_release(out_col); ray_release(result); ray_release(groups); ray_release(tbl); return sub_tbl; }
+                }
+
+                /* Evaluate expression on sub-table via DAG */
+                ray_graph_t* ug = ray_graph_new(sub_tbl);
+                ray_op_t* expr_op = compile_expr_dag(ug, agg_expr);
+                if (!expr_op) { ray_graph_free(ug); ray_release(sub_tbl); ray_release(out_col); ray_release(result); ray_release(groups); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+                expr_op = ray_optimize(ug, expr_op);
+                ray_t* agg_result = ray_execute(ug, expr_op);
+                ray_graph_free(ug);
+                ray_release(sub_tbl);
+
+                if (RAY_IS_ERR(agg_result)) { ray_release(out_col); ray_release(result); ray_release(groups); ray_release(tbl); return agg_result; }
+
+                /* Determine output type from first group */
+                if (first_group) {
+                    if (ray_is_atom(agg_result)) out_type = -agg_result->type;
+                    else if (ray_is_vec(agg_result)) out_type = agg_result->type;
+                    ray_release(out_col);
+                    out_col = ray_vec_new(out_type, nrows2);
+                    if (RAY_IS_ERR(out_col)) { ray_release(agg_result); ray_release(result); ray_release(groups); ray_release(tbl); return out_col; }
+                    out_col->len = nrows2;
+                    first_group = 0;
+                }
+
+                /* Broadcast aggregate value to all rows in this group */
+                int64_t* idxs = (int64_t*)ray_data(idx_vec);
+                if (ray_is_atom(agg_result)) {
+                    for (int64_t r = 0; r < gsize; r++)
+                        store_typed_elem(out_col, idxs[r], agg_result);
+                }
+                ray_release(agg_result);
+            }
+
+            /* Add the new column to the result table */
+            result = ray_table_add_col(result, kid, out_col);
+            ray_release(out_col);
+            if (RAY_IS_ERR(result)) { ray_release(groups); ray_release(tbl); return result; }
+        }
+
+        ray_release(groups);
+        /* Store in-place if needed */
+        if (inplace_sym >= 0) {
+            ray_env_set(inplace_sym, result);
+        }
+        ray_release(tbl);
+        return result;
+    }
 
     /* Evaluate WHERE using the DAG to get a boolean mask */
     int64_t nrows = ray_table_nrows(tbl);
@@ -2021,6 +3447,9 @@ ray_t* ray_update(ray_t** args, int64_t n) {
         }
 
         ray_release(mask_vec);
+        if (inplace_sym >= 0 && result && !RAY_IS_ERR(result)) {
+            ray_env_set(inplace_sym, result);
+        }
         ray_release(tbl);
         return result;
     }
@@ -2123,6 +3552,10 @@ ray_t* ray_update(ray_t** args, int64_t n) {
         if (RAY_IS_ERR(result)) { ray_release(tbl); return result; }
     }
 
+    /* Store in-place if from: 't */
+    if (inplace_sym >= 0 && result && !RAY_IS_ERR(result)) {
+        ray_env_set(inplace_sym, result);
+    }
     ray_release(tbl);
     return result;
 }
@@ -2133,11 +3566,52 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
     ray_t* tbl = args[0];
     ray_t* row = args[1];
 
+    /* In-place insert: (insert 't row) — first arg is a symbol (quoted var name) */
+    int64_t inplace_sym = -1;
+    if (tbl->type == -RAY_SYM) {
+        inplace_sym = tbl->i64;
+        tbl = ray_env_get(inplace_sym);
+        if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    }
     if (tbl->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (!is_list(row)) return RAY_ERR_PTR(RAY_ERR_TYPE);
 
     int64_t ncols = ray_table_ncols(tbl);
-    if (ray_len(row) != ncols) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+    /* Dict row: extract values in table column order */
+    ray_t* dict_vals = NULL;
+    if (row->attrs & RAY_ATTR_DICT) {
+        dict_vals = ray_alloc(ncols * sizeof(ray_t*));
+        if (!dict_vals) return RAY_ERR_PTR(RAY_ERR_OOM);
+        dict_vals->type = RAY_LIST;
+        dict_vals->len = ncols;
+        ray_t** dv = (ray_t**)ray_data(dict_vals);
+        ray_t** dict_items = (ray_t**)ray_data(row);
+        int64_t dict_len = ray_len(row);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t col_name = ray_table_col_name(tbl, c);
+            dv[c] = NULL;
+            for (int64_t d = 0; d + 1 < dict_len; d += 2) {
+                if (dict_items[d]->type == -RAY_SYM && dict_items[d]->i64 == col_name) {
+                    dv[c] = dict_items[d + 1];
+                    ray_retain(dv[c]);
+                    break;
+                }
+            }
+            if (!dv[c]) {
+                /* Missing key — clean up and error */
+                for (int64_t j = 0; j < c; j++) if (dv[j]) ray_release(dv[j]);
+                ray_free(dict_vals);
+                return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            }
+        }
+        row = dict_vals;
+    }
+
+    if (ray_len(row) != ncols) {
+        if (dict_vals) { for (int64_t c = 0; c < ncols; c++) ray_release(((ray_t**)ray_data(dict_vals))[c]); ray_free(dict_vals); }
+        return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    }
 
     ray_t** row_elems = (ray_t**)ray_data(row);
     int64_t nrows = ray_table_nrows(tbl);
@@ -2176,8 +3650,16 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
             }
         }
 
-        /* Append new row value */
-        new_col = append_atom_to_col(new_col, row_elems[c]);
+        /* Append new row value(s) — atom for single row, vector for multi-row */
+        if (ray_is_atom(row_elems[c])) {
+            new_col = append_atom_to_col(new_col, row_elems[c]);
+        } else if (ray_is_vec(row_elems[c]) || row_elems[c]->type == RAY_LIST) {
+            ray_t* merged = ray_concat_fn(new_col, row_elems[c]);
+            ray_release(new_col);
+            new_col = merged;
+        } else {
+            new_col = append_atom_to_col(new_col, row_elems[c]);
+        }
         if (RAY_IS_ERR(new_col)) { ray_release(result); return new_col; }
 
         result = ray_table_add_col(result, col_name, new_col);
@@ -2185,6 +3667,15 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
         if (RAY_IS_ERR(result)) return result;
     }
 
+    /* In-place: store result back to the variable and return it */
+    if (inplace_sym >= 0) {
+        ray_env_set(inplace_sym, result);
+    }
+    if (dict_vals) {
+        ray_t** dv = (ray_t**)ray_data(dict_vals);
+        for (int64_t c = 0; c < ncols; c++) if (dv[c]) ray_release(dv[c]);
+        ray_free(dict_vals);
+    }
     return result;
 }
 
@@ -2444,6 +3935,73 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
     return result;
 }
 
+/* (asof-join [key1 key2 ... timeKey] leftTable rightTable)
+ * Last key is the time/asof column, rest are equality keys. */
+ray_t* ray_asof_join_fn(ray_t** args, int64_t n) {
+    if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    ray_t* keys_vec   = args[0];
+    ray_t* left_tbl   = args[1];
+    ray_t* right_tbl  = args[2];
+
+    if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+
+    /* Keys vector must be a SYM vector with at least 2 elements (eq + time) */
+    ray_t* _bxk = NULL;
+    keys_vec = unbox_vec_arg(keys_vec, &_bxk);
+    if (!is_list(keys_vec) || ray_len(keys_vec) < 2) {
+        if (_bxk) ray_release(_bxk);
+        return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    }
+    ray_t** kelems = (ray_t**)ray_data(keys_vec);
+    int64_t nkeys = ray_len(keys_vec);
+
+    /* Last key is the time column */
+    ray_t* time_sym = kelems[nkeys - 1];
+    if (time_sym->type != -RAY_SYM) {
+        if (_bxk) ray_release(_bxk);
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+
+    /* Remaining keys are equality keys */
+    uint8_t n_eq = (uint8_t)(nkeys - 1);
+    ray_t** eq_syms = kelems; /* first n_eq elements */
+
+    ray_graph_t* g = ray_graph_new(left_tbl);
+    if (!g) { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_OOM); }
+
+    ray_op_t* left_node  = ray_const_table(g, left_tbl);
+    ray_op_t* right_node = ray_const_table(g, right_tbl);
+
+    ray_t* tname = ray_sym_str(time_sym->i64);
+    if (!tname) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+    ray_op_t* time_op = ray_scan(g, ray_str_ptr(tname));
+    if (!time_op) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+
+    ray_op_t* eq_ops[16];
+    for (uint8_t i = 0; i < n_eq; i++) {
+        if (eq_syms[i]->type != -RAY_SYM) {
+            ray_graph_free(g); if (_bxk) ray_release(_bxk);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        ray_t* nm = ray_sym_str(eq_syms[i]->i64);
+        if (!nm) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        eq_ops[i] = ray_scan(g, ray_str_ptr(nm));
+        if (!eq_ops[i]) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+    }
+
+    if (_bxk) ray_release(_bxk);
+
+    ray_op_t* jn = ray_asof_join(g, left_node, right_node,
+                                time_op, eq_ops, n_eq, 1);
+    if (!jn) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_OOM); }
+
+    jn = ray_optimize(g, jn);
+    ray_t* result = ray_execute(g, jn);
+    ray_graph_free(g);
+    return result;
+}
+
 /* ══════════════════════════════════════════
  * I/O builtins: println, read-csv, write-csv, as, type
  * ══════════════════════════════════════════ */
@@ -2507,15 +4065,63 @@ ray_t* ray_println(ray_t** args, int64_t n) {
 }
 
 /* (read-csv path) — read CSV file, return RAY_TABLE */
+/* Helper: resolve a type name symbol to a ray type code */
+static int8_t resolve_type_name(int64_t sym_id) {
+    ray_t* s = ray_sym_str(sym_id);
+    if (!s) return -1;
+    const char* name = ray_str_ptr(s);
+    size_t len = ray_str_len(s);
+    int8_t result = -1;
+    if (len == 3 && memcmp(name, "I64", 3) == 0) result = RAY_I64;
+    else if (len == 3 && memcmp(name, "I32", 3) == 0) result = RAY_I32;
+    else if (len == 3 && memcmp(name, "I16", 3) == 0) result = RAY_I16;
+    else if (len == 3 && memcmp(name, "F64", 3) == 0) result = RAY_F64;
+    else if (len == 2 && memcmp(name, "B8", 2) == 0) result = RAY_BOOL;
+    else if (len == 2 && memcmp(name, "U8", 2) == 0) result = RAY_U8;
+    else if (len == 6 && memcmp(name, "SYMBOL", 6) == 0) result = RAY_SYM;
+    else if (len == 2 && memcmp(name, "C8", 2) == 0) result = RAY_STR;
+    else if (len == 4 && memcmp(name, "DATE", 4) == 0) result = RAY_DATE;
+    else if (len == 4 && memcmp(name, "TIME", 4) == 0) result = RAY_TIME;
+    else if (len == 9 && memcmp(name, "TIMESTAMP", 9) == 0) result = RAY_TIMESTAMP;
+    else if (len == 4 && memcmp(name, "GUID", 4) == 0) result = RAY_GUID;
+    ray_release(s);
+    return result;
+}
+
 ray_t* ray_read_csv_fn(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-    ray_t* path_obj = args[0];
+
+    /* (read-csv [types] "path") or (read-csv "path") */
+    ray_t* path_obj = NULL;
+    ray_t* schema = NULL;
+    if (n >= 2 && ray_is_vec(args[0]) && args[0]->type == RAY_SYM) {
+        schema = args[0];
+        path_obj = args[1];
+    } else {
+        path_obj = args[0];
+    }
+
     const char* path = NULL;
     if (path_obj->type == -RAY_STR)
         path = ray_str_ptr(path_obj);
     else
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (!path) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+    if (schema) {
+        int64_t ncols = schema->len;
+        int8_t col_types[256];
+        if (ncols > 256) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        int64_t* sym_ids = (int64_t*)ray_data(schema);
+        for (int64_t i = 0; i < ncols; i++) {
+            col_types[i] = resolve_type_name(sym_ids[i]);
+            if (col_types[i] < 0) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        ray_t* tbl = ray_read_csv_opts(path, 0, true, col_types, (int32_t)ncols);
+        if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_IO);
+        return tbl;
+    }
+
     ray_t* tbl = ray_read_csv(path);
     if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_IO);
     return tbl;
@@ -2539,6 +4145,19 @@ ray_t* ray_write_csv_fn(ray_t** args, int64_t n) {
 }
 
 /* (as 'TypeName value) — type cast */
+/* Case-insensitive type name match helper */
+static int cast_match(const char* tname, size_t tlen, const char* target) {
+    size_t tgt_len = strlen(target);
+    if (tlen != tgt_len) return 0;
+    for (size_t i = 0; i < tlen; i++) {
+        char a = tname[i], b = target[i];
+        if (a >= 'a' && a <= 'z') a -= 32;
+        if (b >= 'a' && b <= 'z') b -= 32;
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
 ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     if (type_sym->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* s = ray_sym_str(type_sym->i64);
@@ -2546,11 +4165,17 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     const char* tname = ray_str_ptr(s);
     size_t tlen = ray_str_len(s);
 
-    /* Cast to I64 */
-    if (tlen == 3 && memcmp(tname, "I64", 3) == 0) {
+    /* Cast to I64 / i64 */
+    if (cast_match(tname, tlen, "I64") || cast_match(tname, tlen, "i64")) {
+        ray_release(s);
         if (val->type == -RAY_I64) { ray_retain(val); return val; }
         if (val->type == -RAY_F64) return make_i64((int64_t)val->f64);
         if (val->type == -RAY_BOOL) return make_i64(val->b8 ? 1 : 0);
+        if (val->type == -RAY_I32 || val->type == -RAY_DATE || val->type == -RAY_TIME)
+            return make_i64(val->i32);
+        if (val->type == -RAY_TIMESTAMP) return make_i64(val->i64);
+        if (val->type == -RAY_I16) return make_i64(val->i16);
+        if (val->type == -RAY_U8) return make_i64(val->u8);
         if (val->type == -RAY_STR) {
             const char* sp = ray_str_ptr(val);
             if (!sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -2559,12 +4184,114 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             if (end == sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             return make_i64(v);
         }
+        /* Vector/list cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_I64, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int64_t* out = (int64_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i64;
+                ray_release(cast);
+            }
+            return vec;
+        }
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
-    /* Cast to F64 */
-    if (tlen == 3 && memcmp(tname, "F64", 3) == 0) {
+    /* Cast to I32 / i32 */
+    if (cast_match(tname, tlen, "I32") || cast_match(tname, tlen, "i32")) {
+        ray_release(s);
+        if (val->type == -RAY_I32) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_i32(val->b8 ? 1 : 0);
+        if (val->type == -RAY_U8)  return ray_i32((int32_t)val->u8);
+        if (val->type == -RAY_I16) return ray_i32(val->i16);
+        if (val->type == -RAY_I64) return ray_i32((int32_t)val->i64);
+        if (val->type == -RAY_F64) return ray_i32((int32_t)val->f64);
+        if (val->type == -RAY_DATE || val->type == -RAY_TIME) return ray_i32(val->i32);
+        if (val->type == -RAY_TIMESTAMP) return ray_i32((int32_t)val->i64);
+        if (val->type == -RAY_STR) {
+            const char* sp = ray_str_ptr(val); char* end;
+            long v = strtol(sp, &end, 10);
+            if (end == sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            return ray_i32((int32_t)v);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_I32, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int32_t* out = (int32_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i32;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to I16 / i16 */
+    if (cast_match(tname, tlen, "I16") || cast_match(tname, tlen, "i16")) {
+        ray_release(s);
+        if (val->type == -RAY_I16) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_i16(val->b8 ? 1 : 0);
+        if (val->type == -RAY_U8)  return ray_i16((int16_t)val->u8);
+        if (val->type == -RAY_I32) return ray_i16((int16_t)val->i32);
+        if (val->type == -RAY_I64) return ray_i16((int16_t)val->i64);
+        if (val->type == -RAY_F64) return ray_i16((int16_t)val->f64);
+        if (val->type == -RAY_DATE || val->type == -RAY_TIME) return ray_i16((int16_t)val->i32);
+        if (val->type == -RAY_TIMESTAMP) return ray_i16((int16_t)val->i64);
+        if (val->type == -RAY_STR) {
+            const char* sp = ray_str_ptr(val); char* end;
+            long v = strtol(sp, &end, 10);
+            if (end == sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            return ray_i16((int16_t)v);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_I16, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int16_t* out = (int16_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i16;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to F64 / f64 */
+    if (cast_match(tname, tlen, "F64") || cast_match(tname, tlen, "f64")) {
+        ray_release(s);
         if (val->type == -RAY_F64) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return make_f64(val->b8 ? 1.0 : 0.0);
         if (val->type == -RAY_I64) return make_f64((double)val->i64);
+        if (val->type == -RAY_I32) return make_f64((double)val->i32);
+        if (val->type == -RAY_I16) return make_f64((double)val->i16);
+        if (val->type == -RAY_U8)  return make_f64((double)val->u8);
+        if (val->type == -RAY_DATE || val->type == -RAY_TIME) return make_f64((double)val->i32);
+        if (val->type == -RAY_TIMESTAMP) return make_f64((double)val->i64);
         if (val->type == -RAY_STR) {
             const char* sp = ray_str_ptr(val);
             if (!sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -2573,35 +4300,544 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             if (end == sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             return make_f64(v);
         }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_F64, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            double* out = (double*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->f64;
+                ray_release(cast);
+            }
+            return vec;
+        }
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
-    /* Cast to BOOL */
-    if (tlen == 4 && memcmp(tname, "BOOL", 4) == 0) {
+    /* Cast to B8/BOOL/b8 */
+    if (cast_match(tname, tlen, "BOOL") || cast_match(tname, tlen, "B8") || cast_match(tname, tlen, "b8")) {
+        ray_release(s);
         if (val->type == -RAY_BOOL) { ray_retain(val); return val; }
         if (val->type == -RAY_I64) return make_bool(val->i64 != 0 ? 1 : 0);
+        if (val->type == -RAY_I32) return make_bool(val->i32 != 0 ? 1 : 0);
+        if (val->type == -RAY_I16) return make_bool(val->i16 != 0 ? 1 : 0);
+        if (val->type == -RAY_U8) return make_bool(val->u8 != 0 ? 1 : 0);
+        if (val->type == -RAY_F64) return make_bool(val->f64 != 0.0 ? 1 : 0);
+        if (val->type == -RAY_DATE) return make_bool(val->i32 != 0 ? 1 : 0);
+        if (val->type == -RAY_TIME) return make_bool(val->i32 != 0 ? 1 : 0);
+        if (val->type == -RAY_TIMESTAMP) return make_bool(val->i64 != 0 ? 1 : 0);
+        if (val->type == -RAY_STR) return make_bool(ray_str_len(val) > 0 ? 1 : 0);
+        /* Vector cast: b8/B8 */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_BOOL, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            bool* out = (bool*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->b8;
+                ray_release(cast);
+            }
+            return vec;
+        }
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
-    /* Cast to STR */
-    if (tlen == 3 && memcmp(tname, "STR", 3) == 0) {
+    /* Cast to C8/STR/str */
+    /* Cast to c8 (char atom) — get first character */
+    if (tlen == 2 && tname[0] == 'c' && tname[1] == '8') {
+        ray_release(s);
+        if (val->type == -RAY_CHAR) { ray_retain(val); return val; }
+        if (val->type == -RAY_SYM) {
+            ray_t* sym_str = ray_sym_str(val->i64);
+            if (sym_str) { char c = ray_str_ptr(sym_str)[0]; return ray_char(c); }
+            return ray_char('\0');
+        }
+        if (val->type == -RAY_STR) {
+            size_t slen = ray_str_len(val);
+            if (slen > 0) return ray_char(ray_str_ptr(val)[0]);
+            return ray_char('\0');
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    if (cast_match(tname, tlen, "STR") || cast_match(tname, tlen, "C8")) {
+        ray_release(s);
         if (val->type == -RAY_STR) { ray_retain(val); return val; }
+        if (val->type == -RAY_SYM) {
+            ray_t* sym_str = ray_sym_str(val->i64);
+            return sym_str ? sym_str : ray_str("", 0);
+        }
         if (val->type == -RAY_I64) {
-            char buf[32];
-            int n2 = snprintf(buf, sizeof(buf), "%ld", (long)val->i64);
+            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%lld", (long long)val->i64);
+            return ray_str(buf, (size_t)n2);
+        }
+        if (val->type == -RAY_I32) {
+            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i32);
+            return ray_str(buf, (size_t)n2);
+        }
+        if (val->type == -RAY_I16) {
+            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i16);
             return ray_str(buf, (size_t)n2);
         }
         if (val->type == -RAY_F64) {
-            char buf[32];
-            int n2 = snprintf(buf, sizeof(buf), "%g", val->f64);
+            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%g", val->f64);
             return ray_str(buf, (size_t)n2);
+        }
+        if (val->type == -RAY_BOOL) {
+            return val->b8 ? ray_str("true", 4) : ray_str("false", 5);
+        }
+        /* Fallback: use ray_fmt for any other atom type */
+        if (ray_is_atom(val)) {
+            ray_t* formatted = ray_fmt(val, 0);
+            if (formatted && !RAY_IS_ERR(formatted)) return formatted;
+            if (formatted) ray_release(formatted);
         }
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
+    /* Cast to SYMBOL/sym */
+    if (cast_match(tname, tlen, "SYMBOL") || cast_match(tname, tlen, "sym") || cast_match(tname, tlen, "symbol")) {
+        ray_release(s);
+        if (val->type == -RAY_SYM) { ray_retain(val); return val; }
+        if (val->type == -RAY_STR) {
+            const char* sp = ray_str_ptr(val);
+            size_t slen = ray_str_len(val);
+            int64_t id = ray_sym_intern(sp, slen);
+            return ray_sym(id);
+        }
+        /* Integer/bool atom → symbol: convert to plain number string */
+        if (ray_is_atom(val) && (is_numeric(val) || val->type == -RAY_BOOL)) {
+            char buf[64]; int n2;
+            if (val->type == -RAY_BOOL)     n2 = snprintf(buf, sizeof(buf), "%d", (int)val->b8);
+            else if (val->type == -RAY_U8)  n2 = snprintf(buf, sizeof(buf), "%u", (unsigned)val->u8);
+            else if (val->type == -RAY_I16) n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i16);
+            else if (val->type == -RAY_I32) n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i32);
+            else if (val->type == -RAY_F64) {
+                /* Format float: remove trailing zeros but keep at least one decimal */
+                n2 = snprintf(buf, sizeof(buf), "%.17g", val->f64);
+            }
+            else n2 = snprintf(buf, sizeof(buf), "%lld", (long long)as_i64(val));
+            if (n2 > 0) {
+                int64_t id = ray_sym_intern(buf, (size_t)n2);
+                return ray_sym(id);
+            }
+        }
+        /* Temporal/guid atom → symbol: use ray_fmt for formatting */
+        if (ray_is_atom(val) && (is_temporal(val) || val->type == -RAY_GUID)) {
+            ray_t* formatted = ray_fmt(val, 0);
+            if (formatted && !RAY_IS_ERR(formatted)) {
+                const char* sp = ray_str_ptr(formatted);
+                size_t slen = ray_str_len(formatted);
+                int64_t id = ray_sym_intern(sp, slen);
+                ray_release(formatted);
+                return ray_sym(id);
+            }
+            if (formatted) ray_release(formatted);
+        }
+        /* Vector cast: SYMBOL vec from other vecs */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_SYM, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int64_t* out = (int64_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i64;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to DATE/date */
+    if (cast_match(tname, tlen, "DATE") || cast_match(tname, tlen, "date")) {
+        ray_release(s);
+        if (val->type == -RAY_DATE) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_date((int64_t)val->b8);
+        if (val->type == -RAY_U8)  return ray_date((int64_t)val->u8);
+        if (val->type == -RAY_I16) return ray_date((int64_t)val->i16);
+        if (val->type == -RAY_I32) return ray_date((int64_t)val->i32);
+        if (val->type == -RAY_I64) return ray_date(val->i64);
+        if (val->type == -RAY_F64) return ray_date((int64_t)val->f64);
+        if (val->type == -RAY_TIME) return ray_date((int64_t)val->i32);
+        if (val->type == -RAY_TIMESTAMP) return ray_date((int64_t)(val->i64 / 86400000000000LL));
+        if (val->type == -RAY_STR) {
+            /* Parse "YYYY.MM.DD" format */
+            const char* sp = ray_str_ptr(val);
+            int y, m, d2;
+            if (sscanf(sp, "%d.%d.%d", &y, &m, &d2) != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            int64_t days = 0;
+            { int ty;
+              for (ty = 2000; ty < y; ty++) days += (ty % 4 == 0 && (ty % 100 != 0 || ty % 400 == 0)) ? 366 : 365;
+              for (ty = y; ty < 2000; ty++) days -= (ty % 4 == 0 && (ty % 100 != 0 || ty % 400 == 0)) ? 366 : 365;
+            }
+            { static const int md2[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+              int leap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+              for (int mi = 1; mi < m; mi++) days += md2[mi] + (mi == 2 && leap ? 1 : 0);
+              days += d2 - 1;
+            }
+            return ray_date(days);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_DATE, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int32_t* out = (int32_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i32;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to TIME/time */
+    if (cast_match(tname, tlen, "TIME") || cast_match(tname, tlen, "time")) {
+        ray_release(s);
+        if (val->type == -RAY_TIME) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_time((int64_t)val->b8);
+        if (val->type == -RAY_U8)  return ray_time((int64_t)val->u8);
+        if (val->type == -RAY_I16) return ray_time((int64_t)val->i16);
+        if (val->type == -RAY_I32) return ray_time((int64_t)val->i32);
+        if (val->type == -RAY_I64) return ray_time(val->i64);
+        if (val->type == -RAY_F64) return ray_time((int64_t)val->f64);
+        if (val->type == -RAY_DATE) return ray_time((int64_t)val->i32);
+        if (val->type == -RAY_TIMESTAMP) return ray_time((int64_t)(val->i64 % 86400000000000LL));
+        if (val->type == -RAY_STR) {
+            /* Parse "HH:MM:SS[.mmm]" */
+            const char* sp = ray_str_ptr(val);
+            int th = 0, tm = 0, ts = 0, tms = 0;
+            int nr = sscanf(sp, "%d:%d:%d", &th, &tm, &ts);
+            if (nr < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            const char* dot = strchr(sp, '.');
+            if (dot) {
+                dot++;
+                char mbuf[4] = "000";
+                int mi = 0;
+                while (*dot >= '0' && *dot <= '9' && mi < 3) mbuf[mi++] = *dot++;
+                tms = (int)strtol(mbuf, NULL, 10);
+            }
+            int32_t ms = (int32_t)th * 3600000 + (int32_t)tm * 60000 + (int32_t)ts * 1000 + tms;
+            return ray_time((int64_t)ms);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_TIME, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int32_t* out = (int32_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i32;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to TIMESTAMP/timestamp */
+    if (cast_match(tname, tlen, "TIMESTAMP") || cast_match(tname, tlen, "timestamp")) {
+        ray_release(s);
+        if (val->type == -RAY_TIMESTAMP) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_timestamp((int64_t)val->b8);
+        if (val->type == -RAY_U8)  return ray_timestamp((int64_t)val->u8);
+        if (val->type == -RAY_I16) return ray_timestamp((int64_t)val->i16);
+        if (val->type == -RAY_I32) return ray_timestamp((int64_t)val->i32);
+        if (val->type == -RAY_I64) return ray_timestamp(val->i64);
+        if (val->type == -RAY_F64) return ray_timestamp((int64_t)val->f64);
+        if (val->type == -RAY_TIME) return ray_timestamp((int64_t)val->i32);
+        if (val->type == -RAY_DATE) {
+            int64_t days = val->i32;
+            return ray_timestamp(days * 24LL * 60 * 60 * 1000000000LL);
+        }
+        /* ISO string → timestamp: "YYYY-MM-DD[T ]HH:MM:SS[.nnn...]" or "YYYY.MM.DDDHH:MM:SS.nnn..." */
+        if (val->type == -RAY_STR) {
+            const char* sp = ray_str_ptr(val);
+            size_t sl = ray_str_len(val);
+            if (sl < 10) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            int y, m, d, hh = 0, mm = 0, ss = 0;
+            long long frac = 0;
+            /* Try both formats: YYYY-MM-DD and YYYY.MM.DD */
+            int parsed = sscanf(sp, "%d-%d-%d", &y, &m, &d);
+            int is_ray_fmt = 0;
+            if (parsed != 3) {
+                parsed = sscanf(sp, "%d.%d.%d", &y, &m, &d);
+                if (parsed == 3) is_ray_fmt = 1;
+            }
+            if (parsed != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            /* Parse optional time part */
+            if (sl > 10 && (sp[10] == 'T' || sp[10] == ' ' || sp[10] == 'D')) {
+                sscanf(sp + 11, "%d:%d:%d", &hh, &mm, &ss);
+                /* Parse fractional seconds */
+                const char* dot = memchr(sp + 11, '.', sl - 11);
+                if (dot) {
+                    dot++;
+                    char fbuf[10] = "000000000";
+                    int fi = 0;
+                    while (*dot >= '0' && *dot <= '9' && fi < 9) fbuf[fi++] = *dot++;
+                    frac = strtoll(fbuf, NULL, 10);
+                }
+            }
+            /* Convert to days since 2000-01-01 */
+            int64_t days = 0;
+            { int ty;
+              for (ty = 2000; ty < y; ty++) days += (ty % 4 == 0 && (ty % 100 != 0 || ty % 400 == 0)) ? 366 : 365;
+              for (ty = y; ty < 2000; ty++) days -= (ty % 4 == 0 && (ty % 100 != 0 || ty % 400 == 0)) ? 366 : 365;
+            }
+            { static const int md[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+              int leap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+              for (int mi = 1; mi < m; mi++) days += md[mi] + (mi == 2 && leap ? 1 : 0);
+              days += d - 1;
+            }
+            int64_t ns = days * 86400000000000LL + (int64_t)hh * 3600000000000LL +
+                         (int64_t)mm * 60000000000LL + (int64_t)ss * 1000000000LL + frac;
+            /* Handle timezone offset: Z, +HH:MM, -HH:MM, +HHMM, -HHMM */
+            if (sl > 19) {
+                const char* tz = sp + 19; /* after YYYY-MM-DDTHH:MM:SS */
+                /* Skip fractional seconds */
+                if (tz < sp + sl && *tz == '.') {
+                    tz++;
+                    while (tz < sp + sl && *tz >= '0' && *tz <= '9') tz++;
+                }
+                if (tz < sp + sl) {
+                    if (*tz == 'Z') {
+                        /* UTC, no adjustment */
+                    } else if (*tz == '+' || *tz == '-') {
+                        int tz_sign = (*tz == '+') ? 1 : -1;
+                        int tz_hh = 0, tz_mm = 0;
+                        tz++;
+                        /* Parse HH:MM or HHMM */
+                        if (tz + 4 < sp + sl && tz[2] == ':') {
+                            sscanf(tz, "%2d:%2d", &tz_hh, &tz_mm);
+                        } else {
+                            sscanf(tz, "%2d%2d", &tz_hh, &tz_mm);
+                        }
+                        int64_t tz_ns = ((int64_t)tz_hh * 3600 + (int64_t)tz_mm * 60) * 1000000000LL;
+                        ns -= tz_sign * tz_ns;
+                    }
+                }
+            }
+            return ray_timestamp(ns);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_TIMESTAMP, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            int64_t* out = (int64_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->i64;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to GUID/guid */
+    if (cast_match(tname, tlen, "GUID") || cast_match(tname, tlen, "guid")) {
+        ray_release(s);
+        if (val->type == -RAY_GUID) { ray_retain(val); return val; }
+        if (val->type == -RAY_STR) {
+            /* Parse UUID string: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" */
+            const char* sp = ray_str_ptr(val);
+            size_t sl = ray_str_len(val);
+            if (sl < 36) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            uint8_t bytes[16];
+            const char* p = sp;
+            for (int bi = 0; bi < 16; bi++) {
+                if (*p == '-') p++;
+                char hi = *p++;
+                char lo = *p++;
+                int h = (hi >= 'a') ? hi - 'a' + 10 : (hi >= 'A') ? hi - 'A' + 10 : hi - '0';
+                int l = (lo >= 'a') ? lo - 'a' + 10 : (lo >= 'A') ? lo - 'A' + 10 : lo - '0';
+                bytes[bi] = (uint8_t)((h << 4) | l);
+            }
+            return ray_guid(bytes);
+        }
+        /* Vector of GUIDs: empty vector cast */
+        if (ray_is_vec(val) && val->len == 0)
+            return ray_vec_new(RAY_GUID, 0);
+        /* List of strings → GUID vector */
+        if (val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_GUID, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            uint8_t* data = (uint8_t*)ray_data(vec);
+            ray_t** items = (ray_t**)ray_data(val);
+            for (int64_t i = 0; i < n2; i++) {
+                ray_t* cast = ray_cast_fn(type_sym, items[i]);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                if (cast->obj) memcpy(data + i * 16, ray_data(cast->obj), 16);
+                else memcpy(data + i * 16, ray_data(cast), 16);
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to U8/u8 */
+    if (cast_match(tname, tlen, "U8") || cast_match(tname, tlen, "u8")) {
+        ray_release(s);
+        if (val->type == -RAY_U8) { ray_retain(val); return val; }
+        if (val->type == -RAY_BOOL) return ray_u8(val->b8 ? 1 : 0);
+        if (val->type == -RAY_I16) return ray_u8((uint8_t)val->i16);
+        if (val->type == -RAY_I32) return ray_u8((uint8_t)val->i32);
+        if (val->type == -RAY_I64) return ray_u8((uint8_t)val->i64);
+        if (val->type == -RAY_F64) return ray_u8((uint8_t)val->f64);
+        if (val->type == -RAY_STR) {
+            const char* sp = ray_str_ptr(val);
+            char* end; long v = strtol(sp, &end, 10);
+            if (end == sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            return ray_u8((uint8_t)v);
+        }
+        /* Vector cast */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_U8, n2);
+            if (RAY_IS_ERR(vec)) return vec;
+            vec->len = n2;
+            uint8_t* out = (uint8_t*)ray_data(vec);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                out[i] = cast->u8;
+                ray_release(cast);
+            }
+            return vec;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to DICT */
+    if (cast_match(tname, tlen, "DICT")) {
+        ray_release(s);
+        if (val->type == RAY_LIST && (val->attrs & RAY_ATTR_DICT)) { ray_retain(val); return val; }
+        /* Table → Dict */
+        if (val->type == RAY_TABLE) {
+            int64_t ncols = ray_table_ncols(val);
+            ray_t* dict = ray_list_new(ncols * 2);
+            if (RAY_IS_ERR(dict)) return dict;
+            dict->attrs |= RAY_ATTR_DICT;
+            for (int64_t c = 0; c < ncols; c++) {
+                int64_t col_name = ray_table_col_name(val, c);
+                ray_t* col_val = ray_table_get_col_idx(val, c);
+                ray_t* key = ray_sym(col_name);
+                if (RAY_IS_ERR(key)) { ray_release(dict); return key; }
+                dict = ray_list_append(dict, key);
+                ray_release(key);
+                if (RAY_IS_ERR(dict)) return dict;
+                ray_retain(col_val);
+                dict = ray_list_append(dict, col_val);
+                ray_release(col_val);
+                if (RAY_IS_ERR(dict)) return dict;
+            }
+            return dict;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    /* Cast to TABLE */
+    if (cast_match(tname, tlen, "TABLE")) {
+        ray_release(s);
+        if (val->type == RAY_TABLE) { ray_retain(val); return val; }
+        /* Dict → Table */
+        if (val->type == RAY_LIST && (val->attrs & RAY_ATTR_DICT)) {
+            int64_t dict_n = ray_len(val);
+            int32_t ncols = (int32_t)(dict_n / 2);
+            ray_t** items = (ray_t**)ray_data(val);
+            ray_t* tbl = ray_table_new(ncols);
+            if (RAY_IS_ERR(tbl)) return tbl;
+            for (int32_t c = 0; c < ncols; c++) {
+                int64_t col_name = items[c * 2]->i64;
+                ray_t* col_val = items[c * 2 + 1];
+                ray_retain(col_val);
+                tbl = ray_table_add_col(tbl, col_name, col_val);
+                ray_release(col_val);
+                if (RAY_IS_ERR(tbl)) return tbl;
+            }
+            return tbl;
+        }
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    ray_release(s);
     return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 }
 
 /* (type val) — return the type code of a value */
+/* Type name mapping: atoms use negative types, vectors use positive */
+static const char* type_sym_name(int8_t type) {
+    switch (type < 0 ? -type : type) {
+    case RAY_BOOL:      return type < 0 ? "b8" : "B8";
+    case RAY_U8:        return type < 0 ? "u8" : "U8";
+    case RAY_I16:       return type < 0 ? "i16" : "I16";
+    case RAY_I32:       return type < 0 ? "i32" : "I32";
+    case RAY_I64:       return type < 0 ? "i64" : "I64";
+    case RAY_F64:       return type < 0 ? "f64" : "F64";
+    case RAY_DATE:      return type < 0 ? "date" : "DATE";
+    case RAY_TIME:      return type < 0 ? "time" : "TIME";
+    case RAY_TIMESTAMP: return type < 0 ? "timestamp" : "TIMESTAMP";
+    case RAY_SYM:       return type < 0 ? "symbol" : "SYMBOL";
+    case RAY_STR:       return type < 0 ? "C8" : "C8";
+    case RAY_GUID:      return type < 0 ? "guid" : "GUID";
+    case RAY_CHAR:      return type < 0 ? "c8" : "C8";
+    case RAY_TABLE:     return "TABLE";
+    case RAY_DICT:      return "DICT";
+    case RAY_LIST:      return "list";
+    default:            return "?";
+    }
+}
+
 ray_t* ray_type_fn(ray_t* val) {
-    return make_i64(val->type);
+    if (!val) return ray_sym(ray_sym_intern("null", 4));
+    /* Dict is a LIST with ATTR_DICT flag */
+    if (val->type == RAY_LIST && (val->attrs & RAY_ATTR_DICT)) {
+        int64_t id = ray_sym_intern("DICT", 4);
+        return ray_sym(id);
+    }
+    const char* name = type_sym_name(val->type);
+    int64_t id = ray_sym_intern(name, strlen(name));
+    return ray_sym(id);
 }
 
 /* (read path) — read a file's contents as a string */
@@ -3328,6 +5564,1116 @@ vm_error: {
 }
 
 /* ══════════════════════════════════════════
+ * Additional builtins (ported from rayforce)
+ * ══════════════════════════════════════════ */
+
+/* (enlist a b c ...) → typed vector from atoms */
+static ray_t* ray_enlist(ray_t** args, int64_t n) {
+    if (n == 0) return ray_vec_new(RAY_I64, 0);
+    /* Determine type from first arg */
+    int8_t atype = args[0]->type;
+    bool homogeneous = true;
+    bool has_float = (atype == -RAY_F64);
+    bool has_int = (atype == -RAY_I64);
+    for (int64_t i = 1; i < n; i++) {
+        if (args[i]->type != atype) homogeneous = false;
+        if (args[i]->type == -RAY_F64) has_float = true;
+        if (args[i]->type == -RAY_I64) has_int = true;
+    }
+    /* Mixed int/float → promote to f64 */
+    if (!homogeneous && has_float && has_int) {
+        ray_t* vec = ray_vec_new(RAY_F64, n);
+        if (RAY_IS_ERR(vec)) return vec;
+        double* d = (double*)ray_data(vec);
+        for (int64_t i = 0; i < n; i++)
+            d[i] = (args[i]->type == -RAY_F64) ? args[i]->f64 : (double)args[i]->i64;
+        vec->len = n;
+        return vec;
+    }
+    if (homogeneous && atype < 0) {
+        int8_t vtype = -atype;
+        ray_t* vec = ray_vec_new(vtype, n);
+        if (RAY_IS_ERR(vec)) return vec;
+        switch (vtype) {
+        case RAY_I64: case RAY_TIMESTAMP: {
+            int64_t* d = (int64_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->i64;
+            break;
+        }
+        case RAY_F64: {
+            double* d = (double*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->f64;
+            break;
+        }
+        case RAY_I32: case RAY_DATE: case RAY_TIME: {
+            int32_t* d = (int32_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->i32;
+            break;
+        }
+        case RAY_I16: {
+            int16_t* d = (int16_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->i16;
+            break;
+        }
+        case RAY_BOOL: {
+            bool* d = (bool*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->b8;
+            break;
+        }
+        case RAY_SYM: {
+            int64_t* d = (int64_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->i64;
+            break;
+        }
+        case RAY_U8: {
+            uint8_t* d = (uint8_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) d[i] = args[i]->u8;
+            break;
+        }
+        case RAY_STR: {
+            ray_t* svec = ray_vec_new(RAY_STR, n);
+            if (RAY_IS_ERR(svec)) { ray_free(vec); return svec; }
+            for (int64_t i = 0; i < n; i++) {
+                svec = ray_str_vec_append(svec, ray_str_ptr(args[i]), ray_str_len(args[i]));
+                if (RAY_IS_ERR(svec)) return svec;
+            }
+            ray_free(vec);
+            return svec;
+        }
+        case RAY_GUID: {
+            uint8_t* d = (uint8_t*)ray_data(vec);
+            for (int64_t i = 0; i < n; i++) {
+                const uint8_t* gd = args[i]->obj ? (const uint8_t*)ray_data(args[i]->obj) : (const uint8_t*)ray_data(args[i]);
+                memcpy(d + i * 16, gd, 16);
+            }
+            break;
+        }
+        default: goto as_list;
+        }
+        vec->len = n;
+        return vec;
+    }
+as_list:;
+    /* Heterogeneous → list */
+    ray_t* lst = ray_list_new((int32_t)n);
+    if (RAY_IS_ERR(lst)) return lst;
+    for (int64_t i = 0; i < n; i++) {
+        ray_retain(args[i]);
+        lst = ray_list_append(lst, args[i]);
+        ray_release(args[i]);
+        if (RAY_IS_ERR(lst)) return lst;
+    }
+    return lst;
+}
+
+/* (dict keys vals) → dict */
+static ray_t* ray_dict_fn(ray_t* keys, ray_t* vals) {
+    if (!ray_is_vec(keys) || (keys->type != RAY_SYM && keys->len > 0))
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n = keys->len;
+    ray_t* dict = ray_list_new((int32_t)(n * 2));
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    int64_t* syms = (int64_t*)ray_data(keys);
+    for (int64_t i = 0; i < n; i++) {
+        ray_t* k = ray_sym(syms[i]);
+        if (RAY_IS_ERR(k)) { ray_release(dict); return k; }
+        dict = ray_list_append(dict, k);
+        ray_release(k);
+        if (RAY_IS_ERR(dict)) return dict;
+
+        /* Get value: from list or vector */
+        ray_t* v;
+        int alloc = 0;
+        if (vals->type == RAY_LIST) {
+            v = (i < vals->len) ? ((ray_t**)ray_data(vals))[i] : NULL;
+        } else if (ray_is_vec(vals)) {
+            v = collection_elem(vals, i, &alloc);
+        } else {
+            v = vals;
+        }
+        if (v && !RAY_IS_ERR(v)) {
+            dict = ray_list_append(dict, v);
+            if (alloc) ray_release(v);
+        } else {
+            ray_t* null_val = ray_i64(INT64_MIN);
+            dict = ray_list_append(dict, null_val);
+            ray_release(null_val);
+        }
+        if (RAY_IS_ERR(dict)) return dict;
+    }
+    return dict;
+}
+
+/* (nil? x) → true if x is null */
+static ray_t* ray_nil_fn(ray_t* x) {
+    if (!x) return ray_bool(true);
+    if (ray_is_atom(x)) {
+        switch (-x->type) {
+        case RAY_I16:  return ray_bool(x->i16 == INT16_MIN);
+        case RAY_I32:  case RAY_DATE: case RAY_TIME:
+            return ray_bool(x->i32 == INT32_MIN);
+        case RAY_I64:  case RAY_TIMESTAMP: case RAY_SYM:
+            return ray_bool(x->i64 == INT64_MIN);
+        case RAY_F64:  return ray_bool(isnan(x->f64));
+        }
+    }
+    return ray_bool(false);
+}
+
+/* (where bool-vec) → indices of true values */
+static ray_t* ray_where_fn(ray_t* x) {
+    if (!ray_is_vec(x) || x->type != RAY_BOOL)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    bool* data = (bool*)ray_data(x);
+    int64_t n = x->len;
+    /* Count trues */
+    int64_t cnt = 0;
+    for (int64_t i = 0; i < n; i++) if (data[i]) cnt++;
+    ray_t* result = ray_vec_new(RAY_I64, cnt);
+    if (RAY_IS_ERR(result)) return result;
+    int64_t* out = (int64_t*)ray_data(result);
+    int64_t j = 0;
+    for (int64_t i = 0; i < n; i++) if (data[i]) out[j++] = i;
+    result->len = cnt;
+    return result;
+}
+
+/* (group vec) → dict mapping each unique value to its indices */
+static ray_t* ray_group_fn(ray_t* x) {
+    if (!ray_is_vec(x))
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n = x->len;
+    if (n == 0) {
+        ray_t* d = ray_list_new(0);
+        if (!RAY_IS_ERR(d)) d->attrs |= RAY_ATTR_DICT;
+        return d;
+    }
+
+    /* Use a fixed-size approach: collect unique values with ray_alloc blocks */
+    /* Max groups = n (all unique). Store in a large ray_alloc block. */
+    int64_t max_groups = n < 1024 ? n : 1024;
+    ray_t* val_block = ray_alloc((size_t)(max_groups * sizeof(int64_t)));
+    if (RAY_IS_ERR(val_block)) return val_block;
+    int64_t* gvals = (int64_t*)ray_data(val_block);
+
+    /* For each group, store indices in a separate i64 vector */
+    ray_t** idx_vecs = NULL;
+    ray_t* ivblock = ray_alloc((size_t)(max_groups * sizeof(ray_t*)));
+    if (RAY_IS_ERR(ivblock)) { ray_free(val_block); return ivblock; }
+    idx_vecs = (ray_t**)ray_data(ivblock);
+    int64_t ngroups = 0;
+
+    for (int64_t i = 0; i < n; i++) {
+        int64_t v;
+        if (x->type == RAY_SYM || x->type == RAY_I64 || x->type == RAY_TIMESTAMP)
+            v = ((int64_t*)ray_data(x))[i];
+        else if (x->type == RAY_I32 || x->type == RAY_DATE || x->type == RAY_TIME)
+            v = ((int32_t*)ray_data(x))[i];
+        else if (x->type == RAY_BOOL)
+            v = ((bool*)ray_data(x))[i] ? 1 : 0;
+        else
+            v = i;
+
+        int64_t gi = -1;
+        for (int64_t g = 0; g < ngroups; g++) {
+            if (gvals[g] == v) { gi = g; break; }
+        }
+        if (gi < 0) {
+            if (ngroups >= max_groups) {
+                for (int64_t g = 0; g < ngroups; g++) ray_release(idx_vecs[g]);
+                ray_free(val_block); ray_free(ivblock);
+                return RAY_ERR_PTR(RAY_ERR_LIMIT);
+            }
+            gi = ngroups++;
+            gvals[gi] = v;
+            idx_vecs[gi] = ray_vec_new(RAY_I64, 0);
+        }
+        /* Append index i to the group's vector */
+        idx_vecs[gi] = ray_vec_append(idx_vecs[gi], &i);
+    }
+
+    /* Build dict */
+    ray_t* dict = ray_list_new((int32_t)(ngroups * 2));
+    if (RAY_IS_ERR(dict)) goto gfail;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    for (int64_t g = 0; g < ngroups; g++) {
+        ray_t* k;
+        if (x->type == RAY_SYM) k = ray_sym(gvals[g]);
+        else if (x->type == RAY_BOOL) k = ray_bool(gvals[g] != 0);
+        else k = ray_i64(gvals[g]);
+        if (RAY_IS_ERR(k)) { ray_release(dict); goto gfail; }
+        dict = ray_list_append(dict, k);
+        ray_release(k);
+        if (RAY_IS_ERR(dict)) goto gfail;
+        dict = ray_list_append(dict, idx_vecs[g]);
+        ray_release(idx_vecs[g]);
+        idx_vecs[g] = NULL;
+        if (RAY_IS_ERR(dict)) goto gfail;
+    }
+    ray_free(val_block);
+    ray_free(ivblock);
+    return dict;
+
+gfail:
+    for (int64_t g = 0; g < ngroups; g++)
+        if (idx_vecs[g]) ray_release(idx_vecs[g]);
+    ray_free(val_block);
+    ray_free(ivblock);
+    return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+}
+
+/* (concat a b) → concatenate vectors/strings/dicts/tables */
+static ray_t* ray_concat_fn(ray_t* a, ray_t* b) {
+    /* Helper: get string content from atom (STR or CHAR), stripping trailing nulls */
+    {
+        int a_is_str = ray_is_atom(a) && ((-a->type) == RAY_STR || (-a->type) == RAY_CHAR);
+        int b_is_str = ray_is_atom(b) && ((-b->type) == RAY_STR || (-b->type) == RAY_CHAR);
+        if (a_is_str && b_is_str) {
+            char abuf[2], bbuf[2];
+            const char *ap, *bp;
+            size_t la, lb;
+            if ((-a->type) == RAY_CHAR) { abuf[0] = a->c8; ap = abuf; la = 1; }
+            else { ap = ray_str_ptr(a); la = ray_str_len(a); }
+            if ((-b->type) == RAY_CHAR) { bbuf[0] = b->c8; bp = bbuf; lb = 1; }
+            else { bp = ray_str_ptr(b); lb = ray_str_len(b); }
+            /* Strip trailing null bytes */
+            while (la > 0 && ap[la - 1] == '\0') la--;
+            while (lb > 0 && bp[lb - 1] == '\0') lb--;
+            char buf[8192];
+            if (la + lb > sizeof(buf)) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+            memcpy(buf, ap, la);
+            memcpy(buf + la, bp, lb);
+            return ray_str(buf, la + lb);
+        }
+    }
+    /* Vector concat: same type */
+    if (ray_is_vec(a) && ray_is_vec(b) && a->type == b->type) {
+        int64_t na = a->len, nb = b->len;
+        if (a->type == RAY_STR) {
+            ray_t* result = ray_vec_new(RAY_STR, na + nb);
+            if (RAY_IS_ERR(result)) return result;
+            for (int64_t i = 0; i < na; i++) {
+                size_t slen;
+                const char* sp = ray_str_vec_get(a, i, &slen);
+                result = ray_str_vec_append(result, sp, slen);
+                if (RAY_IS_ERR(result)) return result;
+            }
+            for (int64_t i = 0; i < nb; i++) {
+                size_t slen;
+                const char* sp = ray_str_vec_get(b, i, &slen);
+                result = ray_str_vec_append(result, sp, slen);
+                if (RAY_IS_ERR(result)) return result;
+            }
+            return result;
+        }
+        int esz = ray_elem_size(a->type);
+        ray_t* result = ray_vec_new(a->type, na + nb);
+        if (RAY_IS_ERR(result)) return result;
+        memcpy(ray_data(result), ray_data(a), (size_t)(na * esz));
+        memcpy((char*)ray_data(result) + na * esz, ray_data(b), (size_t)(nb * esz));
+        result->len = na + nb;
+        /* Copy sym_dict / sym stuff for SYM vectors */
+        if (a->type == RAY_SYM && a->sym_dict)
+            result->sym_dict = (ray_retain(a->sym_dict), a->sym_dict);
+        return result;
+    }
+    /* Concat typed vec + boxed list or boxed list + typed vec → boxed list */
+    if ((ray_is_vec(a) && b->type == RAY_LIST) || (a->type == RAY_LIST && ray_is_vec(b))) {
+        ray_t* la = (a->type == RAY_LIST) ? a : NULL;
+        ray_t* lb = (b->type == RAY_LIST) ? b : NULL;
+        ray_t* va = ray_is_vec(a) ? a : NULL;
+        ray_t* vb = ray_is_vec(b) ? b : NULL;
+        int64_t na = a->len, nb = b->len;
+        ray_t* result = ray_alloc((na + nb) * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = na + nb;
+        ray_t** out = (ray_t**)ray_data(result);
+        for (int64_t i = 0; i < na; i++) {
+            if (va) {
+                int alloc = 0;
+                out[i] = collection_elem(va, i, &alloc);
+            } else {
+                out[i] = ((ray_t**)ray_data(la))[i];
+                ray_retain(out[i]);
+            }
+        }
+        for (int64_t i = 0; i < nb; i++) {
+            if (vb) {
+                int alloc = 0;
+                out[na + i] = collection_elem(vb, i, &alloc);
+            } else {
+                out[na + i] = ((ray_t**)ray_data(lb))[i];
+                ray_retain(out[na + i]);
+            }
+        }
+        return result;
+    }
+    /* Boxed list concat */
+    if (a->type == RAY_LIST && b->type == RAY_LIST && !(a->attrs & RAY_ATTR_DICT) && !(b->attrs & RAY_ATTR_DICT)) {
+        int64_t na = a->len, nb = b->len;
+        ray_t* result = ray_alloc((na + nb) * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = na + nb;
+        ray_t** out = (ray_t**)ray_data(result);
+        ray_t** ae = (ray_t**)ray_data(a);
+        ray_t** be = (ray_t**)ray_data(b);
+        for (int64_t i = 0; i < na; i++) { ray_retain(ae[i]); out[i] = ae[i]; }
+        for (int64_t i = 0; i < nb; i++) { ray_retain(be[i]); out[na + i] = be[i]; }
+        return result;
+    }
+    /* Vector concat: mixed types → boxed list (preserves original element types) */
+    if (ray_is_vec(a) && ray_is_vec(b) && a->type != b->type) {
+        int64_t na = a->len, nb = b->len;
+        ray_t* result = ray_alloc((na + nb) * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = na + nb;
+        ray_t** out = (ray_t**)ray_data(result);
+        for (int64_t i = 0; i < na; i++) {
+            int alloc = 0;
+            out[i] = collection_elem(a, i, &alloc);
+            /* collection_elem always allocates for typed vecs, so ownership transfers */
+        }
+        for (int64_t i = 0; i < nb; i++) {
+            int alloc = 0;
+            out[na + i] = collection_elem(b, i, &alloc);
+        }
+        return result;
+    }
+    /* Atom + vector or vector + atom → append */
+    if (ray_is_atom(a) && ray_is_vec(b) && (-a->type) == b->type) {
+        int64_t nb = b->len;
+        int esz = ray_elem_size(b->type);
+        ray_t* result = ray_vec_new(b->type, 1 + nb);
+        if (RAY_IS_ERR(result)) return result;
+        /* Copy atom value as first element */
+        switch (b->type) {
+        case RAY_I64: case RAY_TIMESTAMP: case RAY_SYM:
+            ((int64_t*)ray_data(result))[0] = a->i64; break;
+        case RAY_F64:
+            ((double*)ray_data(result))[0] = a->f64; break;
+        case RAY_I32: case RAY_DATE: case RAY_TIME:
+            ((int32_t*)ray_data(result))[0] = a->i32; break;
+        case RAY_I16:
+            ((int16_t*)ray_data(result))[0] = a->i16; break;
+        case RAY_BOOL:
+            ((bool*)ray_data(result))[0] = a->b8; break;
+        case RAY_U8:
+            ((uint8_t*)ray_data(result))[0] = a->u8; break;
+        case RAY_GUID: {
+            const uint8_t* gd = a->obj ? (const uint8_t*)ray_data(a->obj) : (const uint8_t*)ray_data((ray_t*)a);
+            memcpy(ray_data(result), gd, 16); break;
+        }
+        default: ray_free(result); return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        memcpy((char*)ray_data(result) + esz, ray_data(b), (size_t)(nb * esz));
+        result->len = 1 + nb;
+        return result;
+    }
+    if (ray_is_vec(a) && ray_is_atom(b) && a->type == (-b->type)) {
+        int64_t na = a->len;
+        int esz = ray_elem_size(a->type);
+        ray_t* result = ray_vec_new(a->type, na + 1);
+        if (RAY_IS_ERR(result)) return result;
+        memcpy(ray_data(result), ray_data(a), (size_t)(na * esz));
+        switch (a->type) {
+        case RAY_I64: case RAY_TIMESTAMP: case RAY_SYM:
+            ((int64_t*)ray_data(result))[na] = b->i64; break;
+        case RAY_F64:
+            ((double*)ray_data(result))[na] = b->f64; break;
+        case RAY_I32: case RAY_DATE: case RAY_TIME:
+            ((int32_t*)ray_data(result))[na] = b->i32; break;
+        case RAY_I16:
+            ((int16_t*)ray_data(result))[na] = b->i16; break;
+        case RAY_BOOL:
+            ((bool*)ray_data(result))[na] = b->b8; break;
+        case RAY_U8:
+            ((uint8_t*)ray_data(result))[na] = b->u8; break;
+        case RAY_GUID: {
+            const uint8_t* gd = b->obj ? (const uint8_t*)ray_data(b->obj) : (const uint8_t*)ray_data((ray_t*)b);
+            memcpy((uint8_t*)ray_data(result) + na * 16, gd, 16); break;
+        }
+        default: ray_free(result); return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        result->len = na + 1;
+        return result;
+    }
+    /* Atom + atom of same type → 2-element vector */
+    if (ray_is_atom(a) && ray_is_atom(b) && a->type == b->type && a->type != -RAY_STR) {
+        int8_t vtype = -(a->type);
+        ray_t* result = ray_vec_new(vtype, 2);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = 2;
+        switch (vtype) {
+        case RAY_I64: case RAY_TIMESTAMP: case RAY_SYM:
+            ((int64_t*)ray_data(result))[0] = a->i64;
+            ((int64_t*)ray_data(result))[1] = b->i64;
+            break;
+        case RAY_F64:
+            ((double*)ray_data(result))[0] = a->f64;
+            ((double*)ray_data(result))[1] = b->f64;
+            break;
+        case RAY_I32: case RAY_DATE: case RAY_TIME:
+            ((int32_t*)ray_data(result))[0] = a->i32;
+            ((int32_t*)ray_data(result))[1] = b->i32;
+            break;
+        case RAY_I16:
+            ((int16_t*)ray_data(result))[0] = a->i16;
+            ((int16_t*)ray_data(result))[1] = b->i16;
+            break;
+        case RAY_BOOL:
+            ((bool*)ray_data(result))[0] = a->b8;
+            ((bool*)ray_data(result))[1] = b->b8;
+            break;
+        case RAY_U8:
+            ((uint8_t*)ray_data(result))[0] = a->u8;
+            ((uint8_t*)ray_data(result))[1] = b->u8;
+            break;
+        case RAY_GUID: {
+            const uint8_t* ga = a->obj ? (const uint8_t*)ray_data(a->obj) : (const uint8_t*)ray_data((ray_t*)a);
+            const uint8_t* gb = b->obj ? (const uint8_t*)ray_data(b->obj) : (const uint8_t*)ray_data((ray_t*)b);
+            memcpy(ray_data(result), ga, 16);
+            memcpy((uint8_t*)ray_data(result) + 16, gb, 16);
+            break;
+        }
+        default: ray_free(result); return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        return result;
+    }
+    /* Dict concat: merge */
+    if (a->type == RAY_LIST && (a->attrs & RAY_ATTR_DICT) &&
+        b->type == RAY_LIST && (b->attrs & RAY_ATTR_DICT)) {
+        ray_t* result = ray_list_new(0);
+        if (RAY_IS_ERR(result)) return result;
+        result->attrs |= RAY_ATTR_DICT;
+        /* Copy all from a */
+        ray_t** aitems = (ray_t**)ray_data(a);
+        for (int64_t i = 0; i < a->len; i++) {
+            ray_retain(aitems[i]);
+            result = ray_list_append(result, aitems[i]);
+            ray_release(aitems[i]);
+            if (RAY_IS_ERR(result)) return result;
+        }
+        /* Merge from b: overwrite existing keys, add new ones */
+        ray_t** bitems = (ray_t**)ray_data(b);
+        for (int64_t i = 0; i < b->len; i += 2) {
+            /* Find key in result */
+            ray_t** ritems = (ray_t**)ray_data(result);
+            bool found = false;
+            for (int64_t j = 0; j < result->len; j += 2) {
+                if (ritems[j]->i64 == bitems[i]->i64) {
+                    /* Replace value */
+                    ray_release(ritems[j + 1]);
+                    ray_retain(bitems[i + 1]);
+                    ritems[j + 1] = bitems[i + 1];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                ray_retain(bitems[i]);
+                result = ray_list_append(result, bitems[i]);
+                ray_release(bitems[i]);
+                if (RAY_IS_ERR(result)) return result;
+                ray_retain(bitems[i + 1]);
+                result = ray_list_append(result, bitems[i + 1]);
+                ray_release(bitems[i + 1]);
+                if (RAY_IS_ERR(result)) return result;
+            }
+        }
+        return result;
+    }
+    /* Table concat: append rows */
+    if (a->type == RAY_TABLE && b->type == RAY_TABLE) {
+        int64_t ncols_a = a->len;
+        int64_t ncols_b = b->len;
+        /* Match columns of a in b by name */
+        ray_t* result = ray_table_new((int32_t)ncols_a);
+        if (RAY_IS_ERR(result)) return result;
+        for (int64_t c = 0; c < ncols_a; c++) {
+            int64_t col_name_a = ray_table_col_name(a, c);
+            ray_t* acol = ray_table_get_col_idx(a, c);
+            /* Find matching column in b by name */
+            ray_t* bcol = NULL;
+            for (int64_t j = 0; j < ncols_b; j++) {
+                if (ray_table_col_name(b, j) == col_name_a) {
+                    bcol = ray_table_get_col_idx(b, j);
+                    break;
+                }
+            }
+            if (!bcol) {
+                /* Column not found in b — error if b also has columns not in a */
+                if (ncols_b > ncols_a) {
+                    ray_release(result);
+                    return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+                }
+                /* Otherwise error */
+                ray_release(result);
+                return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            }
+            /* Type check: columns must have the same type */
+            if (acol->type != bcol->type) {
+                ray_release(result);
+                return RAY_ERR_PTR(RAY_ERR_TYPE);
+            }
+            ray_t* col = ray_concat_fn(acol, bcol);
+            if (RAY_IS_ERR(col)) { ray_release(result); return col; }
+            result = ray_table_add_col(result, col_name_a, col);
+            ray_release(col);
+            if (RAY_IS_ERR(result)) return result;
+        }
+        return result;
+    }
+    /* Atom + boxed list → prepend atom to list */
+    if (ray_is_atom(a) && b->type == RAY_LIST && !(b->attrs & RAY_ATTR_DICT)) {
+        int64_t nb = b->len;
+        ray_t* result = ray_alloc((1 + nb) * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = 1 + nb;
+        ray_t** out = (ray_t**)ray_data(result);
+        ray_retain(a);
+        out[0] = a;
+        ray_t** be = (ray_t**)ray_data(b);
+        for (int64_t i = 0; i < nb; i++) { ray_retain(be[i]); out[1 + i] = be[i]; }
+        return result;
+    }
+    /* Boxed list + atom → append atom to list */
+    if (a->type == RAY_LIST && !(a->attrs & RAY_ATTR_DICT) && ray_is_atom(b)) {
+        int64_t na = a->len;
+        ray_t* result = ray_alloc((na + 1) * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = na + 1;
+        ray_t** out = (ray_t**)ray_data(result);
+        ray_t** ae = (ray_t**)ray_data(a);
+        for (int64_t i = 0; i < na; i++) { ray_retain(ae[i]); out[i] = ae[i]; }
+        ray_retain(b);
+        out[na] = b;
+        return result;
+    }
+    /* Atom + atom of different types → 2-element boxed list */
+    if (ray_is_atom(a) && ray_is_atom(b) && a->type != b->type) {
+        ray_t* result = ray_alloc(2 * sizeof(ray_t*));
+        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        result->type = RAY_LIST;
+        result->len = 2;
+        ray_t** out = (ray_t**)ray_data(result);
+        ray_retain(a); out[0] = a;
+        ray_retain(b); out[1] = b;
+        return result;
+    }
+    return RAY_ERR_PTR(RAY_ERR_TYPE);
+}
+
+/* (raze list-of-vecs) → flattened vector */
+static ray_t* ray_raze_fn(ray_t* x) {
+    /* Scalar passthrough */
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
+    /* Typed vector passthrough */
+    if (ray_is_vec(x)) { ray_retain(x); return x; }
+    if (x->type != RAY_LIST)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n = x->len;
+    if (n == 0) return ray_list_new(0);
+    ray_t** items = (ray_t**)ray_data(x);
+    /* Try to concat all items */
+    ray_t* result = items[0];
+    ray_retain(result);
+    for (int64_t i = 1; i < n; i++) {
+        ray_t* next = ray_concat_fn(result, items[i]);
+        ray_release(result);
+        if (RAY_IS_ERR(next)) return next;
+        result = next;
+    }
+    return result;
+}
+
+/* (within vals [lo hi]) → bool vector, true where lo <= val <= hi */
+static ray_t* ray_within_fn(ray_t* vals, ray_t* range) {
+    if (!ray_is_vec(vals) || !ray_is_vec(range) || range->len != 2)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n = vals->len;
+    ray_t* result = ray_vec_new(RAY_BOOL, n);
+    if (RAY_IS_ERR(result)) return result;
+    bool* out = (bool*)ray_data(result);
+
+    if (vals->type == RAY_I64) {
+        int64_t* d = (int64_t*)ray_data(vals);
+        int64_t* r = (int64_t*)ray_data(range);
+        int64_t lo = r[0], hi = r[1];
+        for (int64_t i = 0; i < n; i++) out[i] = (d[i] >= lo && d[i] <= hi);
+    } else if (vals->type == RAY_F64) {
+        double* d = (double*)ray_data(vals);
+        double* r = (double*)ray_data(range);
+        double lo = r[0], hi = r[1];
+        for (int64_t i = 0; i < n; i++) out[i] = (d[i] >= lo && d[i] <= hi);
+    } else if (vals->type == RAY_I32 || vals->type == RAY_DATE || vals->type == RAY_TIME) {
+        int32_t* d = (int32_t*)ray_data(vals);
+        int32_t* r = (int32_t*)ray_data(range);
+        int32_t lo = r[0], hi = r[1];
+        for (int64_t i = 0; i < n; i++) out[i] = (d[i] >= lo && d[i] <= hi);
+    } else {
+        ray_free(result);
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+    result->len = n;
+    return result;
+}
+
+/* (div a b) → float division (always returns f64) */
+static ray_t* ray_fdiv_fn(ray_t* a, ray_t* b) {
+    double fa, fb;
+    /* Extract numeric values */
+    if (ray_is_atom(a)) {
+        if (a->type == -RAY_F64) fa = a->f64;
+        else if (a->type == -RAY_I64) fa = (double)a->i64;
+        else if (a->type == -RAY_I32) fa = (double)a->i32;
+        else if (a->type == -RAY_I16) fa = (double)a->i16;
+        else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    } else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (ray_is_atom(b)) {
+        if (b->type == -RAY_F64) fb = b->f64;
+        else if (b->type == -RAY_I64) fb = (double)b->i64;
+        else if (b->type == -RAY_I32) fb = (double)b->i32;
+        else if (b->type == -RAY_I16) fb = (double)b->i16;
+        else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    } else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (fb == 0.0 || isnan(fa) || isnan(fb)) return ray_f64(__builtin_nan(""));
+    return ray_f64(fa / fb);
+}
+
+/* (rand n max) → vector of n random i64 in [0, max) */
+static ray_t* ray_rand_fn(ray_t* a, ray_t* b) {
+    if (!ray_is_atom(a) || !ray_is_atom(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n, mx;
+    if (a->type == -RAY_I64) n = a->i64;
+    else if (a->type == -RAY_I32) n = a->i32;
+    else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (b->type == -RAY_I64) mx = b->i64;
+    else if (b->type == -RAY_I32) mx = b->i32;
+    else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (n < 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (mx <= 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (n == 0) return ray_vec_new(RAY_I64, 0);
+    ray_t* vec = ray_vec_new(RAY_I64, n);
+    if (RAY_IS_ERR(vec)) return vec;
+    int64_t* d = (int64_t*)ray_data(vec);
+    for (int64_t i = 0; i < n; i++) d[i] = (int64_t)(rand() % mx);
+    vec->len = n;
+    return vec;
+}
+
+/* (bin sorted-vec val) → rightmost index where sorted[i] <= val, -1 if none */
+static ray_t* ray_bin_fn(ray_t* sorted, ray_t* val) {
+    if (!ray_is_vec(sorted) || sorted->type != RAY_I64)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t* d = (int64_t*)ray_data(sorted);
+    int64_t n = sorted->len;
+
+    if (ray_is_atom(val) && (val->type == -RAY_I64 || val->type == -RAY_I32)) {
+        int64_t v = val->i64;
+        int64_t lo = 0, hi = n - 1, result = -1;
+        while (lo <= hi) {
+            int64_t mid = lo + (hi - lo) / 2;
+            if (d[mid] <= v) { result = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return ray_i64(result);
+    }
+    if (ray_is_vec(val) && val->type == RAY_I64) {
+        int64_t* vals = (int64_t*)ray_data(val);
+        int64_t vn = val->len;
+        ray_t* rvec = ray_vec_new(RAY_I64, vn);
+        if (RAY_IS_ERR(rvec)) return rvec;
+        int64_t* out = (int64_t*)ray_data(rvec);
+        for (int64_t i = 0; i < vn; i++) {
+            int64_t v = vals[i];
+            int64_t lo = 0, hi = n - 1, r = -1;
+            while (lo <= hi) {
+                int64_t mid = lo + (hi - lo) / 2;
+                if (d[mid] <= v) { r = mid; lo = mid + 1; }
+                else hi = mid - 1;
+            }
+            out[i] = r;
+        }
+        rvec->len = vn;
+        return rvec;
+    }
+    return RAY_ERR_PTR(RAY_ERR_TYPE);
+}
+
+/* (binr sorted-vec val) → leftmost index where sorted[i] >= val */
+static ray_t* ray_binr_fn(ray_t* sorted, ray_t* val) {
+    if (!ray_is_vec(sorted) || sorted->type != RAY_I64)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t* d = (int64_t*)ray_data(sorted);
+    int64_t n = sorted->len;
+
+    if (ray_is_atom(val) && (val->type == -RAY_I64 || val->type == -RAY_I32)) {
+        int64_t v = val->i64;
+        int64_t lo = 0, hi = n - 1, result = n;
+        while (lo <= hi) {
+            int64_t mid = lo + (hi - lo) / 2;
+            if (d[mid] >= v) { result = mid; hi = mid - 1; }
+            else lo = mid + 1;
+        }
+        return ray_i64(result >= n ? n - 1 : result);
+    }
+    if (ray_is_vec(val) && val->type == RAY_I64) {
+        int64_t* vals = (int64_t*)ray_data(val);
+        int64_t vn = val->len;
+        ray_t* rvec = ray_vec_new(RAY_I64, vn);
+        if (RAY_IS_ERR(rvec)) return rvec;
+        int64_t* out = (int64_t*)ray_data(rvec);
+        for (int64_t i = 0; i < vn; i++) {
+            int64_t v = vals[i];
+            int64_t lo = 0, hi = n - 1, r = n;
+            while (lo <= hi) {
+                int64_t mid = lo + (hi - lo) / 2;
+                if (d[mid] >= v) { r = mid; hi = mid - 1; }
+                else lo = mid + 1;
+            }
+            out[i] = r >= n ? n - 1 : r;
+        }
+        rvec->len = vn;
+        return rvec;
+    }
+    return RAY_ERR_PTR(RAY_ERR_TYPE);
+}
+
+/* (map-left fn fixed vec) → apply fn(fixed, elem) for each elem in vec */
+static ray_t* ray_map_left(ray_t** args, int64_t n) {
+    if (n != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    ray_t* fn = args[0];
+    ray_t* fixed = args[1];
+    ray_t* vec = args[2];
+    if (!ray_is_vec(vec) && vec->type != RAY_LIST)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+
+    int64_t vn = vec->len;
+    ray_t* results[4096];
+    if (vn > 4096) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+
+    for (int64_t i = 0; i < vn; i++) {
+        int alloc = 0;
+        ray_t* elem = collection_elem(vec, i, &alloc);
+        results[i] = call_fn2(fn, fixed, elem);
+        if (alloc) ray_release(elem);
+        if (RAY_IS_ERR(results[i])) {
+            for (int64_t j = 0; j < i; j++) ray_release(results[j]);
+            return results[i];
+        }
+    }
+    /* Build result — enlist handles type detection */
+    ray_t* out = ray_enlist(results, vn);
+    for (int64_t i = 0; i < vn; i++) ray_release(results[i]);
+    return out;
+}
+
+/* (map-right fn vec fixed) → apply fn(elem, fixed) for each elem in vec */
+static ray_t* ray_map_right(ray_t** args, int64_t n) {
+    if (n != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    ray_t* fn = args[0];
+    ray_t* vec = args[1];
+    ray_t* fixed = args[2];
+    if (!ray_is_vec(vec) && vec->type != RAY_LIST)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+
+    int64_t vn = vec->len;
+    ray_t* results[4096];
+    if (vn > 4096) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+
+    for (int64_t i = 0; i < vn; i++) {
+        int alloc = 0;
+        ray_t* elem = collection_elem(vec, i, &alloc);
+        results[i] = call_fn2(fn, elem, fixed);
+        if (alloc) ray_release(elem);
+        if (RAY_IS_ERR(results[i])) {
+            for (int64_t j = 0; j < i; j++) ray_release(results[j]);
+            return results[i];
+        }
+    }
+    ray_t* out = ray_enlist(results, vn);
+    for (int64_t i = 0; i < vn; i++) ray_release(results[i]);
+    return out;
+}
+
+/* (split str delim) → list of strings */
+static ray_t* ray_split_fn(ray_t* str, ray_t* delim) {
+    /* List split: (split list indices) → list of sub-lists */
+    if (str->type == RAY_LIST &&
+        ray_is_vec(delim) && (delim->type == RAY_I64 || delim->type == RAY_I16 || delim->type == RAY_I32)) {
+        int64_t nidx = delim->len;
+        if (nidx == 0) return NULL; /* null for empty indices */
+        int64_t idx_buf[256];
+        if (nidx > 256) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        for (int64_t ii = 0; ii < nidx; ii++) {
+            int alloc = 0;
+            ray_t* ie = collection_elem(delim, ii, &alloc);
+            idx_buf[ii] = as_i64(ie);
+            if (alloc) ray_release(ie);
+        }
+        int64_t total = str->len;
+        ray_t** items = (ray_t**)ray_data(str);
+        ray_t* result = ray_list_new(nidx + 1);
+        if (RAY_IS_ERR(result)) return result;
+        for (int64_t i = 0; i < nidx; i++) {
+            int64_t start = idx_buf[i];
+            int64_t end = (i + 1 < nidx) ? idx_buf[i + 1] : total;
+            int64_t seglen = end - start;
+            if (seglen < 0) seglen = 0;
+            /* Try to make a typed vector if all elements are same type */
+            if (seglen > 0) {
+                int8_t first_type = items[start]->type;
+                int all_same = 1;
+                for (int64_t j = start + 1; j < start + seglen && j < total; j++) {
+                    if (items[j]->type != first_type) { all_same = 0; break; }
+                }
+                if (all_same && first_type < 0 && first_type != -RAY_STR) {
+                    int8_t vtype = -first_type;
+                    ray_t* vec = ray_vec_new(vtype, seglen);
+                    if (!RAY_IS_ERR(vec)) {
+                        vec->len = seglen;
+                        for (int64_t j = 0; j < seglen && start + j < total; j++)
+                            store_typed_elem(vec, j, items[start + j]);
+                        result = ray_list_append(result, vec);
+                        ray_release(vec);
+                        if (RAY_IS_ERR(result)) return result;
+                        continue;
+                    }
+                }
+            }
+            /* Heterogeneous or string segment: make a sub-list */
+            ray_t* seg = ray_list_new(seglen);
+            if (RAY_IS_ERR(seg)) { ray_release(result); return seg; }
+            for (int64_t j = 0; j < seglen && start + j < total; j++) {
+                ray_retain(items[start + j]);
+                seg = ray_list_append(seg, items[start + j]);
+                ray_release(items[start + j]);
+                if (RAY_IS_ERR(seg)) { ray_release(result); return seg; }
+            }
+            result = ray_list_append(result, seg);
+            ray_release(seg);
+            if (RAY_IS_ERR(result)) return result;
+        }
+        return result;
+    }
+    /* Vector/string split: (split vec/str indices) → list of sub-vectors/substrings */
+    if ((ray_is_vec(str) || (ray_is_atom(str) && (-str->type) == RAY_STR)) &&
+        ray_is_vec(delim) && (delim->type == RAY_I64 || delim->type == RAY_I16 || delim->type == RAY_I32)) {
+        int64_t nidx = delim->len;
+        if (nidx == 0) return NULL; /* null for empty indices */
+        /* Extract indices as i64 */
+        int64_t idx_buf[256];
+        if (nidx > 256) return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        for (int64_t ii = 0; ii < nidx; ii++) {
+            int alloc = 0;
+            ray_t* ie = collection_elem(delim, ii, &alloc);
+            idx_buf[ii] = as_i64(ie);
+            if (alloc) ray_release(ie);
+        }
+        /* String split by indices */
+        if (ray_is_atom(str) && (-str->type) == RAY_STR) {
+            const char* sp2 = ray_str_ptr(str);
+            size_t total = ray_str_len(str);
+            ray_t* result = ray_list_new(nidx + 1);
+            if (RAY_IS_ERR(result)) return result;
+            for (int64_t i = 0; i < nidx; i++) {
+                int64_t start = idx_buf[i];
+                int64_t end = (i + 1 < nidx) ? idx_buf[i + 1] : (int64_t)total;
+                int64_t seglen = end - start;
+                if (seglen < 0) seglen = 0;
+                if (start > (int64_t)total) start = (int64_t)total;
+                if (start + seglen > (int64_t)total) seglen = (int64_t)total - start;
+                ray_t* seg = ray_str(sp2 + start, (size_t)seglen);
+                if (RAY_IS_ERR(seg)) { ray_release(result); return seg; }
+                result = ray_list_append(result, seg);
+                ray_release(seg);
+                if (RAY_IS_ERR(result)) return result;
+            }
+            return result;
+        }
+        /* Vector split by indices */
+        int64_t total = str->len;
+        int esz = ray_elem_size(str->type);
+        ray_t* result = ray_list_new(nidx + 1);
+        if (RAY_IS_ERR(result)) return result;
+        for (int64_t i = 0; i < nidx; i++) {
+            int64_t start = idx_buf[i];
+            int64_t end = (i + 1 < nidx) ? idx_buf[i + 1] : total;
+            int64_t seglen = end - start;
+            if (seglen < 0) seglen = 0;
+            ray_t* seg = ray_vec_new(str->type, seglen);
+            if (RAY_IS_ERR(seg)) { ray_release(result); return seg; }
+            seg->len = seglen;
+            if (seglen > 0) memcpy(ray_data(seg), (char*)ray_data(str) + start * esz, seglen * esz);
+            result = ray_list_append(result, seg);
+            ray_release(seg);
+            if (RAY_IS_ERR(result)) return result;
+        }
+        return result;
+    }
+    /* Normalize str and delim to string pointers */
+    const char *sp, *dp;
+    size_t slen, dlen;
+    char sbuf, dbuf;
+    ray_t* sym_str_s = NULL;
+    ray_t* sym_str_d = NULL;
+    if (str->type == -RAY_STR) { sp = ray_str_ptr(str); slen = ray_str_len(str); }
+    else if (str->type == -RAY_SYM) { sym_str_s = ray_sym_str(str->i64); if (!sym_str_s) return RAY_ERR_PTR(RAY_ERR_DOMAIN); sp = ray_str_ptr(sym_str_s); slen = ray_str_len(sym_str_s); }
+    else if (str->type == -RAY_CHAR) { sbuf = str->c8; sp = &sbuf; slen = 1; }
+    else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (delim->type == -RAY_STR) { dp = ray_str_ptr(delim); dlen = ray_str_len(delim); }
+    else if (delim->type == -RAY_CHAR) { dbuf = delim->c8; dp = &dbuf; dlen = 1; }
+    else { if (sym_str_s) ray_release(sym_str_s); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+    ray_t* result = ray_list_new(8);
+    if (RAY_IS_ERR(result)) { if (sym_str_s) ray_release(sym_str_s); if (sym_str_d) ray_release(sym_str_d); return result; }
+
+    if (dlen == 0 || slen == 0) {
+        ray_t* part = ray_str(sp, slen);
+        result = ray_list_append(result, part);
+        ray_release(part);
+        if (sym_str_s) ray_release(sym_str_s);
+        if (sym_str_d) ray_release(sym_str_d);
+        return result;
+    }
+
+    size_t start = 0;
+    for (size_t i = 0; i <= slen - dlen; ) {
+        if (memcmp(sp + i, dp, dlen) == 0) {
+            ray_t* part = ray_str(sp + start, i - start);
+            if (RAY_IS_ERR(part)) { ray_release(result); if (sym_str_s) ray_release(sym_str_s); if (sym_str_d) ray_release(sym_str_d); return part; }
+            result = ray_list_append(result, part);
+            ray_release(part);
+            if (RAY_IS_ERR(result)) { if (sym_str_s) ray_release(sym_str_s); if (sym_str_d) ray_release(sym_str_d); return result; }
+            i += dlen;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    /* Last part */
+    ray_t* part = ray_str(sp + start, slen - start);
+    if (RAY_IS_ERR(part)) { ray_release(result); if (sym_str_s) ray_release(sym_str_s); if (sym_str_d) ray_release(sym_str_d); return part; }
+    result = ray_list_append(result, part);
+    ray_release(part);
+    if (sym_str_s) ray_release(sym_str_s);
+    if (sym_str_d) ray_release(sym_str_d);
+    return result;
+}
+
+/* (ser val) → serialize to bytes (stub: just returns the value) */
+static ray_t* ray_ser_fn(ray_t* val) {
+    if (!val) {
+        /* null → empty bytes marker */
+        ray_t* r = ray_alloc(1);
+        if (!r) return RAY_ERR_PTR(RAY_ERR_OOM);
+        r->type = -RAY_U8;
+        r->u8 = 0;
+        r->attrs |= 0x80; /* marker: serialized null */
+        return r;
+    }
+    ray_retain(val);
+    return val;
+}
+
+/* (de val) → deserialize (stub: returns the value, or null for serialized null) */
+static ray_t* ray_de_fn(ray_t* val) {
+    if (!val) return NULL;
+    if (val->type == -RAY_U8 && (val->attrs & 0x80)) return NULL;
+    ray_retain(val);
+    return val;
+}
+
+/* (guid n) → generate n random GUIDs as GUID vector */
+static ray_t* ray_guid_fn(ray_t* n_arg) {
+    if (!n_arg || !is_numeric(n_arg)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int64_t n = as_i64(n_arg);
+    if (n < 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    ray_t* result = ray_vec_new(RAY_GUID, n);
+    if (RAY_IS_ERR(result)) return result;
+    result->len = n;
+    uint8_t* data = (uint8_t*)ray_data(result);
+    for (int64_t i = 0; i < n; i++) {
+        for (int j = 0; j < 16; j++)
+            data[i * 16 + j] = (uint8_t)(rand() & 0xFF);
+        /* Set version 4 and variant bits */
+        data[i * 16 + 6] = (data[i * 16 + 6] & 0x0F) | 0x40;
+        data[i * 16 + 8] = (data[i * 16 + 8] & 0x3F) | 0x80;
+    }
+    return result;
+}
+
+/* (alter 'var op args...) → in-place mutation (special form: args unevaluated) */
+static ray_t* ray_alter_fn(ray_t** args, int64_t n) {
+    if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    /* First arg: evaluate to get the symbol */
+    ray_t* name_sym = ray_eval(args[0]);
+    if (!name_sym || RAY_IS_ERR(name_sym)) return name_sym ? name_sym : RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (name_sym->type != -RAY_SYM) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+    /* Resolve the variable */
+    ray_t* var = ray_env_get(name_sym->i64);
+    if (!var) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_NAME); }
+
+    /* Second arg: operation name (unevaluated, must be a name) */
+    ray_t* op = args[1];
+    if (!op || op->type != -RAY_SYM) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    ray_t* op_name = ray_sym_str(op->i64);
+    if (!op_name) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+    const char* oname = ray_str_ptr(op_name);
+    size_t olen = ray_str_len(op_name);
+
+    if (olen == 3 && memcmp(oname, "set", 3) == 0) {
+        /* (alter 'v set idx val) */
+        ray_release(op_name);
+        if (n < 4) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        ray_t* idx = ray_eval(args[2]);
+        if (!idx || RAY_IS_ERR(idx)) { ray_release(name_sym); return idx ? idx : RAY_ERR_PTR(RAY_ERR_TYPE); }
+        ray_t* val = ray_eval(args[3]);
+        if (!val || RAY_IS_ERR(val)) { ray_release(idx); ray_release(name_sym); return val ? val : RAY_ERR_PTR(RAY_ERR_TYPE); }
+        if (!is_numeric(idx)) { ray_release(idx); ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+        int64_t i = as_i64(idx);
+        ray_release(idx);
+        if (!ray_is_vec(var)) { ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+        if (i < 0 || i >= var->len) { ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+        /* COW if shared */
+        var = ray_cow(var);
+        if (RAY_IS_ERR(var)) { ray_release(val); ray_release(name_sym); return var; }
+        store_typed_elem(var, i, val);
+        ray_release(val);
+        ray_env_set(name_sym->i64, var);
+        ray_release(name_sym);
+        ray_retain(var);
+        return var;
+    }
+    if (olen == 6 && memcmp(oname, "concat", 6) == 0) {
+        /* (alter 'v concat val) */
+        ray_release(op_name);
+        if (n < 3) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        ray_t* val = ray_eval(args[2]);
+        if (!val || RAY_IS_ERR(val)) { ray_release(name_sym); return val ? val : RAY_ERR_PTR(RAY_ERR_TYPE); }
+        ray_t* new_vec = ray_concat_fn(var, val);
+        ray_release(val);
+        if (RAY_IS_ERR(new_vec)) { ray_release(name_sym); return new_vec; }
+        ray_env_set(name_sym->i64, new_vec);
+        ray_release(name_sym);
+        ray_retain(new_vec);
+        return new_vec;
+    }
+    ray_release(op_name);
+    ray_release(name_sym);
+    return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -3428,6 +6774,7 @@ static void ray_register_builtins(void) {
     register_vary("left-join",   RAY_FN_NONE, ray_left_join);
     register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
     register_vary("window-join", RAY_FN_NONE, ray_window_join);
+    register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);
 
     /* I/O builtins */
     register_vary("println",    RAY_FN_NONE, ray_println);
@@ -3437,6 +6784,35 @@ static void ray_register_builtins(void) {
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
     register_unary("read",      RAY_FN_NONE, ray_read_file);
     register_binary("write",    RAY_FN_NONE, ray_write_file);
+
+    /* Additional builtins (ported from rayforce) */
+    register_vary("enlist",     RAY_FN_NONE, ray_enlist);
+    register_binary("dict",     RAY_FN_NONE, ray_dict_fn);
+    register_unary("nil?",      RAY_FN_NONE, ray_nil_fn);
+    register_unary("where",     RAY_FN_NONE, ray_where_fn);
+    register_unary("group",     RAY_FN_NONE, ray_group_fn);
+    register_binary("concat",   RAY_FN_NONE, ray_concat_fn);
+    register_unary("raze",      RAY_FN_NONE, ray_raze_fn);
+    register_binary("within",   RAY_FN_NONE, ray_within_fn);
+    register_binary("div",      RAY_FN_ATOMIC, ray_fdiv_fn);
+    register_binary("rand",     RAY_FN_NONE, ray_rand_fn);
+    register_binary("bin",      RAY_FN_NONE, ray_bin_fn);
+    register_binary("binr",     RAY_FN_NONE, ray_binr_fn);
+    register_vary("map-left",   RAY_FN_NONE, ray_map_left);
+    register_vary("map-right",  RAY_FN_NONE, ray_map_right);
+
+    /* String operations */
+    register_binary("split",     RAY_FN_NONE, ray_split_fn);
+
+    /* Serialization stubs */
+    register_unary("ser",        RAY_FN_NONE, ray_ser_fn);
+    register_unary("de",         RAY_FN_NONE, ray_de_fn);
+
+    /* GUID generation */
+    register_unary("guid",       RAY_FN_NONE, ray_guid_fn);
+
+    /* In-place mutation */
+    register_vary("alter",       RAY_FN_SPECIAL_FORM, ray_alter_fn);
 }
 
 /* ══════════════════════════════════════════
@@ -3477,6 +6853,18 @@ ray_t* ray_eval(ray_t* obj) {
     if (ray_is_atom(obj)) {
         /* Name reference: resolve from env */
         if (obj->type == -RAY_SYM && (obj->attrs & RAY_ATTR_NAME)) {
+            /* Check for null keyword — compare by string, not cached sym_id,
+             * because sym table may be reinitialized between test runs */
+            {
+                ray_t* name_str = ray_sym_str(obj->i64);
+                if (name_str && ray_str_len(name_str) == 4 &&
+                    memcmp(ray_str_ptr(name_str), "null", 4) == 0) {
+                    ray_release(name_str);
+                    ret = NULL; goto out;
+                }
+                if (name_str) ray_release(name_str);
+            }
+
             ray_t* val = ray_env_get(obj->i64);
             if (!val) { ret = RAY_ERR_PTR(RAY_ERR_NAME); goto out; }
             ray_retain(val);
@@ -3492,6 +6880,33 @@ ray_t* ray_eval(ray_t* obj) {
     /* Empty list */
     if (ray_len(obj) == 0) { ray_retain(obj); ret = obj; goto out; }
 
+    /* Dict literal: evaluate values, keep keys */
+    if (obj->attrs & RAY_ATTR_DICT) {
+        int64_t n2 = ray_len(obj);
+        ray_t* dict = ray_alloc(n2 * sizeof(ray_t*));
+        if (!dict) { ret = RAY_ERR_PTR(RAY_ERR_OOM); goto out; }
+        dict->type = RAY_LIST;
+        dict->attrs |= RAY_ATTR_DICT;
+        dict->len = n2;
+        ray_t** src = (ray_t**)ray_data(obj);
+        ray_t** dst = (ray_t**)ray_data(dict);
+        for (int64_t i = 0; i < n2; i += 2) {
+            /* key: retain as-is */
+            ray_retain(src[i]);
+            dst[i] = src[i];
+            /* value: evaluate */
+            ray_t* v = ray_eval(src[i + 1]);
+            if (v && RAY_IS_ERR(v)) {
+                for (int64_t j = 0; j < i; j++) ray_release(dst[j]);
+                ray_release(dst[i]);
+                ray_release(dict);
+                ret = v; goto out;
+            }
+            dst[i + 1] = v ? v : NULL;
+        }
+        ret = dict; goto out;
+    }
+
     /* List: evaluate first element, dispatch by type */
     ray_t** elems = (ray_t**)ray_data(obj);
     ray_t* head = ray_eval(elems[0]);
@@ -3506,13 +6921,16 @@ ray_t* ray_eval(ray_t* obj) {
             uint8_t fn_attrs = head->attrs;
             ray_t* arg = ray_eval(elems[1]);
             ray_release(head);
-            if (RAY_IS_ERR(arg)) { ret = arg; goto out; }
+            if (arg && RAY_IS_ERR(arg)) { ret = arg; goto out; }
             ray_t* result;
-            if ((fn_attrs & RAY_FN_ATOMIC) && is_collection(arg))
+            if (!arg) {
+                /* Only nil? safely handles NULL — check by function pointer */
+                result = (fn == (ray_unary_fn)ray_nil_fn || fn == (ray_unary_fn)ray_ser_fn) ? fn(NULL) : RAY_ERR_PTR(RAY_ERR_TYPE);
+            } else if ((fn_attrs & RAY_FN_ATOMIC) && is_collection(arg))
                 result = atomic_map_unary(fn, arg);
             else
                 result = fn(arg);
-            ray_release(arg);
+            if (arg) ray_release(arg);
             ret = result; goto out;
         }
         case RAY_BINARY: {
@@ -3524,9 +6942,29 @@ ray_t* ray_eval(ray_t* obj) {
                 ret = fn(elems[1], elems[2]); goto out;
             }
             ray_t* left = ray_eval(elems[1]);
-            if (RAY_IS_ERR(left)) { ray_release(head); ret = left; goto out; }
+            if (left && RAY_IS_ERR(left)) {
+                ray_release(head);
+                ret = left; goto out;
+            }
             ray_t* right = ray_eval(elems[2]);
-            if (RAY_IS_ERR(right)) { ray_release(head); ray_release(left); ret = right; goto out; }
+            if (right && RAY_IS_ERR(right)) {
+                ray_release(head); if (left) ray_release(left);
+                ret = right; goto out;
+            }
+            /* If either arg is NULL (null keyword), only == and != can handle it */
+            if (!left || !right) {
+                if (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq) {
+                    ray_release(head);
+                    ray_t* result = fn(left, right);
+                    if (left) ray_release(left);
+                    if (right) ray_release(right);
+                    ret = result; goto out;
+                }
+                ray_release(head);
+                if (left) ray_release(left);
+                if (right) ray_release(right);
+                ret = RAY_ERR_PTR(RAY_ERR_TYPE); goto out;
+            }
             ray_release(head);
             ray_t* result;
             if ((fn_attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
@@ -3548,10 +6986,11 @@ ray_t* ray_eval(ray_t* obj) {
             ray_t* args[64];
             for (int64_t i = 0; i < argc; i++) {
                 args[i] = ray_eval(elems[i + 1]);
-                if (RAY_IS_ERR(args[i])) {
+                if (!args[i] || RAY_IS_ERR(args[i])) {
+                    ray_t* err = (!args[i]) ? RAY_ERR_PTR(RAY_ERR_TYPE) : args[i];
                     for (int64_t j = 0; j < i; j++) ray_release(args[j]);
                     ray_release(head);
-                    ret = args[i]; goto out;
+                    ret = err; goto out;
                 }
             }
             ray_release(head);
@@ -3565,10 +7004,11 @@ ray_t* ray_eval(ray_t* obj) {
             ray_t* args[64];
             for (int64_t i = 0; i < argc; i++) {
                 args[i] = ray_eval(elems[i + 1]);
-                if (RAY_IS_ERR(args[i])) {
+                if (!args[i] || RAY_IS_ERR(args[i])) {
+                    ray_t* err = (!args[i]) ? RAY_ERR_PTR(RAY_ERR_TYPE) : args[i];
                     for (int64_t j = 0; j < i; j++) ray_release(args[j]);
                     ray_release(head);
-                    ret = args[i]; goto out;
+                    ret = err; goto out;
                 }
             }
             ray_t* result = call_lambda(head, args, argc);

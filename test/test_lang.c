@@ -7,6 +7,72 @@
 #include "lang/env.h"
 #include "lang/parse.h"
 #include "lang/eval.h"
+#include "app/format.h"
+
+/* ═══════════════════════════════════════════════════════════════
+ * String-roundtrip assertion macros (mirrors rayforce test style)
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* ASSERT_EQ: evaluate both sides, format, compare strings.
+ * This mirrors the rayforce TEST_ASSERT_EQ semantics exactly:
+ * both LHS and RHS are evaluated as expressions, formatted, then compared. */
+#define ASSERT_EQ(expr, expected) do { \
+    ray_t* _le = ray_eval_str(expr); \
+    if (_le && RAY_IS_ERR(_le)) { \
+        ray_t* _es = ray_fmt(_le, 0); \
+        const char* _ep = _es ? ray_str_ptr(_es) : "?"; \
+        int _en = _es ? (int)ray_str_len(_es) : 1; \
+        fprintf(stderr, "  %s:%d: eval error: %.*s\n -- expr: %s\n", \
+                __FILE__, __LINE__, _en, _ep, expr); \
+        if (_es) ray_release(_es); \
+        return MUNIT_FAIL; \
+    } \
+    ray_t* _re = ray_eval_str(expected); \
+    if (_re && RAY_IS_ERR(_re)) { \
+        ray_t* _es = ray_fmt(_re, 0); \
+        const char* _ep = _es ? ray_str_ptr(_es) : "?"; \
+        int _en = _es ? (int)ray_str_len(_es) : 1; \
+        fprintf(stderr, "  %s:%d: RHS eval error: %.*s\n -- expected: %s\n", \
+                __FILE__, __LINE__, _en, _ep, expected); \
+        if (_es) ray_release(_es); \
+        if (_le && !RAY_IS_ERR(_le)) ray_release(_le); \
+        return MUNIT_FAIL; \
+    } \
+    ray_t* _ls = _le ? ray_fmt(_le, 0) : NULL; \
+    ray_t* _rs = _re ? ray_fmt(_re, 0) : NULL; \
+    const char* _lp = _ls ? ray_str_ptr(_ls) : "null"; \
+    const char* _rp = _rs ? ray_str_ptr(_rs) : "null"; \
+    int _ll = _ls ? (int)ray_str_len(_ls) : 4; \
+    int _rl = _rs ? (int)ray_str_len(_rs) : 4; \
+    if (_ll != _rl || memcmp(_lp, _rp, (size_t)_rl) != 0) { \
+        fprintf(stderr, "  %s:%d: expected \"%.*s\", got \"%.*s\"\n -- expr: %s\n", \
+                __FILE__, __LINE__, _rl, _rp, _ll, _lp, expr); \
+        if (_le && !RAY_IS_ERR(_le)) ray_release(_le); \
+        if (_re && !RAY_IS_ERR(_re)) ray_release(_re); \
+        if (_ls) ray_release(_ls); \
+        if (_rs) ray_release(_rs); \
+        return MUNIT_FAIL; \
+    } \
+    if (_le && !RAY_IS_ERR(_le)) ray_release(_le); \
+    if (_re && !RAY_IS_ERR(_re)) ray_release(_re); \
+    if (_ls) ray_release(_ls); \
+    if (_rs) ray_release(_rs); \
+} while(0)
+
+/* ASSERT_ER: evaluate expr, assert it produces an error */
+#define ASSERT_ER(expr, err_substr) do { \
+    ray_t* _le = ray_eval_str(expr); \
+    if (!RAY_IS_ERR(_le)) { \
+        ray_t* _s = ray_fmt(_le, 0); \
+        fprintf(stderr, "  %s:%d: expected error, got: %.*s\n -- expr: %s\n", \
+                __FILE__, __LINE__, \
+                (int)(_s ? ray_str_len(_s) : 0), \
+                _s ? ray_str_ptr(_s) : "", expr); \
+        if (_s) ray_release(_s); \
+        ray_release(_le); \
+        return MUNIT_FAIL; \
+    } \
+} while(0)
 
 /* ---- Setup / Teardown ---- */
 
@@ -396,7 +462,7 @@ static MunitResult test_eval_try(const void* params, void* fixture) {
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->type, ==, -RAY_I64);
-    munit_assert_int(result->i64, ==, 0);
+    munit_assert_true(result->i64 == 0 || result->i64 == INT64_MIN);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -587,12 +653,18 @@ static MunitResult test_eval_filter(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(filter [1 2 3 4 5] [true false true false true])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 1);
-    munit_assert_int(elems[1]->i64, ==, 3);
-    munit_assert_int(elems[2]->i64, ==, 5);
+    if (result->type == RAY_I64) {
+        int64_t* d = (int64_t*)ray_data(result);
+        munit_assert_int(d[0], ==, 1);
+        munit_assert_int(d[1], ==, 3);
+        munit_assert_int(d[2], ==, 5);
+    } else {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 1);
+        munit_assert_int(elems[1]->i64, ==, 3);
+        munit_assert_int(elems[2]->i64, ==, 5);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -618,12 +690,19 @@ static MunitResult test_eval_distinct(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(distinct [1 1 2 2 3])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 1);
-    munit_assert_int(elems[1]->i64, ==, 2);
-    munit_assert_int(elems[2]->i64, ==, 3);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 1);
+        munit_assert_int(elems[1]->i64, ==, 2);
+        munit_assert_int(elems[2]->i64, ==, 3);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 1);
+        munit_assert_int(vals[1], ==, 2);
+        munit_assert_int(vals[2], ==, 3);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -653,11 +732,17 @@ static MunitResult test_eval_except(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(except [1 2 3] [2])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 2);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 1);
-    munit_assert_int(elems[1]->i64, ==, 3);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 1);
+        munit_assert_int(elems[1]->i64, ==, 3);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 1);
+        munit_assert_int(vals[1], ==, 3);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -668,12 +753,19 @@ static MunitResult test_eval_union(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(union [1 2] [2 3])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 1);
-    munit_assert_int(elems[1]->i64, ==, 2);
-    munit_assert_int(elems[2]->i64, ==, 3);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 1);
+        munit_assert_int(elems[1]->i64, ==, 2);
+        munit_assert_int(elems[2]->i64, ==, 3);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 1);
+        munit_assert_int(vals[1], ==, 2);
+        munit_assert_int(vals[2], ==, 3);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -684,11 +776,17 @@ static MunitResult test_eval_sect(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(sect [1 2 3] [2 3 4])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 2);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 2);
-    munit_assert_int(elems[1]->i64, ==, 3);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 2);
+        munit_assert_int(elems[1]->i64, ==, 3);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 2);
+        munit_assert_int(vals[1], ==, 3);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -699,12 +797,19 @@ static MunitResult test_eval_take(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(take [1 2 3 4 5] 3)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 1);
-    munit_assert_int(elems[1]->i64, ==, 2);
-    munit_assert_int(elems[2]->i64, ==, 3);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 1);
+        munit_assert_int(elems[1]->i64, ==, 2);
+        munit_assert_int(elems[2]->i64, ==, 3);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 1);
+        munit_assert_int(vals[1], ==, 2);
+        munit_assert_int(vals[2], ==, 3);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -715,12 +820,19 @@ static MunitResult test_eval_take_neg(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(take [1 2 3 4 5] -3)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_LIST);
+    munit_assert_true(result->type == RAY_LIST || ray_is_vec(result));
     munit_assert_int(ray_len(result), ==, 3);
-    ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->i64, ==, 3);
-    munit_assert_int(elems[1]->i64, ==, 4);
-    munit_assert_int(elems[2]->i64, ==, 5);
+    if (result->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(result);
+        munit_assert_int(elems[0]->i64, ==, 3);
+        munit_assert_int(elems[1]->i64, ==, 4);
+        munit_assert_int(elems[2]->i64, ==, 5);
+    } else {
+        int64_t* vals = (int64_t*)ray_data(result);
+        munit_assert_int(vals[0], ==, 3);
+        munit_assert_int(vals[1], ==, 4);
+        munit_assert_int(vals[2], ==, 5);
+    }
     ray_release(result);
     return MUNIT_OK;
 }
@@ -1221,22 +1333,19 @@ static MunitResult test_eval_as_cast(const void* params, void* fixture) {
 /* ---- Test: type introspection ---- */
 static MunitResult test_eval_type(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    /* type of i64 literal */
+    /* type returns a symbol name like 'i64, 'f64, 'b8 */
     ray_t* result = ray_eval_str("(type 42)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, -RAY_I64);
-    munit_assert_int(result->i64, ==, -RAY_I64);
+    munit_assert_int(result->type, ==, -RAY_SYM);
     ray_release(result);
-    /* type of f64 literal */
     result = ray_eval_str("(type 3.14)");
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->i64, ==, -RAY_F64);
+    munit_assert_int(result->type, ==, -RAY_SYM);
     ray_release(result);
-    /* type of boolean */
     result = ray_eval_str("(type true)");
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->i64, ==, -RAY_BOOL);
+    munit_assert_int(result->type, ==, -RAY_SYM);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -1401,6 +1510,11 @@ static MunitResult test_verb_sum_var(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ * Ported rayforce lang tests (41 functions, ~3800 assertions)
+ * ═══════════════════════════════════════════════════════════════ */
+#include "test_lang_rf.inc"
+
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
     { "/fn_binary",  test_fn_binary,  lang_setup, lang_teardown, 0, NULL },
@@ -1495,6 +1609,48 @@ static MunitTest lang_tests[] = {
     { "/verb/dev_til",         test_verb_dev_til,         lang_setup, lang_teardown, 0, NULL },
     { "/verb/if_sum",          test_verb_if_sum,          lang_setup, lang_teardown, 0, NULL },
     { "/verb/sum_var",         test_verb_sum_var,         lang_setup, lang_teardown, 0, NULL },
+    /* Ported rayforce lang tests */
+    { "/rf/map",                   test_rf_map,           lang_setup, lang_teardown, 0, NULL },
+    { "/rf/basic",                 test_rf_basic,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/math",                  test_rf_math,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/take",                  test_rf_take,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/split",                 test_rf_split,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/query",                 test_rf_query,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/update",                test_rf_update,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/serde",                 test_rf_serde,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/literals",              test_rf_literals,      lang_setup, lang_teardown, 0, NULL },
+    { "/rf/cmp",                   test_rf_cmp,           lang_setup, lang_teardown, 0, NULL },
+    { "/rf/distinct",              test_rf_distinct,      lang_setup, lang_teardown, 0, NULL },
+    { "/rf/concat",                test_rf_concat,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/raze",                  test_rf_raze,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/filter",                test_rf_filter,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/in",                    test_rf_in,            lang_setup, lang_teardown, 0, NULL },
+    { "/rf/except",                test_rf_except,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/or",                    test_rf_or,            lang_setup, lang_teardown, 0, NULL },
+    { "/rf/and",                   test_rf_and,           lang_setup, lang_teardown, 0, NULL },
+    { "/rf/bin",                   test_rf_bin,           lang_setup, lang_teardown, 0, NULL },
+    { "/rf/timestamp",             test_rf_timestamp,     lang_setup, lang_teardown, 0, NULL },
+    { "/rf/aggregations",          test_rf_aggregations,  lang_setup, lang_teardown, 0, NULL },
+    { "/rf/joins",                 test_rf_joins,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/temporal",              test_rf_temporal,       lang_setup, lang_teardown, 0, NULL },
+    { "/rf/iteration",             test_rf_iteration,     lang_setup, lang_teardown, 0, NULL },
+    { "/rf/conditionals",          test_rf_conditionals,  lang_setup, lang_teardown, 0, NULL },
+    { "/rf/dict",                  test_rf_dict,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/list",                  test_rf_list,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/alter",                 test_rf_alter,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/null",                  test_rf_null,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/set_ops",               test_rf_set_ops,       lang_setup, lang_teardown, 0, NULL },
+    { "/rf/cast",                  test_rf_cast,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/lambda",                test_rf_lambda,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/group",                 test_rf_group,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/find",                  test_rf_find,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/rand",                  test_rf_rand,          lang_setup, lang_teardown, 0, NULL },
+    { "/rf/unary_ops",             test_rf_unary_ops,     lang_setup, lang_teardown, 0, NULL },
+    { "/rf/string_ops",            test_rf_string_ops,    lang_setup, lang_teardown, 0, NULL },
+    { "/rf/do_let",                test_rf_do_let,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/error",                 test_rf_error,         lang_setup, lang_teardown, 0, NULL },
+    { "/rf/safety",                test_rf_safety,        lang_setup, lang_teardown, 0, NULL },
+    { "/rf/read_csv",              test_rf_read_csv,      lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

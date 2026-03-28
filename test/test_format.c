@@ -86,7 +86,7 @@ static MunitResult test_fmt_f64_zero(const void* params, void* fixture) {
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
     const char* s = ray_str_ptr(result);
-    munit_assert_ptr_not_null(strstr(s, "0.00"));
+    munit_assert_ptr_not_null(strstr(s, "0.0"));
     ray_release(result);
 
     return MUNIT_OK;

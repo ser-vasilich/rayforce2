@@ -149,10 +149,7 @@ static void fmt_u8(fmt_buf_t* b, uint8_t val) {
 }
 
 static void fmt_char(fmt_buf_t* b, char val, int full) {
-    if (!full) {
-        if (val) fmt_putc(b, val);
-        return;
-    }
+    (void)full;
     fmt_putc(b, '\'');
     switch (val) {
     case '\0': /* empty char literal */ break;
@@ -167,12 +164,12 @@ static void fmt_char(fmt_buf_t* b, char val, int full) {
 
 static void fmt_i16(fmt_buf_t* b, int16_t val) {
     if (val == INT16_MIN) { fmt_puts(b, "0Nh"); return; }
-    fmt_printf(b, "%d", (int)val);
+    fmt_printf(b, "%dh", (int)val);
 }
 
 static void fmt_i32(fmt_buf_t* b, int32_t val) {
     if (val == INT32_MIN) { fmt_puts(b, "0Ni"); return; }
-    fmt_printf(b, "%d", (int)val);
+    fmt_printf(b, "%di", (int)val);
 }
 
 static void fmt_i64(fmt_buf_t* b, int64_t val) {
@@ -188,10 +185,47 @@ static void fmt_f64(fmt_buf_t* b, double val) {
     }
     double absval = val < 0 ? -val : val;
     double order = log10(absval);
+
+    /* Format with requested precision */
+    char tmp[64];
+    int n;
     if (val != 0.0 && (order > 6 || order < -1))
-        fmt_printf(b, "%.*e", g_precision, val);
+        n = snprintf(tmp, sizeof(tmp), "%.*e", g_precision, val);
     else
-        fmt_printf(b, "%.*f", g_precision, val);
+        n = snprintf(tmp, sizeof(tmp), "%.*f", g_precision, val);
+
+    if (n <= 0 || n >= (int)sizeof(tmp)) {
+        fmt_puts(b, "?");
+        return;
+    }
+
+    /* Strip trailing zeros after decimal point, keeping at least one
+     * digit after '.'.  Do NOT touch exponential notation. */
+    char* dot = strchr(tmp, '.');
+    char* e   = strchr(tmp, 'e');
+    if (dot && !e) {
+        char* end = tmp + n - 1;
+        while (end > dot + 1 && *end == '0')
+            end--;
+        n = (int)(end - tmp + 1);
+    }
+
+    fmt_putn(b, tmp, (int32_t)n);
+}
+
+static void fmt_guid(fmt_buf_t* b, const uint8_t* bytes) {
+    static const char hex[] = "0123456789abcdef";
+    /* Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
+    static const int groups[] = {4, 2, 2, 2, 6};
+    int pos = 0;
+    for (int g = 0; g < 5; g++) {
+        if (g > 0) fmt_putc(b, '-');
+        for (int j = 0; j < groups[g]; j++) {
+            fmt_putc(b, hex[bytes[pos] >> 4]);
+            fmt_putc(b, hex[bytes[pos] & 0x0F]);
+            pos++;
+        }
+    }
 }
 
 static void fmt_sym(fmt_buf_t* b, int64_t sym_id) {
@@ -309,15 +343,12 @@ static void fmt_timestamp(fmt_buf_t* b, int64_t val) {
 }
 
 static void fmt_str_atom(fmt_buf_t* b, ray_t* obj, int full) {
+    (void)full;
     const char* p = ray_str_ptr(obj);
     size_t      n = ray_str_len(obj);
-    if (full) {
-        fmt_putc(b, '"');
-        fmt_putn(b, p, (int32_t)n);
-        fmt_putc(b, '"');
-    } else {
-        fmt_putn(b, p, (int32_t)n);
-    }
+    fmt_putc(b, '"');
+    fmt_putn(b, p, (int32_t)n);
+    fmt_putc(b, '"');
 }
 
 /* ===== Forward declarations ===== */
@@ -361,9 +392,16 @@ static void fmt_raw_elem(fmt_buf_t* b, ray_t* vec, int64_t idx) {
     case RAY_STR: {
         size_t slen = 0;
         const char* p = ray_str_vec_get(vec, idx, &slen);
-        if (p) fmt_putn(b, p, (int32_t)slen);
+        if (p) {
+            fmt_putc(b, '"');
+            fmt_putn(b, p, (int32_t)slen);
+            fmt_putc(b, '"');
+        }
         break;
     }
+    case RAY_GUID:
+        fmt_guid(b, ((uint8_t*)ray_data(vec)) + idx * 16);
+        break;
     default:
         fmt_puts(b, "?");
         break;
@@ -411,7 +449,28 @@ static void fmt_list(fmt_buf_t* b, ray_t* list, int mode) {
         return;
     }
 
-    fmt_puts(b, "(");
+    /* Homogeneous atom list → format as vector [...] */
+    ray_t** items = (ray_t**)ray_data(list);
+    if (items && len > 0 && items[0] && !RAY_IS_ERR(items[0]) && ray_is_atom(items[0])) {
+        int8_t first_type = items[0]->type;
+        int homogeneous = 1;
+        for (int64_t i = 1; i < len; i++) {
+            if (!items[i] || RAY_IS_ERR(items[i]) || items[i]->type != first_type) {
+                homogeneous = 0; break;
+            }
+        }
+        if (homogeneous) {
+            fmt_puts(b, "[");
+            for (int64_t i = 0; i < len; i++) {
+                if (i > 0) fmt_putc(b, ' ');
+                fmt_obj(b, items[i], mode);
+            }
+            fmt_puts(b, "]");
+            return;
+        }
+    }
+
+    fmt_puts(b, "(list ");
     int64_t max_elems = (mode == 1) ? FMT_LIST_MAX_HEIGHT : len;
     int64_t show = len < max_elems ? len : max_elems;
 
@@ -441,7 +500,7 @@ static void fmt_dict(fmt_buf_t* b, ray_t* dict, int mode) {
         ray_t* key = ray_list_get(dict, i * 2);
         ray_t* val = ray_list_get(dict, i * 2 + 1);
         fmt_obj(b, key, mode);
-        fmt_puts(b, ": ");
+        fmt_putc(b, ':');
         fmt_obj(b, val, mode);
     }
     if (npairs > show) fmt_puts(b, " ..");
@@ -485,10 +544,9 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
     int64_t ncols = ray_table_ncols(tbl);
     int64_t nrows = ray_table_nrows(tbl);
 
-    /* Compact mode */
+    /* Compact mode: round-trippable (table [names] (list col1 col2 ...)) */
     if (mode == 0) {
-        fmt_puts(b, "(table ");
-        fmt_putc(b, '[');
+        fmt_puts(b, "(table [");
         for (int64_t i = 0; i < ncols; i++) {
             if (i > 0) fmt_putc(b, ' ');
             int64_t name_id = ray_table_col_name(tbl, i);
@@ -498,7 +556,15 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
                 ray_release(name_str);
             }
         }
-        fmt_puts(b, "]" G_HDOTS ")");
+        fmt_puts(b, "] (list ");
+        for (int64_t i = 0; i < ncols; i++) {
+            if (i > 0) fmt_putc(b, ' ');
+            ray_t* col = ray_table_get_col_idx(tbl, i);
+            if (col) {
+                fmt_obj(b, col, mode);
+            }
+        }
+        fmt_puts(b, "))");
         return;
     }
 
@@ -845,6 +911,7 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
         case RAY_TIMESTAMP: fmt_timestamp(b, obj->i64); break;
         case RAY_SYM:  fmt_sym(b, obj->i64); break;
         case RAY_STR:  fmt_str_atom(b, obj, mode > 0); break;
+        case RAY_GUID: fmt_guid(b, obj->obj ? (const uint8_t*)ray_data(obj->obj) : (const uint8_t*)ray_data(obj)); break;
         default:       fmt_puts(b, "?"); break;
         }
     } else if (ray_is_vec(obj)) {
