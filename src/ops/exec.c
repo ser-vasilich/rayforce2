@@ -1772,37 +1772,65 @@ static void reduce_acc_init(reduce_acc_t* acc) {
     acc->cnt = 0; acc->null_count = 0; acc->has_first = false;
 }
 
+/* Integer reduction loop — reads native type T, accumulates as i64 */
+#define REDUCE_LOOP_I(T, base, start, end, acc, has_nulls, null_bm) \
+    do { \
+        const T* d = (const T*)(base); \
+        for (int64_t row = start; row < end; row++) { \
+            if (has_nulls && (null_bm[row/8] >> (row%8)) & 1) { (acc)->null_count++; continue; } \
+            int64_t v = (int64_t)d[row]; \
+            (acc)->sum_i += v; (acc)->sum_sq_i += v * v; (acc)->prod_i *= v; \
+            if (v < (acc)->min_i) (acc)->min_i = v; \
+            if (v > (acc)->max_i) (acc)->max_i = v; \
+            if (!(acc)->has_first) { (acc)->first_i = v; (acc)->has_first = true; } \
+            (acc)->last_i = v; (acc)->cnt++; \
+        } \
+    } while (0)
+
+/* Float reduction loop */
+#define REDUCE_LOOP_F(base, start, end, acc, has_nulls, null_bm) \
+    do { \
+        const double* d = (const double*)(base); \
+        for (int64_t row = start; row < end; row++) { \
+            if (has_nulls && (null_bm[row/8] >> (row%8)) & 1) { (acc)->null_count++; continue; } \
+            double v = d[row]; \
+            (acc)->sum_f += v; (acc)->sum_sq_f += v * v; (acc)->prod_f *= v; \
+            if (v < (acc)->min_f) (acc)->min_f = v; \
+            if (v > (acc)->max_f) (acc)->max_f = v; \
+            if (!(acc)->has_first) { (acc)->first_f = v; (acc)->has_first = true; } \
+            (acc)->last_f = v; (acc)->cnt++; \
+        } \
+    } while (0)
+
 static void reduce_range(ray_t* input, int64_t start, int64_t end,
                          reduce_acc_t* acc, bool has_nulls,
                          const uint8_t* null_bm) {
-    int8_t in_type = input->type;
     void* base = ray_data(input);
-
-    for (int64_t row = start; row < end; row++) {
-        if (has_nulls && (null_bm[row / 8] >> (row % 8)) & 1) {
-            acc->null_count++;
-            continue;
-        }
-        if (in_type == RAY_F64) {
-            double v = ((double*)base)[row];
-            acc->sum_f += v;
-            acc->sum_sq_f += v * v;
-            acc->prod_f *= v;
-            if (v < acc->min_f) acc->min_f = v;
-            if (v > acc->max_f) acc->max_f = v;
-            if (!acc->has_first) { acc->first_f = v; acc->has_first = true; }
-            acc->last_f = v;
-        } else {
-            int64_t v = read_col_i64(base, row, in_type, input->attrs);
-            acc->sum_i += v;
-            acc->sum_sq_i += v * v;
-            acc->prod_i *= v;
+    switch (input->type) {
+    case RAY_BOOL: case RAY_U8:
+        REDUCE_LOOP_I(uint8_t, base, start, end, acc, has_nulls, null_bm); break;
+    case RAY_I16:
+        REDUCE_LOOP_I(int16_t, base, start, end, acc, has_nulls, null_bm); break;
+    case RAY_I32: case RAY_DATE: case RAY_TIME:
+        REDUCE_LOOP_I(int32_t, base, start, end, acc, has_nulls, null_bm); break;
+    case RAY_I64: case RAY_TIMESTAMP:
+        REDUCE_LOOP_I(int64_t, base, start, end, acc, has_nulls, null_bm); break;
+    case RAY_F64:
+        REDUCE_LOOP_F(base, start, end, acc, has_nulls, null_bm); break;
+    case RAY_SYM: {
+        /* Adaptive-width SYM columns — use read_col_i64 */
+        for (int64_t row = start; row < end; row++) {
+            if (has_nulls && (null_bm[row/8] >> (row%8)) & 1) { acc->null_count++; continue; }
+            int64_t v = read_col_i64(base, row, input->type, input->attrs);
+            acc->sum_i += v; acc->sum_sq_i += v * v; acc->prod_i *= v;
             if (v < acc->min_i) acc->min_i = v;
             if (v > acc->max_i) acc->max_i = v;
             if (!acc->has_first) { acc->first_i = v; acc->has_first = true; }
-            acc->last_i = v;
+            acc->last_i = v; acc->cnt++;
         }
-        acc->cnt++;
+        break;
+    }
+    default: break;
     }
 }
 
