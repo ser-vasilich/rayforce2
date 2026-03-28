@@ -2175,6 +2175,10 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
 /* Helper: print a ray_t value to a file handle */
 void ray_lang_print(FILE* fp, ray_t* val) {
     if (!val || RAY_IS_ERR(val)) { fprintf(fp, "error"); return; }
+    /* Materialize lazy handles before printing */
+    if (ray_is_lazy(val))
+        val = ray_lazy_materialize(val);
+    if (!val || RAY_IS_ERR(val)) { fprintf(fp, "error"); return; }
     switch (val->type) {
     case RAY_ATOM_I64:  fprintf(fp, "%ld", (long)val->i64); break;
     case RAY_ATOM_F64:  fprintf(fp, "%g", val->f64); break;
@@ -2215,6 +2219,9 @@ void ray_lang_print(FILE* fp, ray_t* val) {
 /* (println val1 val2 ...) — print values to stdout, newline at end */
 ray_t* ray_println(ray_t** args, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
+        /* Materialize lazy handles before printing */
+        if (ray_is_lazy(args[i]))
+            args[i] = ray_lazy_materialize(args[i]);
         if (i > 0) fputc(' ', stdout);
         ray_lang_print(stdout, args[i]);
     }
@@ -2370,6 +2377,10 @@ ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
     if (RAY_IS_ERR(val)) return val;
+    /* Materialize lazy handles before binding */
+    if (ray_is_lazy(val))
+        val = ray_lazy_materialize(val);
+    if (RAY_IS_ERR(val)) return val;
     if (ray_env_set(name_obj->i64, val) != RAY_OK) {
         ray_release(val);
         return RAY_ERR_PTR(RAY_ERR_OOM);
@@ -2383,6 +2394,10 @@ ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
     if (RAY_IS_ERR(val)) return val;
+    /* Materialize lazy handles before binding */
+    if (ray_is_lazy(val))
+        val = ray_lazy_materialize(val);
+    if (RAY_IS_ERR(val)) return val;
     ray_err_t err = ray_env_set_local(name_obj->i64, val);
     if (err != RAY_OK) { ray_release(val); return RAY_ERR_PTR(err); }
     return val;
@@ -2392,6 +2407,10 @@ ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
 ray_t* ray_cond(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* cond = ray_eval(args[0]);
+    if (RAY_IS_ERR(cond)) return cond;
+    /* Materialize lazy handles before testing truthiness */
+    if (ray_is_lazy(cond))
+        cond = ray_lazy_materialize(cond);
     if (RAY_IS_ERR(cond)) return cond;
     int truthy = 0;
     if (cond->type == RAY_ATOM_BOOL) truthy = cond->b8;

@@ -386,6 +386,10 @@ static void eval_and_print(ray_term_t* term, const char* input,
     ray_t* result = ray_eval_str(input);
     if (term) ray_term_eval_end(term);
 
+    /* Materialize lazy handles before printing */
+    if (ray_is_lazy(result))
+        result = ray_lazy_materialize(result);
+
     if (timeit) t1 = time_now_ns();
 
     if (ray_term_interrupted()) {
@@ -745,6 +749,9 @@ int ray_repl_run_file(const char* path) {
 
     ray_t* result = ray_eval_str(buf);
     ray_release(block);
+    /* Materialize lazy handles before printing */
+    if (ray_is_lazy(result))
+        result = ray_lazy_materialize(result);
     if (RAY_IS_ERR(result)) {
         repl_print_result(stderr, result, false);
         return 1;
