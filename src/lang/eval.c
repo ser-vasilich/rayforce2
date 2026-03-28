@@ -229,19 +229,84 @@ static int is_list(ray_t* x) {
     return x && !RAY_IS_ERR(x) && x->type == RAY_LIST;
 }
 
-/* Map a binary function element-wise over lists.
- * Both args can be lists (zip-map) or one scalar (broadcast). */
-static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
-    int left_list = is_list(left);
-    int right_list = is_list(right);
+/* Check if x is a collection: boxed list OR typed vector */
+static int is_collection(ray_t* x) {
+    return x && !RAY_IS_ERR(x) && (x->type == RAY_LIST || ray_is_vec(x));
+}
 
-    if (!left_list && !right_list) return fn(left, right);
+/* Extract the i-th element of a collection as a ray_t* atom.
+ * For boxed lists, returns the stored pointer (no alloc).
+ * For typed vectors, allocates a new atom.  Caller must release
+ * atoms obtained from typed vectors (allocated == 1). */
+static ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
+    if (coll->type == RAY_LIST) {
+        *allocated = 0;
+        return ((ray_t**)ray_data(coll))[i];
+    }
+    *allocated = 1;
+    switch (coll->type) {
+        case RAY_I64:  return ray_i64(((int64_t*)ray_data(coll))[i]);
+        case RAY_F64:  return ray_f64(((double*)ray_data(coll))[i]);
+        case RAY_I32:  return ray_i32(((int32_t*)ray_data(coll))[i]);
+        case RAY_I16:  return ray_i16(((int16_t*)ray_data(coll))[i]);
+        case RAY_BOOL: return ray_bool(((bool*)ray_data(coll))[i]);
+        case RAY_SYM:  return ray_sym(((int64_t*)ray_data(coll))[i]);
+        default:       *allocated = 0; return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+}
+
+/* Convert a typed vector to a boxed list.  If already a list, retains
+ * and returns it directly.  Caller owns the returned object. */
+static ray_t* to_boxed_list(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (x->type == RAY_LIST) { ray_retain(x); return x; }
+    if (!ray_is_vec(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+
+    int64_t len = ray_len(x);
+    ray_t* list = ray_alloc(len * sizeof(ray_t*));
+    if (!list) return RAY_ERR_PTR(RAY_ERR_OOM);
+    list->type = RAY_LIST;
+    list->len = len;
+    ray_t** dst = (ray_t**)ray_data(list);
+
+    for (int64_t i = 0; i < len; i++) {
+        int alloc = 0;
+        dst[i] = collection_elem(x, i, &alloc);
+        if (RAY_IS_ERR(dst[i])) {
+            for (int64_t j = 0; j < i; j++) ray_release(dst[j]);
+            ray_release(list);
+            return dst[i];
+        }
+        /* collection_elem always allocates for typed vecs, so ownership transfers */
+    }
+    return list;
+}
+
+/* Unbox a typed vector argument to a boxed list for use in builtins.
+ * Sets *_bx to the allocated boxed list (caller must release) or NULL.
+ * Returns the (possibly converted) argument, or an error. */
+static ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
+    *_bx = NULL;
+    if (x && !RAY_IS_ERR(x) && ray_is_vec(x)) {
+        *_bx = to_boxed_list(x);
+        return *_bx;
+    }
+    return x;
+}
+
+/* Map a binary function element-wise over collections.
+ * Both args can be collections (zip-map) or one scalar (broadcast). */
+static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
+    int left_coll = is_collection(left);
+    int right_coll = is_collection(right);
+
+    if (!left_coll && !right_coll) return fn(left, right);
 
     int64_t len;
-    if (left_list && right_list) {
+    if (left_coll && right_coll) {
         len = ray_len(left) < ray_len(right) ? ray_len(left) : ray_len(right);
     } else {
-        len = left_list ? ray_len(left) : ray_len(right);
+        len = left_coll ? ray_len(left) : ray_len(right);
     }
 
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
@@ -249,13 +314,15 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
-    ray_t** le = left_list ? (ray_t**)ray_data(left) : NULL;
-    ray_t** re = right_list ? (ray_t**)ray_data(right) : NULL;
 
     for (int64_t i = 0; i < len; i++) {
-        ray_t* a = left_list ? le[i] : left;
-        ray_t* b = right_list ? re[i] : right;
-        ray_t* elem = fn(a, b);
+        int la = 0, ra = 0;
+        ray_t* a = left_coll  ? collection_elem(left, i, &la)  : left;
+        ray_t* b = right_coll ? collection_elem(right, i, &ra) : right;
+        ray_t* elem = (RAY_IS_ERR(a) || RAY_IS_ERR(b))
+                     ? RAY_ERR_PTR(RAY_ERR_TYPE) : fn(a, b);
+        if (la) ray_release(a);
+        if (ra) ray_release(b);
         if (RAY_IS_ERR(elem)) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
             ray_release(result);
@@ -266,9 +333,9 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return result;
 }
 
-/* Map a unary function element-wise over a list. */
+/* Map a unary function element-wise over a collection. */
 static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
-    if (!is_list(arg)) return fn(arg);
+    if (!is_collection(arg)) return fn(arg);
 
     int64_t len = ray_len(arg);
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
@@ -276,10 +343,12 @@ static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
-    ray_t** elems = (ray_t**)ray_data(arg);
 
     for (int64_t i = 0; i < len; i++) {
-        ray_t* elem = fn(elems[i]);
+        int alloc = 0;
+        ray_t* e = collection_elem(arg, i, &alloc);
+        ray_t* elem = RAY_IS_ERR(e) ? e : fn(e);
+        if (alloc) ray_release(e);
         if (RAY_IS_ERR(elem)) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
             ray_release(result);
@@ -594,14 +663,16 @@ ray_t* ray_map(ray_t** args, int64_t n) {
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
+    ray_t* _bx = NULL;
 
     if (n == 2) {
         /* Unary map: (map fn vec) */
-        ray_t* vec = args[1];
-        if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_t* vec = unbox_vec_arg(args[1], &_bx);
+        if (RAY_IS_ERR(vec)) return vec;
+        if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
         int64_t len = ray_len(vec);
         ray_t* result = ray_alloc(len * sizeof(ray_t*));
-        if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
         result->type = RAY_LIST;
         result->len = len;
         ray_t** out = (ray_t**)ray_data(result);
@@ -610,20 +681,22 @@ ray_t* ray_map(ray_t** args, int64_t n) {
             out[i] = call_fn1(fn, elems[i]);
             if (RAY_IS_ERR(out[i])) {
                 for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-                ray_release(result);
+                ray_release(result); if (_bx) ray_release(_bx);
                 return out[i];
             }
         }
+        if (_bx) ray_release(_bx);
         return result;
     }
 
     /* Binary map: (map fn val vec) — apply fn(val, elem) */
     ray_t* val = args[1];
-    ray_t* vec = args[2];
-    if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* vec = unbox_vec_arg(args[2], &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
+    if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
@@ -632,10 +705,11 @@ ray_t* ray_map(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, val, elems[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result);
+            ray_release(result); if (_bx) ray_release(_bx);
             return out[i];
         }
     }
+    if (_bx) ray_release(_bx);
     return result;
 }
 
@@ -653,37 +727,42 @@ ray_t* ray_fold(ray_t** args, int64_t n) {
     ray_t* fn = args[0];
     ray_t* vec;
     ray_t* acc;
+    ray_t* _bx = NULL;
     if (n == 2) {
         /* (fold fn vec) — use first element as initial value */
-        vec = args[1];
-        if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        vec = unbox_vec_arg(args[1], &_bx);
+        if (RAY_IS_ERR(vec)) return vec;
+        if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
         int64_t len = ray_len(vec);
-        if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        if (len == 0) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
         ray_t** elems = (ray_t**)ray_data(vec);
         ray_retain(elems[0]);
         acc = elems[0];
         for (int64_t i = 1; i < len; i++) {
             ray_t* next = call_fn2(fn, acc, elems[i]);
             ray_release(acc);
-            if (RAY_IS_ERR(next)) return next;
+            if (RAY_IS_ERR(next)) { if (_bx) ray_release(_bx); return next; }
             acc = next;
         }
+        if (_bx) ray_release(_bx);
         return acc;
     }
 
     /* (fold fn init vec) */
     ray_retain(args[1]);
     acc = args[1];
-    vec = args[2];
-    if (!is_list(vec)) { ray_release(acc); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    vec = unbox_vec_arg(args[2], &_bx);
+    if (RAY_IS_ERR(vec)) { ray_release(acc); return vec; }
+    if (!is_list(vec)) { ray_release(acc); if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
     for (int64_t i = 0; i < len; i++) {
         ray_t* next = call_fn2(fn, acc, elems[i]);
         ray_release(acc);
-        if (RAY_IS_ERR(next)) return next;
+        if (RAY_IS_ERR(next)) { if (_bx) ray_release(_bx); return next; }
         acc = next;
     }
+    if (_bx) ray_release(_bx);
     return acc;
 }
 
@@ -694,10 +773,13 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
-    ray_t* vec = args[1];
-    if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bx = NULL;
+    ray_t* vec = unbox_vec_arg(args[1], &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
+    if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     if (len == 0) {
+        if (_bx) ray_release(_bx);
         ray_t* result = ray_alloc(0);
         if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
         result->type = RAY_LIST;
@@ -706,7 +788,7 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
     }
 
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
@@ -718,10 +800,11 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, out[i - 1], elems[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result);
+            ray_release(result); if (_bx) ray_release(_bx);
             return out[i];
         }
     }
+    if (_bx) ray_release(_bx);
     return result;
 }
 
@@ -729,7 +812,12 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
 ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (ray_is_lazy(mask)) mask = ray_lazy_materialize(mask);
-    if (!is_list(vec) || !is_list(mask)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bx1 = NULL, *_bx2 = NULL;
+    vec = unbox_vec_arg(vec, &_bx1);
+    if (RAY_IS_ERR(vec)) return vec;
+    mask = unbox_vec_arg(mask, &_bx2);
+    if (RAY_IS_ERR(mask)) { if (_bx1) ray_release(_bx1); return mask; }
+    if (!is_list(vec) || !is_list(mask)) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     int64_t mlen = ray_len(mask);
     if (len != mlen) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -744,7 +832,7 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     }
 
     ray_t* result = ray_alloc(count * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = count;
     ray_t** out = (ray_t**)ray_data(result);
@@ -755,6 +843,8 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
             out[j++] = velems[i];
         }
     }
+    if (_bx1) ray_release(_bx1);
+    if (_bx2) ray_release(_bx2);
     return result;
 }
 
@@ -765,15 +855,18 @@ ray_t* ray_apply(ray_t** args, int64_t n) {
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
-    ray_t* vec1 = args[1];
-    ray_t* vec2 = args[2];
-    if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bx1 = NULL, *_bx2 = NULL;
+    ray_t* vec1 = unbox_vec_arg(args[1], &_bx1);
+    if (RAY_IS_ERR(vec1)) return vec1;
+    ray_t* vec2 = unbox_vec_arg(args[2], &_bx2);
+    if (RAY_IS_ERR(vec2)) { if (_bx1) ray_release(_bx1); return vec2; }
+    if (!is_list(vec1) || !is_list(vec2)) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
     int64_t len = len1 < len2 ? len1 : len2;
 
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
@@ -784,10 +877,12 @@ ray_t* ray_apply(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, e1[i], e2[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result);
+            ray_release(result); if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2);
             return out[i];
         }
     }
+    if (_bx1) ray_release(_bx1);
+    if (_bx2) ray_release(_bx2);
     return result;
 }
 
@@ -814,13 +909,16 @@ static int atom_eq(ray_t* a, ray_t* b) {
 /* (distinct vec) — remove duplicates, preserving first occurrence */
 ray_t* ray_distinct_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
-    if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bx = NULL;
+    x = unbox_vec_arg(x, &_bx);
+    if (RAY_IS_ERR(x)) return x;
+    if (!is_list(x)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(x);
-    if (len == 0) { ray_retain(x); return x; }
+    if (len == 0) { if (_bx) ray_release(_bx); ray_retain(x); return x; }
     ray_t** elems = (ray_t**)ray_data(x);
 
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     ray_t** out = (ray_t**)ray_data(result);
     int64_t count = 0;
@@ -836,6 +934,7 @@ ray_t* ray_distinct_fn(ray_t* x) {
         }
     }
     result->len = count;
+    if (_bx) ray_release(_bx);
     return result;
 }
 
@@ -843,12 +942,16 @@ ray_t* ray_distinct_fn(ray_t* x) {
 ray_t* ray_in(ray_t* val, ray_t* vec) {
     if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
-    if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bx = NULL;
+    vec = unbox_vec_arg(vec, &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
+    if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
     for (int64_t i = 0; i < len; i++) {
-        if (atom_eq(val, elems[i])) return make_bool(1);
+        if (atom_eq(val, elems[i])) { if (_bx) ray_release(_bx); return make_bool(1); }
     }
+    if (_bx) ray_release(_bx);
     return make_bool(0);
 }
 
@@ -856,14 +959,19 @@ ray_t* ray_in(ray_t* val, ray_t* vec) {
 ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
-    if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bx1 = NULL, *_bx2 = NULL;
+    vec1 = unbox_vec_arg(vec1, &_bx1);
+    if (RAY_IS_ERR(vec1)) return vec1;
+    vec2 = unbox_vec_arg(vec2, &_bx2);
+    if (RAY_IS_ERR(vec2)) { if (_bx1) ray_release(_bx1); return vec2; }
+    if (!is_list(vec1) || !is_list(vec2)) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
     ray_t** e1 = (ray_t**)ray_data(vec1);
     ray_t** e2 = (ray_t**)ray_data(vec2);
 
     ray_t* result = ray_alloc(len1 * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     ray_t** out = (ray_t**)ray_data(result);
     int64_t count = 0;
@@ -879,6 +987,8 @@ ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
         }
     }
     result->len = count;
+    if (_bx1) ray_release(_bx1);
+    if (_bx2) ray_release(_bx2);
     return result;
 }
 
@@ -886,14 +996,19 @@ ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
 ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
-    if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bx1 = NULL, *_bx2 = NULL;
+    vec1 = unbox_vec_arg(vec1, &_bx1);
+    if (RAY_IS_ERR(vec1)) return vec1;
+    vec2 = unbox_vec_arg(vec2, &_bx2);
+    if (RAY_IS_ERR(vec2)) { if (_bx1) ray_release(_bx1); return vec2; }
+    if (!is_list(vec1) || !is_list(vec2)) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
     ray_t** e1 = (ray_t**)ray_data(vec1);
     ray_t** e2 = (ray_t**)ray_data(vec2);
 
     ray_t* result = ray_alloc((len1 + len2) * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     ray_t** out = (ray_t**)ray_data(result);
     int64_t count = 0;
@@ -913,6 +1028,8 @@ ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
         }
     }
     result->len = count;
+    if (_bx1) ray_release(_bx1);
+    if (_bx2) ray_release(_bx2);
     return result;
 }
 
@@ -920,14 +1037,19 @@ ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
 ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
     if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
     if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
-    if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bx1 = NULL, *_bx2 = NULL;
+    vec1 = unbox_vec_arg(vec1, &_bx1);
+    if (RAY_IS_ERR(vec1)) return vec1;
+    vec2 = unbox_vec_arg(vec2, &_bx2);
+    if (RAY_IS_ERR(vec2)) { if (_bx1) ray_release(_bx1); return vec2; }
+    if (!is_list(vec1) || !is_list(vec2)) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
     ray_t** e1 = (ray_t**)ray_data(vec1);
     ray_t** e2 = (ray_t**)ray_data(vec2);
 
     ray_t* result = ray_alloc(len1 * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     ray_t** out = (ray_t**)ray_data(result);
     int64_t count = 0;
@@ -942,14 +1064,19 @@ ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
         }
     }
     result->len = count;
+    if (_bx1) ray_release(_bx1);
+    if (_bx2) ray_release(_bx2);
     return result;
 }
 
 /* (take vec n) — first n elements (positive) or last |n| elements (negative) */
 ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
+    ray_t* _bx = NULL;
+    vec = unbox_vec_arg(vec, &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
     if (!is_list(vec) || n_obj->type != -RAY_I64)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     int64_t n = n_obj->i64;
     ray_t** elems = (ray_t**)ray_data(vec);
@@ -964,7 +1091,7 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     }
 
     ray_t* result = ray_alloc(count * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = count;
     ray_t** out = (ray_t**)ray_data(result);
@@ -972,6 +1099,7 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
         ray_retain(elems[start + i]);
         out[i] = elems[start + i];
     }
+    if (_bx) ray_release(_bx);
     return result;
 }
 
@@ -1019,9 +1147,20 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
         return result;
     }
 
-    if (!is_list(vec) || idx->type != -RAY_I64)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (idx->type != -RAY_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t i = idx->i64;
+
+    /* Typed vector: extract element directly */
+    if (ray_is_vec(vec)) {
+        int64_t len = ray_len(vec);
+        if (i < 0 || i >= len) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        int alloc = 0;
+        ray_t* elem = collection_elem(vec, i, &alloc);
+        /* collection_elem always allocates for typed vecs, so elem is owned */
+        return elem;
+    }
+
+    if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     if (i < 0 || i >= len) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* elem = ((ray_t**)ray_data(vec))[i];
@@ -1032,12 +1171,16 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
 /* (find vec val) — index of first occurrence, or -1 */
 ray_t* ray_find(ray_t* vec, ray_t* val) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
-    if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bx = NULL;
+    vec = unbox_vec_arg(vec, &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
+    if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
     for (int64_t i = 0; i < len; i++) {
-        if (atom_eq(elems[i], val)) return make_i64(i);
+        if (atom_eq(elems[i], val)) { if (_bx) ray_release(_bx); return make_i64(i); }
     }
+    if (_bx) ray_release(_bx);
     return make_i64(-1);
 }
 
@@ -1066,12 +1209,15 @@ ray_t* ray_til(ray_t* x) {
 /* (reverse vec) — reverse a vector */
 ray_t* ray_reverse(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
-    if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bx = NULL;
+    x = unbox_vec_arg(x, &_bx);
+    if (RAY_IS_ERR(x)) return x;
+    if (!is_list(x)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t len = ray_len(x);
     ray_t** elems = (ray_t**)ray_data(x);
 
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
-    if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
     result->len = len;
     ray_t** out = (ray_t**)ray_data(result);
@@ -1079,6 +1225,7 @@ ray_t* ray_reverse(ray_t* x) {
         ray_retain(elems[len - 1 - i]);
         out[i] = elems[len - 1 - i];
     }
+    if (_bx) ray_release(_bx);
     return result;
 }
 
@@ -1102,36 +1249,53 @@ ray_t* ray_list(ray_t** args, int64_t n) {
 
 /* (table [col_names] (list col1 col2 ...)) — build a RAY_TABLE */
 ray_t* ray_table(ray_t* names, ray_t* cols) {
-    if (!is_list(names) || !is_list(cols)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t *_bxn = NULL, *_bxc = NULL;
+    names = unbox_vec_arg(names, &_bxn);
+    if (RAY_IS_ERR(names)) return names;
+    cols = unbox_vec_arg(cols, &_bxc);
+    if (RAY_IS_ERR(cols)) { if (_bxn) ray_release(_bxn); return cols; }
+    if (!is_list(names) || !is_list(cols)) { if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_TYPE); }
     int64_t ncols = ray_len(names);
-    if (ray_len(cols) != ncols) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (ray_len(cols) != ncols) { if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
 
     ray_t** name_elems = (ray_t**)ray_data(names);
     ray_t** col_elems = (ray_t**)ray_data(cols);
+    int64_t expected_rows = -1;
 
     ray_t* tbl = ray_table_new(ncols);
-    if (RAY_IS_ERR(tbl)) return tbl;
+    if (RAY_IS_ERR(tbl)) { if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return tbl; }
 
     for (int64_t i = 0; i < ncols; i++) {
         if (name_elems[i]->type != -RAY_SYM)
-            { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+            { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_TYPE); }
         int64_t name_id = name_elems[i]->i64;
 
-        /* Convert Rayfall list to typed column vector */
-        ray_t* col_list = col_elems[i];
-        if (!is_list(col_list))
-            { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-        int64_t nrows = ray_len(col_list);
+        /* Convert Rayfall list (or typed vec) to typed column vector */
+        ray_t* col_src = col_elems[i];
+
+        /* If the column is already a typed vector, use it directly */
+        if (ray_is_vec(col_src)) {
+            int64_t nrows = ray_len(col_src);
+            if (expected_rows < 0) expected_rows = nrows;
+            else if (nrows != expected_rows)
+                { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+            ray_retain(col_src);
+            tbl = ray_table_add_col(tbl, name_id, col_src);
+            ray_release(col_src);
+            if (RAY_IS_ERR(tbl)) { if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return tbl; }
+            continue;
+        }
+
+        if (!is_list(col_src))
+            { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+        int64_t nrows = ray_len(col_src);
 
         /* Validate all columns have consistent row count */
-        if (i == 0) {
-            /* first column sets the expected row count */
-        } else {
-            int64_t expected = ray_len(col_elems[0]);
-            if (nrows != expected)
-                { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
-        }
-        ray_t** row_elems = (ray_t**)ray_data(col_list);
+        if (expected_rows < 0) expected_rows = nrows;
+        else if (nrows != expected_rows)
+            { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+
+        ray_t** row_elems = (ray_t**)ray_data(col_src);
 
         /* Determine column type from elements (scan for mixed I64/F64 → F64) */
         int8_t col_type = RAY_I64;
@@ -1150,12 +1314,13 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
 
         ray_t* col_vec = ray_vec_new(col_type, nrows);
         if (RAY_IS_ERR(col_vec))
-            { ray_release(tbl); return col_vec; }
+            { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return col_vec; }
 
         for (int64_t j = 0; j < nrows; j++) {
             if (col_type == RAY_STR) {
                 if (row_elems[j]->type != -RAY_STR) {
                     ray_release(col_vec); ray_release(tbl);
+                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 const char *sptr = ray_str_ptr(row_elems[j]);
@@ -1167,6 +1332,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
                 if (!type_ok && col_type == RAY_F64 && row_elems[j]->type == -RAY_I64) type_ok = 1;
                 if (!type_ok) {
                     ray_release(col_vec); ray_release(tbl);
+                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 void* val_ptr;
@@ -1181,14 +1347,16 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
                 col_vec = ray_vec_append(col_vec, val_ptr);
             }
             if (RAY_IS_ERR(col_vec))
-                { ray_release(tbl); return col_vec; }
+                { ray_release(tbl); if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return col_vec; }
         }
 
         tbl = ray_table_add_col(tbl, name_id, col_vec);
         ray_release(col_vec);
-        if (RAY_IS_ERR(tbl)) return tbl;
+        if (RAY_IS_ERR(tbl)) { if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc); return tbl; }
     }
 
+    if (_bxn) ray_release(_bxn);
+    if (_bxc) ray_release(_bxc);
     return tbl;
 }
 
@@ -2075,15 +2243,21 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
 
     if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (keys->type != RAY_LIST || !(keys->attrs & RAY_ATTR_VECTOR))
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* _bxk = NULL;
+    keys = unbox_vec_arg(keys, &_bxk);
+    if (RAY_IS_ERR(keys)) return keys;
+    /* Accept typed-vector keys (now unboxed) or boxed lists with ATTR_VECTOR */
+    if (!is_list(keys))
+        { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    if (!_bxk && !(keys->attrs & RAY_ATTR_VECTOR))
+        { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_TYPE); }
 
     int64_t nk = ray_len(keys);
-    if (nk == 0 || nk > 16) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (nk == 0 || nk > 16) { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
     ray_t** key_elems = (ray_t**)ray_data(keys);
 
     ray_graph_t* g = ray_graph_new(left_tbl);
-    if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!g) { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_OOM); }
 
     ray_op_t* left_node  = ray_const_table(g, left_tbl);
     ray_op_t* right_node = ray_const_table(g, right_tbl);
@@ -2091,15 +2265,17 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
     ray_op_t* lk[16], *rk[16];
     for (int64_t i = 0; i < nk; i++) {
         if (key_elems[i]->type != -RAY_SYM) {
-            ray_graph_free(g);
+            ray_graph_free(g); if (_bxk) ray_release(_bxk);
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         }
         ray_t* name_str = ray_sym_str(key_elems[i]->i64);
-        if (!name_str) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        if (!name_str) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
         lk[i] = ray_scan(g, ray_str_ptr(name_str));
         rk[i] = ray_scan(g, ray_str_ptr(name_str));
-        if (!lk[i] || !rk[i]) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        if (!lk[i] || !rk[i]) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
     }
+
+    if (_bxk) ray_release(_bxk);
 
     ray_op_t* jn = ray_join(g, left_node, lk, right_node, rk,
                            (uint8_t)nk, join_type);
@@ -2132,7 +2308,9 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
 
     uint8_t n_eq = 0;
     ray_t** eq_elems = NULL;
-    if (eq_keys->type == RAY_LIST && (eq_keys->attrs & RAY_ATTR_VECTOR)) {
+    ray_t* _bxeq = NULL;
+    eq_keys = unbox_vec_arg(eq_keys, &_bxeq);
+    if (is_list(eq_keys)) {
         n_eq = (uint8_t)ray_len(eq_keys);
         eq_elems = (ray_t**)ray_data(eq_keys);
     }
@@ -2159,6 +2337,8 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
         eq_ops[i] = ray_scan(g, ray_str_ptr(nm));
         if (!eq_ops[i]) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
     }
+
+    if (_bxeq) ray_release(_bxeq);
 
     ray_op_t* jn = ray_asof_join(g, left_node, right_node,
                                 time_op, eq_ops, n_eq, 1);
@@ -2694,7 +2874,7 @@ op_call1: {
     ray_t *fn_obj = POP();
     ray_unary_fn fn = (ray_unary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && is_list(arg))
+    if ((fn_obj->attrs & RAY_FN_ATOMIC) && is_collection(arg))
         result = atomic_map_unary(fn, arg);
     else
         result = fn(arg);
@@ -2711,7 +2891,7 @@ op_call2: {
     ray_t *fn_obj = POP();
     ray_binary_fn fn = (ray_binary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && (is_list(left) || is_list(right)))
+    if ((fn_obj->attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
         result = atomic_map_binary(fn, left, right);
     else
         result = fn(left, right);
@@ -3255,7 +3435,7 @@ ray_t* ray_eval(ray_t* obj) {
             ray_release(head);
             if (RAY_IS_ERR(arg)) { ret = arg; goto out; }
             ray_t* result;
-            if ((fn_attrs & RAY_FN_ATOMIC) && is_list(arg))
+            if ((fn_attrs & RAY_FN_ATOMIC) && is_collection(arg))
                 result = atomic_map_unary(fn, arg);
             else
                 result = fn(arg);
@@ -3276,7 +3456,7 @@ ray_t* ray_eval(ray_t* obj) {
             if (RAY_IS_ERR(right)) { ray_release(head); ray_release(left); ret = right; goto out; }
             ray_release(head);
             ray_t* result;
-            if ((fn_attrs & RAY_FN_ATOMIC) && (is_list(left) || is_list(right)))
+            if ((fn_attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
                 result = atomic_map_binary(fn, left, right);
             else
                 result = fn(left, right);

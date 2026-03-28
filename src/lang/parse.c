@@ -185,22 +185,137 @@ static ray_t* parse_name(ray_parser_t *p) {
 /* ── Vector literal: [1 2 3] ── */
 static ray_t* parse_vector(ray_parser_t *p) {
     p->pos++; /* skip [ */
-    ray_t* list = ray_list_new(8);
-    if (RAY_IS_ERR(list)) return list;
-    list->attrs |= RAY_ATTR_VECTOR;
+
+    /* Collect parsed elements into a temporary array */
+    ray_t* elems[4096];
+    int32_t count = 0;
 
     skip_ws_and_comments(p);
     while (*p->pos && *p->pos != ']') {
+        if (count >= 4096) {
+            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+            return RAY_ERR_PTR(RAY_ERR_LIMIT);
+        }
         ray_t* elem = parse_expr(p);
-        if (RAY_IS_ERR(elem)) { ray_release(list); return elem; }
-        list = ray_list_append(list, elem);
-        ray_release(elem);
-        if (RAY_IS_ERR(list)) return list;
+        if (RAY_IS_ERR(elem)) {
+            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+            return elem;
+        }
+        elems[count++] = elem;
         skip_ws_and_comments(p);
     }
-    if (*p->pos != ']') { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+    if (*p->pos != ']') {
+        for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+        return RAY_ERR_PTR(RAY_ERR_PARSE);
+    }
     p->pos++;
-    return list;
+
+    if (count == 0) {
+        /* Empty vector -> empty i64 vector */
+        return ray_vec_new(RAY_I64, 0);
+    }
+
+    /* Determine element types.
+     * Name references (RAY_ATTR_NAME) must stay as boxed atoms because
+     * the evaluator, compiler, and fn-builder dereference them as ray_t*. */
+    int8_t first_type = elems[0]->type;
+    bool homogeneous = true;
+    bool has_float = (first_type == -RAY_F64);
+    bool has_int   = (first_type == -RAY_I64);
+    bool all_numeric = (first_type == -RAY_I64 || first_type == -RAY_F64);
+
+    for (int32_t i = 0; i < count; i++) {
+        if (elems[i]->attrs & RAY_ATTR_NAME) goto boxed_list;
+        if (i == 0) continue;
+        int8_t t = elems[i]->type;
+        if (t != first_type) homogeneous = false;
+        if (t == -RAY_F64)      has_float = true;
+        else if (t == -RAY_I64) has_int = true;
+        if (t != -RAY_I64 && t != -RAY_F64) all_numeric = false;
+    }
+
+    /* All same atom type -> typed vector */
+    if (homogeneous && first_type < 0) {
+        int8_t vec_type = -first_type;
+        ray_t* vec = ray_vec_new(vec_type, count);
+        if (RAY_IS_ERR(vec)) {
+            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+            return vec;
+        }
+        switch (vec_type) {
+            case RAY_I64: case RAY_TIMESTAMP: {
+                int64_t* d = (int64_t*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i64;
+                break;
+            }
+            case RAY_F64: {
+                double* d = (double*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->f64;
+                break;
+            }
+            case RAY_I32: case RAY_DATE: case RAY_TIME: {
+                int32_t* d = (int32_t*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i32;
+                break;
+            }
+            case RAY_I16: {
+                int16_t* d = (int16_t*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i16;
+                break;
+            }
+            case RAY_BOOL: {
+                bool* d = (bool*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->b8;
+                break;
+            }
+            case RAY_SYM: {
+                int64_t* d = (int64_t*)ray_data(vec);
+                for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i64;
+                break;
+            }
+            default: goto boxed_list;
+        }
+        vec->len = count;
+        for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+        return vec;
+    }
+
+    /* Mixed int/float -> promote to f64 */
+    if (has_float && has_int && all_numeric) {
+        ray_t* vec = ray_vec_new(RAY_F64, count);
+        if (RAY_IS_ERR(vec)) {
+            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+            return vec;
+        }
+        double* d = (double*)ray_data(vec);
+        for (int32_t i = 0; i < count; i++) {
+            d[i] = (elems[i]->type == -RAY_F64) ? elems[i]->f64
+                                                 : (double)elems[i]->i64;
+        }
+        vec->len = count;
+        for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+        return vec;
+    }
+
+boxed_list:
+    /* Fallback: boxed list (mixed types, nested structures, etc.) */
+    {
+        ray_t* list = ray_list_new(count);
+        if (RAY_IS_ERR(list)) {
+            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+            return list;
+        }
+        list->attrs |= RAY_ATTR_VECTOR;
+        for (int32_t i = 0; i < count; i++) {
+            list = ray_list_append(list, elems[i]);
+            ray_release(elems[i]);
+            if (RAY_IS_ERR(list)) {
+                for (int32_t j = i + 1; j < count; j++) ray_release(elems[j]);
+                return list;
+            }
+        }
+        return list;
+    }
 }
 
 /* ── Dict literal: {key: val key: val ...} ── */
