@@ -205,6 +205,107 @@ static void fmt_sym(fmt_buf_t* b, int64_t sym_id) {
     }
 }
 
+/* ===== Date/time/timestamp helpers (ported from Rayforce) ===== */
+
+/* Cumulative days-in-month lookup: [leap][month].
+ * Index 0 = Jan start (0 days), index 12 = Dec end (365 or 366). */
+static const uint32_t MONTHDAYS_FWD[2][13] = {
+    {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365},
+    {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366},
+};
+
+#define DATE_EPOCH 2000
+
+static int date_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+static int32_t date_years_by_days(int yy) {
+    return (int32_t)((int64_t)yy * 365 + yy / 4 - yy / 100 + yy / 400);
+}
+
+static void date_to_ymd(int32_t days, int* y, int* m, int* d) {
+    int32_t offset = days + date_years_by_days(DATE_EPOCH - 1);
+    double approx = (double)offset / 365.2425;
+    int32_t years = (int32_t)(approx >= 0.0 ? approx + 0.5 : approx - 0.5);
+
+    if (date_years_by_days(years) > offset)
+        years -= 1;
+
+    int32_t rem = offset - date_years_by_days(years);
+    int yy = years + 1;
+    int leap = date_leap_year(yy);
+    int mid = 0;
+
+    for (mid = 12; mid > 0; mid--)
+        if (MONTHDAYS_FWD[leap][mid] != 0 && rem / (int32_t)MONTHDAYS_FWD[leap][mid] != 0)
+            break;
+
+    if (mid == 12 || mid < 0)
+        mid = 0;
+
+    *y = yy;
+    *m = 1 + mid % 12;
+    *d = 1 + rem - (int32_t)MONTHDAYS_FWD[leap][mid];
+}
+
+static void time_to_hms(int32_t ms, int* h, int* min, int* s, int* ms_out) {
+    int32_t mask = ms >> 31;
+    int32_t val  = (mask ^ ms) - mask;  /* absolute value */
+
+    int32_t secs = val / 1000;
+    *ms_out = (int)(val % 1000);
+    *h      = (int)(secs / 3600);
+    int32_t rem = secs % 3600;
+    *min    = (int)(rem / 60);
+    *s      = (int)(rem % 60);
+}
+
+#define NSECS_IN_DAY ((int64_t)24 * 60 * 60 * 1000000000LL)
+
+static void ts_to_parts(int64_t ns, int* y, int* mo, int* d,
+                         int* h, int* mi, int* s, int* nanos) {
+    int64_t days = ns / NSECS_IN_DAY;
+    int64_t span = ns % NSECS_IN_DAY;
+
+    if (span < 0) {
+        days -= 1;
+        span += NSECS_IN_DAY;
+    }
+
+    date_to_ymd((int32_t)days, y, mo, d);
+
+    /* timespan_from_nanos */
+    int64_t secs = span / 1000000000LL;
+    *nanos = (int)(span % 1000000000LL);
+    *h  = (int)(secs / 3600);
+    int64_t rem = secs % 3600;
+    *mi = (int)(rem / 60);
+    *s  = (int)(rem % 60);
+}
+
+static void fmt_date(fmt_buf_t* b, int32_t val) {
+    if (val == INT32_MIN) { fmt_puts(b, "0Nd"); return; }
+    int y, m, d;
+    date_to_ymd(val, &y, &m, &d);
+    fmt_printf(b, "%04d.%02d.%02d", y, m, d);
+}
+
+static void fmt_time(fmt_buf_t* b, int32_t val) {
+    if (val == INT32_MIN) { fmt_puts(b, "0Nt"); return; }
+    int h, m, s, ms;
+    time_to_hms(val, &h, &m, &s, &ms);
+    if (val < 0) fmt_putc(b, '-');
+    fmt_printf(b, "%02d:%02d:%02d.%03d", h, m, s, ms);
+}
+
+static void fmt_timestamp(fmt_buf_t* b, int64_t val) {
+    if (val == INT64_MIN) { fmt_puts(b, "0Np"); return; }
+    int y, mo, d, h, mi, s, ns;
+    ts_to_parts(val, &y, &mo, &d, &h, &mi, &s, &ns);
+    fmt_printf(b, "%04d.%02d.%02dD%02d:%02d:%02d.%09d", y, mo, d, h, mi, s, ns);
+}
+
 static void fmt_str_atom(fmt_buf_t* b, ray_t* obj, int full) {
     const char* p = ray_str_ptr(obj);
     size_t      n = ray_str_len(obj);
@@ -243,7 +344,10 @@ ray_t* ray_fmt(ray_t* obj, int mode) {
         case RAY_I16:  fmt_i16(&b, obj->i16); break;
         case RAY_I32:  fmt_i32(&b, obj->i32); break;
         case RAY_I64:  fmt_i64(&b, obj->i64); break;
-        case RAY_F64:  fmt_f64(&b, obj->f64); break;
+        case RAY_F64:       fmt_f64(&b, obj->f64); break;
+        case RAY_DATE:      fmt_date(&b, obj->i32); break;
+        case RAY_TIME:      fmt_time(&b, obj->i32); break;
+        case RAY_TIMESTAMP: fmt_timestamp(&b, obj->i64); break;
         case RAY_SYM:  fmt_sym(&b, obj->i64); break;
         case RAY_STR:  fmt_str_atom(&b, obj, mode > 0); break;
         default:       fmt_puts(&b, "?"); break;
