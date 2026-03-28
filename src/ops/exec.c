@@ -1951,6 +1951,13 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     (void)g;
     if (!input || RAY_IS_ERR(input)) return input;
 
+    /* TABLE input: COUNT returns row count, others need a column */
+    if (input->type == RAY_TABLE) {
+        if (op->opcode == OP_COUNT)
+            return ray_i64(ray_table_nrows(input));
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+
     int8_t in_type = input->type;
     int64_t len = input->len;
 
@@ -15452,8 +15459,19 @@ static ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
         case OP_STDDEV: case OP_STDDEV_POP: case OP_VAR: case OP_VAR_POP: {
             ray_t* input = exec_node(g, op->inputs[0]);
             if (!input || RAY_IS_ERR(input)) return input;
+            /* Compact lazy selection before reducing — filters may have
+             * set g->selection without materializing a compacted table. */
+            bool own_input = (input != g->table);
+            if (g->selection && input->type == RAY_TABLE) {
+                ray_t* compacted = sel_compact(g, input, g->selection);
+                if (own_input) ray_release(input);
+                ray_release(g->selection);
+                g->selection = NULL;
+                input = compacted;
+                own_input = true;
+            }
             ray_t* result = exec_reduction(g, op, input);
-            ray_release(input);
+            if (own_input) ray_release(input);
             return result;
         }
 
