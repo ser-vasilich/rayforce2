@@ -62,25 +62,25 @@ static int is_float_op(ray_t* a, ray_t* b) {
 }
 
 /* Binary arithmetic */
-static ray_t* rfl_add(ray_t* a, ray_t* b) {
+ray_t* ray_add_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b)) return make_f64(as_f64(a) + as_f64(b));
     return make_i64(a->i64 + b->i64);
 }
 
-static ray_t* rfl_sub(ray_t* a, ray_t* b) {
+ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b)) return make_f64(as_f64(a) - as_f64(b));
     return make_i64(a->i64 - b->i64);
 }
 
-static ray_t* rfl_mul(ray_t* a, ray_t* b) {
+ray_t* ray_mul_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b)) return make_f64(as_f64(a) * as_f64(b));
     return make_i64(a->i64 * b->i64);
 }
 
-static ray_t* rfl_div(ray_t* a, ray_t* b) {
+ray_t* ray_div_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b)) {
         if (as_f64(b) == 0.0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -90,7 +90,7 @@ static ray_t* rfl_div(ray_t* a, ray_t* b) {
     return make_i64(a->i64 / b->i64);
 }
 
-static ray_t* rfl_mod(ray_t* a, ray_t* b) {
+ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
     if (a->type != RAY_ATOM_I64 || b->type != RAY_ATOM_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (b->i64 == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -98,27 +98,27 @@ static ray_t* rfl_mod(ray_t* a, ray_t* b) {
 }
 
 /* Comparison */
-static ray_t* rfl_gt(ray_t* a, ray_t* b) {
+ray_t* ray_gt_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) > as_f64(b) ? 1 : 0);
 }
 
-static ray_t* rfl_lt(ray_t* a, ray_t* b) {
+ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) < as_f64(b) ? 1 : 0);
 }
 
-static ray_t* rfl_gte(ray_t* a, ray_t* b) {
+ray_t* ray_gte(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) >= as_f64(b) ? 1 : 0);
 }
 
-static ray_t* rfl_lte(ray_t* a, ray_t* b) {
+ray_t* ray_lte(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_bool(as_f64(a) <= as_f64(b) ? 1 : 0);
 }
 
-static ray_t* rfl_eq(ray_t* a, ray_t* b) {
+ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
     if (a->type == RAY_ATOM_BOOL && b->type == RAY_ATOM_BOOL)
         return make_bool(a->b8 == b->b8 ? 1 : 0);
     if (a->type == RAY_ATOM_SYM && b->type == RAY_ATOM_SYM)
@@ -129,7 +129,7 @@ static ray_t* rfl_eq(ray_t* a, ray_t* b) {
     return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
 }
 
-static ray_t* rfl_neq(ray_t* a, ray_t* b) {
+ray_t* ray_neq(ray_t* a, ray_t* b) {
     if (a->type == RAY_ATOM_BOOL && b->type == RAY_ATOM_BOOL)
         return make_bool(a->b8 != b->b8 ? 1 : 0);
     if (a->type == RAY_ATOM_SYM && b->type == RAY_ATOM_SYM)
@@ -148,20 +148,20 @@ static inline int is_truthy(ray_t* x) {
     return 1; /* non-null objects are truthy */
 }
 
-static ray_t* rfl_and(ray_t* a, ray_t* b) {
+ray_t* ray_and_fn(ray_t* a, ray_t* b) {
     return make_bool((is_truthy(a) && is_truthy(b)) ? 1 : 0);
 }
 
-static ray_t* rfl_or(ray_t* a, ray_t* b) {
+ray_t* ray_or_fn(ray_t* a, ray_t* b) {
     return make_bool((is_truthy(a) || is_truthy(b)) ? 1 : 0);
 }
 
 /* Unary */
-static ray_t* rfl_not(ray_t* x) {
+ray_t* ray_not_fn(ray_t* x) {
     return make_bool(is_truthy(x) ? 0 : 1);
 }
 
-static ray_t* rfl_neg(ray_t* x) {
+ray_t* ray_neg_fn(ray_t* x) {
     if (x->type == RAY_ATOM_I64) return make_i64(-x->i64);
     if (x->type == RAY_ATOM_F64) return make_f64(-x->f64);
     return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -292,7 +292,7 @@ static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
  * Aggregation builtins
  * ══════════════════════════════════════════ */
 
-static ray_t* rfl_sum(ray_t* x) {
+ray_t* ray_sum_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return make_i64(0);
@@ -331,14 +331,14 @@ static ray_t* rfl_sum(ray_t* x) {
     return has_float ? make_f64(fsum) : make_i64(isum);
 }
 
-static ray_t* rfl_count(ray_t* x) {
+ray_t* ray_count_fn(ray_t* x) {
     if (x->type == RAY_TABLE) return make_i64(ray_table_nrows(x));
     if (ray_is_vec(x)) return make_i64(ray_len(x));
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_i64(ray_len(x));
 }
 
-static ray_t* rfl_avg(ray_t* x) {
+ray_t* ray_avg_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -374,7 +374,7 @@ static ray_t* rfl_avg(ray_t* x) {
     return make_f64(sum / (double)len);
 }
 
-static ray_t* rfl_min(ray_t* x) {
+ray_t* ray_min(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -415,7 +415,7 @@ static ray_t* rfl_min(ray_t* x) {
     return has_float ? make_f64(fmin) : make_i64(imin);
 }
 
-static ray_t* rfl_max(ray_t* x) {
+ray_t* ray_max(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -456,7 +456,7 @@ static ray_t* rfl_max(ray_t* x) {
     return has_float ? make_f64(fmax) : make_i64(imax);
 }
 
-static ray_t* rfl_first(ray_t* x) {
+ray_t* ray_first_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         if (ray_len(x) == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
         if (x->type == RAY_I64) return make_i64(((int64_t*)ray_data(x))[0]);
@@ -471,7 +471,7 @@ static ray_t* rfl_first(ray_t* x) {
     return elem;
 }
 
-static ray_t* rfl_last(ray_t* x) {
+ray_t* ray_last_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -513,7 +513,7 @@ static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
     return scratch;
 }
 
-static ray_t* rfl_med(ray_t* x) {
+ray_t* ray_med(ray_t* x) {
     int64_t len;
     ray_t* scratch;
     double* vals;
@@ -554,7 +554,7 @@ static ray_t* rfl_med(ray_t* x) {
     return make_f64(median);
 }
 
-static ray_t* rfl_dev(ray_t* x) {
+ray_t* ray_dev(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -628,7 +628,7 @@ static ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
 
 /* (map fn val vec) — apply binary fn(val, elem) to each element of vec.
  * Also supports (map fn vec) for unary mapping. */
-static ray_t* rfl_map(ray_t** args, int64_t n) {
+ray_t* ray_map(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
     ray_t* fn = args[0];
@@ -678,12 +678,12 @@ static ray_t* rfl_map(ray_t** args, int64_t n) {
 }
 
 /* (pmap fn val vec) — same as map, parallel not implemented yet (sequential fallback) */
-static ray_t* rfl_pmap(ray_t** args, int64_t n) {
-    return rfl_map(args, n);
+ray_t* ray_pmap(ray_t** args, int64_t n) {
+    return ray_map(args, n);
 }
 
 /* (fold fn vec) or (fold fn init vec) — reduce with binary fn */
-static ray_t* rfl_fold(ray_t** args, int64_t n) {
+ray_t* ray_fold(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
     ray_t* fn = args[0];
@@ -724,7 +724,7 @@ static ray_t* rfl_fold(ray_t** args, int64_t n) {
 }
 
 /* (scan fn vec) — running fold, returns vector of partial results */
-static ray_t* rfl_scan(ray_t** args, int64_t n) {
+ray_t* ray_scan_fn(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
     ray_t* fn = args[0];
@@ -760,7 +760,7 @@ static ray_t* rfl_scan(ray_t** args, int64_t n) {
 }
 
 /* (filter vec mask) — filter vector by boolean mask */
-static ray_t* rfl_filter(ray_t* vec, ray_t* mask) {
+ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     if (!is_list(vec) || !is_list(mask)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     int64_t mlen = ray_len(mask);
@@ -791,7 +791,7 @@ static ray_t* rfl_filter(ray_t* vec, ray_t* mask) {
 }
 
 /* (apply fn vec1 vec2) — zip-apply fn element-wise over two vectors */
-static ray_t* rfl_apply(ray_t** args, int64_t n) {
+ray_t* ray_apply(ray_t** args, int64_t n) {
     if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
     ray_t* fn = args[0];
@@ -842,7 +842,7 @@ static int atom_eq(ray_t* a, ray_t* b) {
 }
 
 /* (distinct vec) — remove duplicates, preserving first occurrence */
-static ray_t* rfl_distinct(ray_t* x) {
+ray_t* ray_distinct_fn(ray_t* x) {
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
     if (len == 0) { ray_retain(x); return x; }
@@ -869,7 +869,7 @@ static ray_t* rfl_distinct(ray_t* x) {
 }
 
 /* (in val vec) — check membership */
-static ray_t* rfl_in(ray_t* val, ray_t* vec) {
+ray_t* ray_in(ray_t* val, ray_t* vec) {
     if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
@@ -880,7 +880,7 @@ static ray_t* rfl_in(ray_t* val, ray_t* vec) {
 }
 
 /* (except vec1 vec2) — elements in vec1 not in vec2 */
-static ray_t* rfl_except(ray_t* vec1, ray_t* vec2) {
+ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -908,7 +908,7 @@ static ray_t* rfl_except(ray_t* vec1, ray_t* vec2) {
 }
 
 /* (union vec1 vec2) — elements in vec1 + elements in vec2 not already in vec1 */
-static ray_t* rfl_union(ray_t* vec1, ray_t* vec2) {
+ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -940,7 +940,7 @@ static ray_t* rfl_union(ray_t* vec1, ray_t* vec2) {
 }
 
 /* (sect vec1 vec2) — intersection: elements in both */
-static ray_t* rfl_sect(ray_t* vec1, ray_t* vec2) {
+ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -967,7 +967,7 @@ static ray_t* rfl_sect(ray_t* vec1, ray_t* vec2) {
 }
 
 /* (take vec n) — first n elements (positive) or last |n| elements (negative) */
-static ray_t* rfl_take(ray_t* vec, ray_t* n_obj) {
+ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     if (!is_list(vec) || n_obj->type != RAY_ATOM_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
@@ -996,7 +996,7 @@ static ray_t* rfl_take(ray_t* vec, ray_t* n_obj) {
 }
 
 /* (at vec idx) or (at table 'col) — index into vector or table */
-static ray_t* rfl_at(ray_t* vec, ray_t* idx) {
+ray_t* ray_at(ray_t* vec, ray_t* idx) {
     /* Table column access by symbol key */
     if (vec->type == RAY_TABLE && idx->type == RAY_ATOM_SYM) {
         ray_t* col = ray_table_get_col(vec, idx->i64);
@@ -1049,7 +1049,7 @@ static ray_t* rfl_at(ray_t* vec, ray_t* idx) {
 }
 
 /* (find vec val) — index of first occurrence, or -1 */
-static ray_t* rfl_find(ray_t* vec, ray_t* val) {
+ray_t* ray_find(ray_t* vec, ray_t* val) {
     if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
@@ -1067,7 +1067,7 @@ static void til_fill(void* ctx, uint32_t worker_id, int64_t start, int64_t end) 
         out[i] = i;
 }
 
-static ray_t* rfl_til(ray_t* x) {
+ray_t* ray_til(ray_t* x) {
     if (!ray_is_atom(x) || x->type != RAY_ATOM_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t n = x->i64;
     if (n < 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -1082,7 +1082,7 @@ static ray_t* rfl_til(ray_t* x) {
 }
 
 /* (reverse vec) — reverse a vector */
-static ray_t* rfl_reverse(ray_t* x) {
+ray_t* ray_reverse(ray_t* x) {
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
     ray_t** elems = (ray_t**)ray_data(x);
@@ -1104,7 +1104,7 @@ static ray_t* rfl_reverse(ray_t* x) {
  * ══════════════════════════════════════════ */
 
 /* (list v1 v2 ...) — package args into a list */
-static ray_t* rfl_list(ray_t** args, int64_t n) {
+ray_t* ray_list(ray_t** args, int64_t n) {
     ray_t* result = ray_alloc(n * sizeof(ray_t*));
     if (!result) return RAY_ERR_PTR(RAY_ERR_OOM);
     result->type = RAY_LIST;
@@ -1118,7 +1118,7 @@ static ray_t* rfl_list(ray_t** args, int64_t n) {
 }
 
 /* (table [col_names] (list col1 col2 ...)) — build a RAY_TABLE */
-static ray_t* rfl_table(ray_t* names, ray_t* cols) {
+ray_t* ray_table(ray_t* names, ray_t* cols) {
     if (!is_list(names) || !is_list(cols)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t ncols = ray_len(names);
     if (ray_len(cols) != ncols) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -1210,7 +1210,7 @@ static ray_t* rfl_table(ray_t* names, ray_t* cols) {
 }
 
 /* (key table) — return column names as a list of symbols */
-static ray_t* rfl_key(ray_t* x) {
+ray_t* ray_key(ray_t* x) {
     if (x->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t ncols = ray_table_ncols(x);
     ray_t* result = ray_alloc(ncols * sizeof(ray_t*));
@@ -1230,7 +1230,7 @@ static ray_t* rfl_key(ray_t* x) {
 }
 
 /* (value dict) — extract values from a dict as a list */
-static ray_t* rfl_value(ray_t* x) {
+ray_t* ray_value(ray_t* x) {
     if (x->type != RAY_LIST || !(x->attrs & RAY_ATTR_DICT))
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t n = ray_len(x);
@@ -1423,7 +1423,7 @@ static int is_agg_expr(ray_t* expr) {
 
 /* (select {from: t [where: pred] [by: key] [col: expr ...]})
  * Special form — receives unevaluated dict arg. */
-static ray_t* rfl_select(ray_t** args, int64_t n) {
+ray_t* ray_select_fn(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* dict = args[0];
     if (!dict || dict->type != RAY_LIST || !(dict->attrs & RAY_ATTR_DICT))
@@ -1541,7 +1541,7 @@ static ray_t* rfl_select(ray_t** args, int64_t n) {
 }
 
 /* (xbar col bucket) — time/value bucketing: floor(col/bucket)*bucket */
-static ray_t* rfl_xbar(ray_t* col, ray_t* bucket) {
+ray_t* ray_xbar(ray_t* col, ray_t* bucket) {
     if (col->type == RAY_ATOM_I64 && bucket->type == RAY_ATOM_I64) {
         int64_t a = col->i64, b = bucket->i64;
         if (b == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -1602,7 +1602,7 @@ static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
  * Special form — receives unevaluated dict arg.
  * For rows matching where (or all if no where), evaluate column expressions
  * and replace those column values. Returns a new table. */
-static ray_t* rfl_update(ray_t** args, int64_t n) {
+ray_t* ray_update(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* dict = args[0];
     if (!dict || dict->type != RAY_LIST || !(dict->attrs & RAY_ATTR_DICT))
@@ -1880,7 +1880,7 @@ static ray_t* rfl_update(ray_t** args, int64_t n) {
 }
 
 /* (insert table (list val1 val2 ...)) — append a row to a table */
-static ray_t* rfl_insert(ray_t** args, int64_t n) {
+ray_t* ray_insert(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* tbl = args[0];
     ray_t* row = args[1];
@@ -1941,7 +1941,7 @@ static ray_t* rfl_insert(ray_t** args, int64_t n) {
 }
 
 /* (upsert table key_col (list val1 val2 ...)) — update row if key matches, else insert */
-static ray_t* rfl_upsert(ray_t** args, int64_t n) {
+ray_t* ray_upsert(ray_t** args, int64_t n) {
     if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* tbl = args[0];
     ray_t* key_sym = args[1];
@@ -2018,9 +2018,9 @@ static ray_t* rfl_upsert(ray_t** args, int64_t n) {
     }
 
     if (match_row < 0) {
-        /* Key not found — insert: rfl_insert expects (table, row) */
+        /* Key not found — insert: ray_insert expects (table, row) */
         ray_t* insert_args[2] = { tbl, row };
-        return rfl_insert(insert_args, 2);
+        return ray_insert(insert_args, 2);
     }
 
     /* Key found — update that row */
@@ -2128,13 +2128,13 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
     return result;
 }
 
-static ray_t* rfl_left_join(ray_t** args, int64_t n)  { return join_impl(args, n, 1); }
-static ray_t* rfl_inner_join(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
+ray_t* ray_left_join(ray_t** args, int64_t n)  { return join_impl(args, n, 1); }
+ray_t* ray_inner_join(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
 
 /* (window-join t1 t2 [eq-keys] time-col)
  * ASOF join: for each left row, find closest right row with time <= left.time
  * within the same equality partition. */
-static ray_t* rfl_window_join(ray_t** args, int64_t n) {
+ray_t* ray_window_join(ray_t** args, int64_t n) {
     if (n < 4) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
     ray_t* left_tbl  = args[0];
@@ -2232,7 +2232,7 @@ void ray_lang_print(FILE* fp, ray_t* val) {
 }
 
 /* (println val1 val2 ...) — print values to stdout, newline at end */
-static ray_t* rfl_println(ray_t** args, int64_t n) {
+ray_t* ray_println(ray_t** args, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) fputc(' ', stdout);
         ray_lang_print(stdout, args[i]);
@@ -2243,7 +2243,7 @@ static ray_t* rfl_println(ray_t** args, int64_t n) {
 }
 
 /* (read-csv path) — read CSV file, return RAY_TABLE */
-static ray_t* rfl_read_csv(ray_t** args, int64_t n) {
+ray_t* ray_read_csv_fn(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* path_obj = args[0];
     const char* path = NULL;
@@ -2258,7 +2258,7 @@ static ray_t* rfl_read_csv(ray_t** args, int64_t n) {
 }
 
 /* (write-csv table path) — write table to CSV file */
-static ray_t* rfl_write_csv(ray_t** args, int64_t n) {
+ray_t* ray_write_csv_fn(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* tbl = args[0];
     ray_t* path_obj = args[1];
@@ -2275,7 +2275,7 @@ static ray_t* rfl_write_csv(ray_t** args, int64_t n) {
 }
 
 /* (as 'TypeName value) — type cast */
-static ray_t* rfl_cast(ray_t* type_sym, ray_t* val) {
+ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     if (type_sym->type != RAY_ATOM_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* s = ray_sym_str(type_sym->i64);
     if (!s) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -2336,12 +2336,12 @@ static ray_t* rfl_cast(ray_t* type_sym, ray_t* val) {
 }
 
 /* (type val) — return the type code of a value */
-static ray_t* rfl_type(ray_t* val) {
+ray_t* ray_type_fn(ray_t* val) {
     return make_i64(val->type);
 }
 
 /* (read path) — read a file's contents as a string */
-static ray_t* rfl_read_file(ray_t* path_obj) {
+ray_t* ray_read_file(ray_t* path_obj) {
     if (path_obj->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = ray_str_ptr(path_obj);
     if (!path) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -2364,7 +2364,7 @@ static ray_t* rfl_read_file(ray_t* path_obj) {
 }
 
 /* (write path content) — write string to a file */
-static ray_t* rfl_write_file(ray_t* path_obj, ray_t* content) {
+ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
     if (path_obj->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (content->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = ray_str_ptr(path_obj);
@@ -3077,21 +3077,21 @@ static void register_vary(const char* name, uint8_t attrs, ray_vary_fn fn) {
 }
 
 static void ray_register_builtins(void) {
-    register_binary("+",   RAY_FN_ATOMIC, rfl_add);
-    register_binary("-",   RAY_FN_ATOMIC, rfl_sub);
-    register_binary("*",   RAY_FN_ATOMIC, rfl_mul);
-    register_binary("/",   RAY_FN_ATOMIC, rfl_div);
-    register_binary("%",   RAY_FN_ATOMIC, rfl_mod);
-    register_binary(">",   RAY_FN_ATOMIC, rfl_gt);
-    register_binary("<",   RAY_FN_ATOMIC, rfl_lt);
-    register_binary(">=",  RAY_FN_ATOMIC, rfl_gte);
-    register_binary("<=",  RAY_FN_ATOMIC, rfl_lte);
-    register_binary("==",  RAY_FN_ATOMIC, rfl_eq);
-    register_binary("!=",  RAY_FN_ATOMIC, rfl_neq);
-    register_binary("and", RAY_FN_NONE,   rfl_and);
-    register_binary("or",  RAY_FN_NONE,   rfl_or);
-    register_unary("not",  RAY_FN_NONE,   rfl_not);
-    register_unary("neg",  RAY_FN_ATOMIC, rfl_neg);
+    register_binary("+",   RAY_FN_ATOMIC, ray_add_fn);
+    register_binary("-",   RAY_FN_ATOMIC, ray_sub_fn);
+    register_binary("*",   RAY_FN_ATOMIC, ray_mul_fn);
+    register_binary("/",   RAY_FN_ATOMIC, ray_div_fn);
+    register_binary("%",   RAY_FN_ATOMIC, ray_mod_fn);
+    register_binary(">",   RAY_FN_ATOMIC, ray_gt_fn);
+    register_binary("<",   RAY_FN_ATOMIC, ray_lt_fn);
+    register_binary(">=",  RAY_FN_ATOMIC, ray_gte);
+    register_binary("<=",  RAY_FN_ATOMIC, ray_lte);
+    register_binary("==",  RAY_FN_ATOMIC, ray_eq_fn);
+    register_binary("!=",  RAY_FN_ATOMIC, ray_neq);
+    register_binary("and", RAY_FN_NONE,   ray_and_fn);
+    register_binary("or",  RAY_FN_NONE,   ray_or_fn);
+    register_unary("not",  RAY_FN_NONE,   ray_not_fn);
+    register_unary("neg",  RAY_FN_ATOMIC, ray_neg_fn);
 
     /* Special forms */
     register_binary("set", RAY_FN_SPECIAL_FORM, rfl_set);
@@ -3101,66 +3101,66 @@ static void ray_register_builtins(void) {
     register_vary("fn",    RAY_FN_SPECIAL_FORM, rfl_fn);
 
     /* Aggregation builtins */
-    register_unary("sum",   RAY_FN_AGGR, rfl_sum);
-    register_unary("count", RAY_FN_AGGR, rfl_count);
-    register_unary("avg",   RAY_FN_AGGR, rfl_avg);
-    register_unary("min",   RAY_FN_AGGR, rfl_min);
-    register_unary("max",   RAY_FN_AGGR, rfl_max);
-    register_unary("first", RAY_FN_NONE, rfl_first);
-    register_unary("last",  RAY_FN_NONE, rfl_last);
-    register_unary("med",   RAY_FN_AGGR, rfl_med);
-    register_unary("dev",   RAY_FN_AGGR, rfl_dev);
+    register_unary("sum",   RAY_FN_AGGR, ray_sum_fn);
+    register_unary("count", RAY_FN_AGGR, ray_count_fn);
+    register_unary("avg",   RAY_FN_AGGR, ray_avg_fn);
+    register_unary("min",   RAY_FN_AGGR, ray_min);
+    register_unary("max",   RAY_FN_AGGR, ray_max);
+    register_unary("first", RAY_FN_NONE, ray_first_fn);
+    register_unary("last",  RAY_FN_NONE, ray_last_fn);
+    register_unary("med",   RAY_FN_AGGR, ray_med);
+    register_unary("dev",   RAY_FN_AGGR, ray_dev);
 
     /* Error handling */
     register_unary("raise", RAY_FN_NONE, rfl_raise);
     register_binary("try",  RAY_FN_SPECIAL_FORM, rfl_try);
 
     /* Higher-order functions */
-    register_vary("map",    RAY_FN_NONE, rfl_map);
-    register_vary("pmap",   RAY_FN_NONE, rfl_pmap);
-    register_vary("fold",   RAY_FN_NONE, rfl_fold);
-    register_vary("scan",   RAY_FN_NONE, rfl_scan);
-    register_binary("filter", RAY_FN_NONE, rfl_filter);
-    register_vary("apply",  RAY_FN_NONE, rfl_apply);
+    register_vary("map",    RAY_FN_NONE, ray_map);
+    register_vary("pmap",   RAY_FN_NONE, ray_pmap);
+    register_vary("fold",   RAY_FN_NONE, ray_fold);
+    register_vary("scan",   RAY_FN_NONE, ray_scan_fn);
+    register_binary("filter", RAY_FN_NONE, ray_filter_fn);
+    register_vary("apply",  RAY_FN_NONE, ray_apply);
 
     /* Collection operations */
-    register_unary("distinct", RAY_FN_NONE, rfl_distinct);
-    register_binary("in",      RAY_FN_NONE, rfl_in);
-    register_binary("except",  RAY_FN_NONE, rfl_except);
-    register_binary("union",   RAY_FN_NONE, rfl_union);
-    register_binary("sect",    RAY_FN_NONE, rfl_sect);
-    register_binary("take",    RAY_FN_NONE, rfl_take);
-    register_binary("at",      RAY_FN_NONE, rfl_at);
-    register_binary("find",    RAY_FN_NONE, rfl_find);
-    register_unary("reverse",  RAY_FN_NONE, rfl_reverse);
-    register_unary("til",      RAY_FN_NONE, rfl_til);
+    register_unary("distinct", RAY_FN_NONE, ray_distinct_fn);
+    register_binary("in",      RAY_FN_NONE, ray_in);
+    register_binary("except",  RAY_FN_NONE, ray_except);
+    register_binary("union",   RAY_FN_NONE, ray_union);
+    register_binary("sect",    RAY_FN_NONE, ray_sect);
+    register_binary("take",    RAY_FN_NONE, ray_take);
+    register_binary("at",      RAY_FN_NONE, ray_at);
+    register_binary("find",    RAY_FN_NONE, ray_find);
+    register_unary("reverse",  RAY_FN_NONE, ray_reverse);
+    register_unary("til",      RAY_FN_NONE, ray_til);
 
     /* Table operations */
-    register_vary("list",      RAY_FN_NONE, rfl_list);
-    register_binary("table",   RAY_FN_NONE, rfl_table);
-    register_unary("key",      RAY_FN_NONE, rfl_key);
-    register_unary("value",    RAY_FN_NONE, rfl_value);
+    register_vary("list",      RAY_FN_NONE, ray_list);
+    register_binary("table",   RAY_FN_NONE, ray_table);
+    register_unary("key",      RAY_FN_NONE, ray_key);
+    register_unary("value",    RAY_FN_NONE, ray_value);
 
     /* Query operations */
-    register_vary("select",    RAY_FN_SPECIAL_FORM, rfl_select);
-    register_vary("update",    RAY_FN_SPECIAL_FORM, rfl_update);
-    register_vary("insert",    RAY_FN_NONE, rfl_insert);
-    register_vary("upsert",    RAY_FN_NONE, rfl_upsert);
-    register_binary("xbar",    RAY_FN_ATOMIC, rfl_xbar);
+    register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
+    register_vary("update",    RAY_FN_SPECIAL_FORM, ray_update);
+    register_vary("insert",    RAY_FN_NONE, ray_insert);
+    register_vary("upsert",    RAY_FN_NONE, ray_upsert);
+    register_binary("xbar",    RAY_FN_ATOMIC, ray_xbar);
 
     /* Join operations */
-    register_vary("left-join",   RAY_FN_NONE, rfl_left_join);
-    register_vary("inner-join",  RAY_FN_NONE, rfl_inner_join);
-    register_vary("window-join", RAY_FN_NONE, rfl_window_join);
+    register_vary("left-join",   RAY_FN_NONE, ray_left_join);
+    register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
+    register_vary("window-join", RAY_FN_NONE, ray_window_join);
 
     /* I/O builtins */
-    register_vary("println",    RAY_FN_NONE, rfl_println);
-    register_vary("read-csv",   RAY_FN_NONE, rfl_read_csv);
-    register_vary("write-csv",  RAY_FN_NONE, rfl_write_csv);
-    register_binary("as",       RAY_FN_NONE, rfl_cast);
-    register_unary("type",      RAY_FN_NONE, rfl_type);
-    register_unary("read",      RAY_FN_NONE, rfl_read_file);
-    register_binary("write",    RAY_FN_NONE, rfl_write_file);
+    register_vary("println",    RAY_FN_NONE, ray_println);
+    register_vary("read-csv",   RAY_FN_NONE, ray_read_csv_fn);
+    register_vary("write-csv",  RAY_FN_NONE, ray_write_csv_fn);
+    register_binary("as",       RAY_FN_NONE, ray_cast_fn);
+    register_unary("type",      RAY_FN_NONE, ray_type_fn);
+    register_unary("read",      RAY_FN_NONE, ray_read_file);
+    register_binary("write",    RAY_FN_NONE, ray_write_file);
 }
 
 /* ══════════════════════════════════════════
