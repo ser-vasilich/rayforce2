@@ -1288,6 +1288,118 @@ static MunitResult test_env_lookup_prefix(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Verb engine integration tests ---- */
+
+static MunitResult test_verb_sum_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(sum (til 100))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 4950);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_avg_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(avg (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_double_equal(result->f64, 4.5, 4);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_min_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(min (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 0);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_max_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(max (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 9);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_count_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(count (til 100))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 100);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_first_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(first (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 0);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_last_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(last (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 9);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_dev_til(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(dev (til 10))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_double_equal(result->f64, 2.8722813232690143, 4);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_if_sum(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(if (> (sum (til 10)) 0) 1 0)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 1);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
+static MunitResult test_verb_sum_var(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str("(set x (til 10)) (sum x)");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->i64, ==, 45);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
 static MunitTest lang_tests[] = {
     { "/fn_unary",   test_fn_unary,   lang_setup, lang_teardown, 0, NULL },
     { "/fn_binary",  test_fn_binary,  lang_setup, lang_teardown, 0, NULL },
@@ -1372,6 +1484,16 @@ static MunitTest lang_tests[] = {
     { "/eval/as_cast",         test_eval_as_cast,         lang_setup, lang_teardown, 0, NULL },
     { "/eval/type",            test_eval_type,            lang_setup, lang_teardown, 0, NULL },
     { "/env/lookup_prefix",    test_env_lookup_prefix,    lang_setup, lang_teardown, 0, NULL },
+    { "/verb/sum_til",         test_verb_sum_til,         lang_setup, lang_teardown, 0, NULL },
+    { "/verb/avg_til",         test_verb_avg_til,         lang_setup, lang_teardown, 0, NULL },
+    { "/verb/min_til",         test_verb_min_til,         lang_setup, lang_teardown, 0, NULL },
+    { "/verb/max_til",         test_verb_max_til,         lang_setup, lang_teardown, 0, NULL },
+    { "/verb/count_til",       test_verb_count_til,       lang_setup, lang_teardown, 0, NULL },
+    { "/verb/first_til",       test_verb_first_til,       lang_setup, lang_teardown, 0, NULL },
+    { "/verb/last_til",        test_verb_last_til,        lang_setup, lang_teardown, 0, NULL },
+    { "/verb/dev_til",         test_verb_dev_til,         lang_setup, lang_teardown, 0, NULL },
+    { "/verb/if_sum",          test_verb_if_sum,          lang_setup, lang_teardown, 0, NULL },
+    { "/verb/sum_var",         test_verb_sum_var,         lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
