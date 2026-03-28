@@ -21,30 +21,30 @@
  *   SOFTWARE.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* Element sizes indexed by positive type tag. */
-const uint8_t td_type_sizes[TD_TYPE_COUNT] = {
-    /* [TD_LIST]      =  0 */ 8,   /* pointer-sized (td_t*) */
-    /* [TD_BOOL]      =  1 */ 1,
-    /* [TD_U8]        =  2 */ 1,
-    /* [TD_CHAR]      =  3 */ 1,
-    /* [TD_I16]       =  4 */ 2,
-    /* [TD_I32]       =  5 */ 4,
-    /* [TD_I64]       =  6 */ 8,
-    /* [TD_F64]       =  7 */ 8,
-    /* [TD_F32]       =  8 */ 4,
-    /* [TD_DATE]      =  9 */ 4,
-    /* [TD_TIME]      = 10 */ 4,
-    /* [TD_TIMESTAMP] = 11 */ 8,
-    /* [TD_GUID]      = 12 */ 16,
-    /* [TD_TABLE]     = 13 */ 8,   /* pointer-sized (td_t*) */
+const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {
+    /* [RAY_LIST]      =  0 */ 8,   /* pointer-sized (ray_t*) */
+    /* [RAY_BOOL]      =  1 */ 1,
+    /* [RAY_U8]        =  2 */ 1,
+    /* [RAY_CHAR]      =  3 */ 1,
+    /* [RAY_I16]       =  4 */ 2,
+    /* [RAY_I32]       =  5 */ 4,
+    /* [RAY_I64]       =  6 */ 8,
+    /* [RAY_F64]       =  7 */ 8,
+    /* [RAY_F32]       =  8 */ 4,
+    /* [RAY_DATE]      =  9 */ 4,
+    /* [RAY_TIME]      = 10 */ 4,
+    /* [RAY_TIMESTAMP] = 11 */ 8,
+    /* [RAY_GUID]      = 12 */ 16,
+    /* [RAY_TABLE]     = 13 */ 8,   /* pointer-sized (ray_t*) */
     /*                = 14 */ 0,
     /*                = 15 */ 0,
-    /* [TD_SEL]       = 16 */ 0,   /* variable-size layout, no elem_size */
+    /* [RAY_SEL]       = 16 */ 0,   /* variable-size layout, no elem_size */
     /*                = 17 */ 0,
     /*                = 18 */ 0,
     /*                = 19 */ 0,
-    /* [TD_SYM]       = 20 */ 8,   /* W64 default; narrow widths use td_sym_elem_size */
-    /* [TD_STR]       = 21 */ 16,  /* sizeof(td_str_t) */
+    /* [RAY_SYM]       = 20 */ 8,   /* W64 default; narrow widths use ray_sym_elem_size */
+    /* [RAY_STR]       = 21 */ 16,  /* sizeof(ray_str_t) */
 };

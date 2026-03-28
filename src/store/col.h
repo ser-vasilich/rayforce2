@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_COL_H
-#define TD_COL_H
+#ifndef RAY_COL_H
+#define RAY_COL_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_COL_H */
+#endif /* RAY_COL_H */

@@ -30,16 +30,16 @@
 static MunitResult test_sys_alloc_free(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    void* p = td_sys_alloc(128);
+    void* p = ray_sys_alloc(128);
     munit_assert_ptr_not_null(p);
 
     /* Should be writable */
     memset(p, 0x42, 128);
 
-    td_sys_free(p);
+    ray_sys_free(p);
 
     /* Free NULL should be safe */
-    td_sys_free(NULL);
+    ray_sys_free(NULL);
 
     return MUNIT_OK;
 }
@@ -50,12 +50,12 @@ static MunitResult test_sys_realloc(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* realloc(NULL, n) should behave like alloc */
-    void* p = td_sys_realloc(NULL, 64);
+    void* p = ray_sys_realloc(NULL, 64);
     munit_assert_ptr_not_null(p);
     memset(p, 0xAA, 64);
 
     /* Grow the allocation */
-    void* p2 = td_sys_realloc(p, 8192);
+    void* p2 = ray_sys_realloc(p, 8192);
     munit_assert_ptr_not_null(p2);
 
     /* First 64 bytes should be preserved */
@@ -64,12 +64,12 @@ static MunitResult test_sys_realloc(const void* params, void* fixture) {
         munit_assert_uint(bytes[i], ==, 0xAA);
     }
 
-    td_sys_free(p2);
+    ray_sys_free(p2);
 
     /* realloc(ptr, 0) should free and return NULL */
-    void* p3 = td_sys_alloc(32);
+    void* p3 = ray_sys_alloc(32);
     munit_assert_ptr_not_null(p3);
-    void* p4 = td_sys_realloc(p3, 0);
+    void* p4 = ray_sys_realloc(p3, 0);
     munit_assert_null(p4);
 
     return MUNIT_OK;
@@ -80,19 +80,19 @@ static MunitResult test_sys_realloc(const void* params, void* fixture) {
 static MunitResult test_sys_strdup(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    char* dup = td_sys_strdup("hello");
+    char* dup = ray_sys_strdup("hello");
     munit_assert_ptr_not_null(dup);
     munit_assert_string_equal(dup, "hello");
-    td_sys_free(dup);
+    ray_sys_free(dup);
 
     /* NULL input should return NULL */
-    munit_assert_null(td_sys_strdup(NULL));
+    munit_assert_null(ray_sys_strdup(NULL));
 
     /* Empty string */
-    char* empty = td_sys_strdup("");
+    char* empty = ray_sys_strdup("");
     munit_assert_ptr_not_null(empty);
     munit_assert_string_equal(empty, "");
-    td_sys_free(empty);
+    ray_sys_free(empty);
 
     return MUNIT_OK;
 }
@@ -103,20 +103,20 @@ static MunitResult test_sys_get_stat(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     int64_t current_before, peak_before;
-    td_sys_get_stat(&current_before, &peak_before);
+    ray_sys_get_stat(&current_before, &peak_before);
 
-    void* p = td_sys_alloc(4096);
+    void* p = ray_sys_alloc(4096);
     munit_assert_ptr_not_null(p);
 
     int64_t current_during, peak_during;
-    td_sys_get_stat(&current_during, &peak_during);
+    ray_sys_get_stat(&current_during, &peak_during);
     munit_assert_int(current_during, >, current_before);
     munit_assert_int(peak_during, >=, current_during);
 
-    td_sys_free(p);
+    ray_sys_free(p);
 
     int64_t current_after, peak_after;
-    td_sys_get_stat(&current_after, &peak_after);
+    ray_sys_get_stat(&current_after, &peak_after);
     munit_assert_int(current_after, <, current_during);
     /* Peak should not decrease */
     munit_assert_int(peak_after, >=, peak_during);

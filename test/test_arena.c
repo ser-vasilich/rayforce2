@@ -22,239 +22,239 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include "mem/arena.h"
 #include <string.h>
 #include <stdio.h>
 
 static MunitResult test_arena_release_noop(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
     /* Allocate a block and mark it as arena-owned */
-    td_t* v = td_alloc(0);
+    ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    v->attrs |= TD_ATTR_ARENA;
+    v->attrs |= RAY_ATTR_ARENA;
 
-    /* td_release should be a no-op — block should not be freed */
-    td_release(v);
+    /* ray_release should be a no-op — block should not be freed */
+    ray_release(v);
 
-    /* If td_release freed it, accessing v->attrs would be UB / ASan error.
+    /* If ray_release freed it, accessing v->attrs would be UB / ASan error.
      * Since it's a no-op, we can still read it. */
-    munit_assert_true(v->attrs & TD_ATTR_ARENA);
+    munit_assert_true(v->attrs & RAY_ATTR_ARENA);
 
     /* Clean up: remove flag and release properly */
-    v->attrs &= (uint8_t)~TD_ATTR_ARENA;
-    td_release(v);
+    v->attrs &= (uint8_t)~RAY_ATTR_ARENA;
+    ray_release(v);
 
-    td_heap_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_alloc_basic(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_arena_t* arena = td_arena_new(4096);
+    ray_arena_t* arena = ray_arena_new(4096);
     munit_assert_ptr_not_null(arena);
 
     /* Allocate a small block (header only, 0 data bytes) */
-    td_t* v1 = td_arena_alloc(arena, 0);
+    ray_t* v1 = ray_arena_alloc(arena, 0);
     munit_assert_ptr_not_null(v1);
-    munit_assert_false(TD_IS_ERR(v1));
+    munit_assert_false(RAY_IS_ERR(v1));
     /* Must be 32-byte aligned */
     munit_assert_size((uintptr_t)v1 % 32, ==, 0);
     /* Must have arena flag */
-    munit_assert_true(v1->attrs & TD_ATTR_ARENA);
+    munit_assert_true(v1->attrs & RAY_ATTR_ARENA);
     /* Must have rc=1 */
     munit_assert_uint(v1->rc, ==, 1);
 
     /* Allocate a block with data */
-    td_t* v2 = td_arena_alloc(arena, 100);
+    ray_t* v2 = ray_arena_alloc(arena, 100);
     munit_assert_ptr_not_null(v2);
     munit_assert_size((uintptr_t)v2 % 32, ==, 0);
     /* v2 should be different from v1 */
     munit_assert_true(v1 != v2);
 
-    /* td_data(v2) should be writable for 100 bytes */
-    memset(td_data(v2), 0xAB, 100);
-    munit_assert_uint(((uint8_t*)td_data(v2))[0], ==, 0xAB);
-    munit_assert_uint(((uint8_t*)td_data(v2))[99], ==, 0xAB);
+    /* ray_data(v2) should be writable for 100 bytes */
+    memset(ray_data(v2), 0xAB, 100);
+    munit_assert_uint(((uint8_t*)ray_data(v2))[0], ==, 0xAB);
+    munit_assert_uint(((uint8_t*)ray_data(v2))[99], ==, 0xAB);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_grows_across_chunks(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
     /* Tiny chunk size to force multiple chunks */
-    td_arena_t* arena = td_arena_new(256);
+    ray_arena_t* arena = ray_arena_new(256);
     munit_assert_ptr_not_null(arena);
 
     /* Allocate many blocks — should span multiple chunks */
     for (int i = 0; i < 100; i++) {
-        td_t* v = td_arena_alloc(arena, 64);
+        ray_t* v = ray_arena_alloc(arena, 64);
         munit_assert_ptr_not_null(v);
-        munit_assert_false(TD_IS_ERR(v));
-        munit_assert_true(v->attrs & TD_ATTR_ARENA);
+        munit_assert_false(RAY_IS_ERR(v));
+        munit_assert_true(v->attrs & RAY_ATTR_ARENA);
     }
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_reset(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_arena_t* arena = td_arena_new(4096);
+    ray_arena_t* arena = ray_arena_new(4096);
 
-    td_t* v1 = td_arena_alloc(arena, 0);
+    ray_t* v1 = ray_arena_alloc(arena, 0);
     munit_assert_ptr_not_null(v1);
 
-    td_arena_reset(arena);
+    ray_arena_reset(arena);
 
     /* After reset, arena should be usable with a fresh chunk */
-    td_t* v2 = td_arena_alloc(arena, 0);
+    ray_t* v2 = ray_arena_alloc(arena, 0);
     munit_assert_ptr_not_null(v2);
-    munit_assert_true(v2->attrs & TD_ATTR_ARENA);
+    munit_assert_true(v2->attrs & RAY_ATTR_ARENA);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_oversize(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
     /* Chunk size 256, but request 1024 bytes of data */
-    td_arena_t* arena = td_arena_new(256);
+    ray_arena_t* arena = ray_arena_new(256);
 
-    td_t* v = td_arena_alloc(arena, 1024);
+    ray_t* v = ray_arena_alloc(arena, 1024);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
-    munit_assert_true(v->attrs & TD_ATTR_ARENA);
-    memset(td_data(v), 0xCD, 1024);
+    munit_assert_false(RAY_IS_ERR(v));
+    munit_assert_true(v->attrs & RAY_ATTR_ARENA);
+    memset(ray_data(v), 0xCD, 1024);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_destroy_null(const void* params, void* data) {
     (void)params; (void)data;
     /* Must not crash */
-    td_arena_destroy(NULL);
+    ray_arena_destroy(NULL);
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_reset_multi_chunk(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
     /* Tiny chunk to force multiple chunks */
-    td_arena_t* arena = td_arena_new(256);
+    ray_arena_t* arena = ray_arena_new(256);
     munit_assert_ptr_not_null(arena);
 
     /* Allocate enough to span several chunks */
     for (int i = 0; i < 50; i++) {
-        td_t* v = td_arena_alloc(arena, 64);
+        ray_t* v = ray_arena_alloc(arena, 64);
         munit_assert_ptr_not_null(v);
     }
 
     /* Reset should free extra chunks */
-    td_arena_reset(arena);
+    ray_arena_reset(arena);
 
     /* Arena should still be usable after reset */
-    td_t* v = td_arena_alloc(arena, 64);
+    ray_t* v = ray_arena_alloc(arena, 64);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(v->attrs & TD_ATTR_ARENA);
-    memset(td_data(v), 0xAB, 64);
-    munit_assert_uint(((uint8_t*)td_data(v))[0], ==, 0xAB);
+    munit_assert_true(v->attrs & RAY_ATTR_ARENA);
+    memset(ray_data(v), 0xAB, 64);
+    munit_assert_uint(((uint8_t*)ray_data(v))[0], ==, 0xAB);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_retain_noop(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_arena_t* arena = td_arena_new(4096);
-    td_t* v = td_arena_alloc(arena, 0);
+    ray_arena_t* arena = ray_arena_new(4096);
+    ray_t* v = ray_arena_alloc(arena, 0);
     munit_assert_ptr_not_null(v);
     munit_assert_uint(v->rc, ==, 1);
 
-    /* td_retain should be a no-op for arena blocks */
-    td_retain(v);
+    /* ray_retain should be a no-op for arena blocks */
+    ray_retain(v);
     munit_assert_uint(v->rc, ==, 1);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_cow_noop(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_arena_t* arena = td_arena_new(4096);
-    td_t* v = td_arena_alloc(arena, 0);
+    ray_arena_t* arena = ray_arena_new(4096);
+    ray_t* v = ray_arena_alloc(arena, 0);
     munit_assert_ptr_not_null(v);
 
-    /* td_cow should return same pointer for arena blocks */
-    td_t* cow_result = td_cow(v);
+    /* ray_cow should return same pointer for arena blocks */
+    ray_t* cow_result = ray_cow(v);
     munit_assert_ptr_equal(v, cow_result);
 
-    td_arena_destroy(arena);
-    td_heap_destroy();
+    ray_arena_destroy(arena);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_arena_sym_intern(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     /* Intern many strings — should use arena, not buddy allocator */
     for (int i = 0; i < 10000; i++) {
         char buf[32];
         int len = snprintf(buf, sizeof(buf), "sym_%d", i);
-        int64_t id = td_sym_intern(buf, (size_t)len);
+        int64_t id = ray_sym_intern(buf, (size_t)len);
         munit_assert_int(id, >=, 0);
     }
 
     /* Verify strings are accessible */
-    td_t* s = td_sym_str(0);
+    ray_t* s = ray_sym_str(0);
     munit_assert_ptr_not_null(s);
-    munit_assert_true(s->attrs & TD_ATTR_ARENA);
+    munit_assert_true(s->attrs & RAY_ATTR_ARENA);
 
     /* Verify roundtrip */
-    int64_t id = td_sym_find("sym_999", 7);
+    int64_t id = ray_sym_find("sym_999", 7);
     munit_assert_int(id, >=, 0);
-    td_t* found = td_sym_str(id);
-    munit_assert_int(td_str_len(found), ==, 7);
-    munit_assert_memory_equal(7, td_str_ptr(found), "sym_999");
+    ray_t* found = ray_sym_str(id);
+    munit_assert_int(ray_str_len(found), ==, 7);
+    munit_assert_memory_equal(7, ray_str_ptr(found), "sym_999");
 
     /* Verify long strings (>=7 bytes) use the arena CHAR vector path */
     const char* long_str = "this_is_a_long_symbol_name_for_testing";
     size_t long_len = strlen(long_str);
-    int64_t long_id = td_sym_intern(long_str, long_len);
+    int64_t long_id = ray_sym_intern(long_str, long_len);
     munit_assert_int(long_id, >=, 0);
-    td_t* long_s = td_sym_str(long_id);
+    ray_t* long_s = ray_sym_str(long_id);
     munit_assert_ptr_not_null(long_s);
-    munit_assert_true(long_s->attrs & TD_ATTR_ARENA);
-    munit_assert_int(td_str_len(long_s), ==, (int64_t)long_len);
-    munit_assert_memory_equal(long_len, td_str_ptr(long_s), long_str);
+    munit_assert_true(long_s->attrs & RAY_ATTR_ARENA);
+    munit_assert_int(ray_str_len(long_s), ==, (int64_t)long_len);
+    munit_assert_memory_equal(long_len, ray_str_ptr(long_s), long_str);
 
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 

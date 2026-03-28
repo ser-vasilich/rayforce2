@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Teide" width="360">
+  <img src="docs/logo.svg" alt="Rayforce" width="360">
 </p>
 
 <p align="center">
@@ -7,21 +7,21 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TeideDB/teide/actions/workflows/ci.yml"><img src="https://github.com/TeideDB/teide/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/RayforceDB/rayforce/actions/workflows/ci.yml"><img src="https://github.com/RayforceDB/rayforce/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-  <a href="include/teide/td.h"><img src="https://img.shields.io/badge/header-td.h-informational" alt="Single Header"></a>
+  <a href="include/rayforce.h"><img src="https://img.shields.io/badge/header-rayforce.h-informational" alt="Single Header"></a>
 </p>
 
 ---
 
-Teide is an embeddable columnar compute engine where analytics operations and
+Rayforce is an embeddable columnar compute engine where analytics operations and
 graph traversals live in the same operation DAG, pass through a 10-pass
 optimizer, and execute as fused morsel-driven bytecode. Pure C17. Zero
 dependencies. One header.
 
 ## Capabilities
 
-|                              | Teide | DuckDB | Polars |
+|                              | Rayforce | DuckDB | Polars |
 |------------------------------|:-----:|:------:|:------:|
 | Native graph engine (CSR)    |   ✓   |        |        |
 | Worst-case optimal joins     |   ✓   |        |        |
@@ -35,7 +35,7 @@ dependencies. One header.
 | Custom memory allocator      |   ✓   |   ✓    |        |
 | Window functions & ASOF join |   ✓   |   ✓    |   ✓    |
 
-Teide is not a SQL database. It is designed for workloads that mix analytics
+Rayforce is not a SQL database. It is designed for workloads that mix analytics
 with graph traversal in a single fused pipeline — without stitching tools
 together.
 
@@ -60,10 +60,10 @@ Thread pool dispatches morsels in parallel.
 ## Memory Model
 
 <picture>
-  <img src="docs/memory.svg" alt="Memory Model: Heap with buddy allocator, slab cache, thread-local arenas, td_t block layout" width="600">
+  <img src="docs/memory.svg" alt="Memory Model: Heap with buddy allocator, slab cache, thread-local arenas, ray_t block layout" width="600">
 </picture>
 
-Everything is a `td_t` — a 32-byte block header. Atoms, vectors, lists,
+Everything is a `ray_t` — a 32-byte block header. Atoms, vectors, lists,
 tables, selection bitmaps. Buddy allocator with slab cache handles ~90% of
 allocations in O(1). Thread-local arenas enable lock-free allocation. COW ref
 counting gives zero-copy slices and shared columns.
@@ -73,32 +73,32 @@ counting gives zero-copy slices and shared columns.
 ### Filter + group + sum
 
 ```c
-#include <teide/td.h>
+#include <rayforce.h>
 
 int main(void) {
-    td_heap_init();
-    td_sym_init();
+    ray_heap_init();
+    ray_sym_init();
 
-    td_t* trades = td_read_csv("trades.csv");
+    ray_t* trades = ray_read_csv("trades.csv");
 
     /* Build the operation DAG — nothing executes yet */
-    td_graph_t* g = td_graph_new(trades);
+    ray_graph_t* g = ray_graph_new(trades);
 
     /* Filter: keep only rows where flag == 0 */
-    td_op_t* flag = td_scan(g, "flag");
-    td_op_t* pred = td_eq(g, flag, td_const_i64(g, 0));
+    ray_op_t* flag = ray_scan(g, "flag");
+    ray_op_t* pred = ray_eq(g, flag, ray_const_i64(g, 0));
 
-    td_op_t* region = td_filter(g, td_scan(g, "region"), pred);
-    td_op_t* amount = td_filter(g, td_scan(g, "amount"), pred);
+    ray_op_t* region = ray_filter(g, ray_scan(g, "region"), pred);
+    ray_op_t* amount = ray_filter(g, ray_scan(g, "amount"), pred);
 
     /* Group by region, sum amounts */
-    td_op_t* keys[]    = { region };
+    ray_op_t* keys[]    = { region };
     uint16_t agg_ops[] = { OP_SUM };
-    td_op_t* agg_ins[] = { amount };
-    td_op_t* grp = td_group(g, keys, 1, agg_ops, agg_ins, 1);
+    ray_op_t* agg_ins[] = { amount };
+    ray_op_t* grp = ray_group(g, keys, 1, agg_ops, agg_ins, 1);
 
     /* Optimize (10 passes) and execute */
-    td_t* result = td_execute(g, td_optimize(g, grp));
+    ray_t* result = ray_execute(g, ray_optimize(g, grp));
 
     /* result:
      *   region | sum_amount
@@ -110,11 +110,11 @@ int main(void) {
      *        4 |    167217
      */
 
-    if (result && !TD_IS_ERR(result)) td_release(result);
-    td_graph_free(g);
-    td_release(trades);
-    td_sym_destroy();
-    td_heap_destroy();
+    if (result && !RAY_IS_ERR(result)) ray_release(result);
+    ray_graph_free(g);
+    ray_release(trades);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return 0;
 }
 ```
@@ -122,35 +122,35 @@ int main(void) {
 ### Graph traversal: BFS from a start node
 
 ```c
-#include <teide/td.h>
+#include <rayforce.h>
 
 int main(void) {
-    td_heap_init();
-    td_sym_init();
+    ray_heap_init();
+    ray_sym_init();
 
     /* Build a directed graph: 0→1, 0→2, 1→2, 1→3, 2→3, 3→0 */
-    td_t* src = td_vec_from_raw(TD_I64, (int64_t[]){0,0,1,1,2,3}, 6);
-    td_t* dst = td_vec_from_raw(TD_I64, (int64_t[]){1,2,2,3,3,0}, 6);
+    ray_t* src = ray_vec_from_raw(RAY_I64, (int64_t[]){0,0,1,1,2,3}, 6);
+    ray_t* dst = ray_vec_from_raw(RAY_I64, (int64_t[]){1,2,2,3,3,0}, 6);
 
-    td_t* edges = td_table_new(2);
-    edges = td_table_add_col(edges, td_sym_intern("src", 3), src);
-    edges = td_table_add_col(edges, td_sym_intern("dst", 3), dst);
-    td_release(src);
-    td_release(dst);
+    ray_t* edges = ray_table_new(2);
+    edges = ray_table_add_col(edges, ray_sym_intern("src", 3), src);
+    edges = ray_table_add_col(edges, ray_sym_intern("dst", 3), dst);
+    ray_release(src);
+    ray_release(dst);
 
     /* Double-indexed CSR (forward + reverse) */
-    td_rel_t* rel = td_rel_from_edges(edges, "src", "dst", 4, 4, true);
+    ray_rel_t* rel = ray_rel_from_edges(edges, "src", "dst", 4, 4, true);
 
     /* Start at node 0, BFS 1..3 hops forward */
-    td_t* start = td_vec_from_raw(TD_I64, (int64_t[]){0}, 1);
-    td_t* nodes = td_table_new(1);
-    nodes = td_table_add_col(nodes, td_sym_intern("id", 2), start);
-    td_release(start);
+    ray_t* start = ray_vec_from_raw(RAY_I64, (int64_t[]){0}, 1);
+    ray_t* nodes = ray_table_new(1);
+    nodes = ray_table_add_col(nodes, ray_sym_intern("id", 2), start);
+    ray_release(start);
 
-    td_graph_t* g = td_graph_new(nodes);
-    td_op_t* reach = td_var_expand(g, td_scan(g, "id"), rel, 0, 1, 3, false);
+    ray_graph_t* g = ray_graph_new(nodes);
+    ray_op_t* reach = ray_var_expand(g, ray_scan(g, "id"), rel, 0, 1, 3, false);
 
-    td_t* result = td_execute(g, td_optimize(g, reach));
+    ray_t* result = ray_execute(g, ray_optimize(g, reach));
 
     /* result (BFS from node 0, depth 1..3):
      *   src | dst | depth
@@ -160,13 +160,13 @@ int main(void) {
      *     0 |   3 |     2
      */
 
-    if (result && !TD_IS_ERR(result)) td_release(result);
-    td_graph_free(g);
-    td_rel_free(rel);
-    td_release(edges);
-    td_release(nodes);
-    td_sym_destroy();
-    td_heap_destroy();
+    if (result && !RAY_IS_ERR(result)) ray_release(result);
+    ray_graph_free(g);
+    ray_rel_free(rel);
+    ray_release(edges);
+    ray_release(nodes);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return 0;
 }
 ```
@@ -174,26 +174,26 @@ int main(void) {
 ### Join two tables
 
 ```c
-#include <teide/td.h>
+#include <rayforce.h>
 
 int main(void) {
-    td_heap_init();
-    td_sym_init();
+    ray_heap_init();
+    ray_sym_init();
 
-    td_t* orders = td_read_csv("orders.csv");
-    td_t* custs  = td_read_csv("customers.csv");
+    ray_t* orders = ray_read_csv("orders.csv");
+    ray_t* custs  = ray_read_csv("customers.csv");
 
-    td_graph_t* g = td_graph_new(orders);
+    ray_graph_t* g = ray_graph_new(orders);
 
-    td_op_t* lo = td_const_table(g, orders);
-    td_op_t* ro = td_const_table(g, custs);
+    ray_op_t* lo = ray_const_table(g, orders);
+    ray_op_t* ro = ray_const_table(g, custs);
 
     /* Inner join on customer_id */
-    td_op_t* lk[] = { td_scan(g, "customer_id") };
-    td_op_t* rk[] = { td_scan(g, "customer_id") };
-    td_op_t* joined = td_join(g, lo, lk, ro, rk, 1, 0);
+    ray_op_t* lk[] = { ray_scan(g, "customer_id") };
+    ray_op_t* rk[] = { ray_scan(g, "customer_id") };
+    ray_op_t* joined = ray_join(g, lo, lk, ro, rk, 1, 0);
 
-    td_t* result = td_execute(g, td_optimize(g, joined));
+    ray_t* result = ray_execute(g, ray_optimize(g, joined));
 
     /* result:
      *   customer_id | amount | name
@@ -204,12 +204,12 @@ int main(void) {
      *             3 |    120 | Charlie
      */
 
-    if (result && !TD_IS_ERR(result)) td_release(result);
-    td_graph_free(g);
-    td_release(orders);
-    td_release(custs);
-    td_sym_destroy();
-    td_heap_destroy();
+    if (result && !RAY_IS_ERR(result)) ray_release(result);
+    ray_graph_free(g);
+    ray_release(orders);
+    ray_release(custs);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return 0;
 }
 ```
@@ -217,7 +217,7 @@ int main(void) {
 ## Features
 
 **Execution engine**
-- Lazy DAG with 40+ operators — nothing runs until `td_execute`
+- Lazy DAG with 40+ operators — nothing runs until `ray_execute`
 - 10-pass optimizer with sideways information passing and graph-aware rewriting
 - Fused morsel-driven bytecode — element-wise ops merged into single-pass chunks
 - Radix-partitioned hash joins sized for L2 cache
@@ -231,7 +231,7 @@ int main(void) {
 - SIP propagates selection bitmaps backward through expand chains
 
 **Data types & operations**
-- Unified 32-byte `td_t` block header — atoms, vectors, lists, tables, bitmaps
+- Unified 32-byte `ray_t` block header — atoms, vectors, lists, tables, bitmaps
 - Dictionary-encoded symbols (8/16/32/64-bit adaptive-width indices)
 - Variable-length strings with inline SSO and per-vector pool
 - Window functions: ROW_NUMBER, RANK, DENSE_RANK, NTILE, SUM, AVG, LAG, LEAD, ...
@@ -250,40 +250,40 @@ int main(void) {
 
 ## API Overview
 
-Single public header: [`include/teide/td.h`](include/teide/td.h)
+Single public header: [`include/rayforce.h`](include/rayforce.h)
 
 | Category | Functions |
 |-------------------|-------------------------------------------------------------------------|
-| **Lifecycle** | `td_heap_init`, `td_heap_destroy`, `td_sym_init`, `td_sym_destroy` |
-| **Memory** | `td_alloc`, `td_free`, `td_retain`, `td_release`, `td_cow` |
-| **Atoms** | `td_bool`, `td_i64`, `td_f64`, `td_str`, `td_sym`, `td_date`, ... |
-| **Vectors** | `td_vec_new`, `td_vec_append`, `td_vec_set`, `td_vec_get`, `td_vec_slice`, `td_vec_concat`, `td_vec_from_raw` |
-| **Tables** | `td_table_new`, `td_table_add_col`, `td_table_get_col`, `td_table_ncols`, `td_table_nrows` |
-| **DAG sources** | `td_graph_new`, `td_scan`, `td_const_i64`, `td_const_f64`, `td_const_str`, `td_const_table` |
-| **Unary ops** | `td_neg`, `td_abs`, `td_not`, `td_sqrt_op`, `td_log_op`, `td_isnull`, `td_cast`, `td_upper`, `td_lower`, `td_trim_op` |
-| **Binary ops** | `td_add`, `td_sub`, `td_mul`, `td_div`, `td_mod`, `td_eq`, `td_ne`, `td_lt`, `td_le`, `td_gt`, `td_ge`, `td_and`, `td_or`, `td_like` |
-| **Aggregations** | `td_sum`, `td_count`, `td_avg`, `td_min_op`, `td_max_op`, `td_first`, `td_last`, `td_stddev`, `td_count_distinct` |
-| **Structural** | `td_filter`, `td_sort_op`, `td_group`, `td_distinct`, `td_join`, `td_asof_join`, `td_select`, `td_head`, `td_tail` |
-| **Window** | `td_window_op` (ROW_NUMBER, RANK, DENSE_RANK, NTILE, SUM, AVG, LAG, LEAD, ...) |
-| **Graph** | `td_expand`, `td_var_expand`, `td_shortest_path`, `td_wco_join` |
-| **CSR / Relations**| `td_rel_build`, `td_rel_from_edges`, `td_rel_save`, `td_rel_load`, `td_rel_mmap`, `td_rel_free` |
-| **Optimizer** | `td_optimize`, `td_fuse_pass` |
-| **Executor** | `td_execute` |
-| **Storage** | `td_col_save`, `td_col_load`, `td_col_mmap`, `td_splay_save`, `td_splay_load`, `td_part_load` |
-| **CSV** | `td_read_csv`, `td_read_csv_opts`, `td_write_csv` |
-| **Parallelism** | `td_pool_init`, `td_pool_destroy`, `td_parallel_begin`, `td_parallel_end` |
+| **Lifecycle** | `ray_heap_init`, `ray_heap_destroy`, `ray_sym_init`, `ray_sym_destroy` |
+| **Memory** | `ray_alloc`, `ray_free`, `ray_retain`, `ray_release`, `ray_cow` |
+| **Atoms** | `ray_bool`, `ray_i64`, `ray_f64`, `ray_str`, `ray_sym`, `ray_date`, ... |
+| **Vectors** | `ray_vec_new`, `ray_vec_append`, `ray_vec_set`, `ray_vec_get`, `ray_vec_slice`, `ray_vec_concat`, `ray_vec_from_raw` |
+| **Tables** | `ray_table_new`, `ray_table_add_col`, `ray_table_get_col`, `ray_table_ncols`, `ray_table_nrows` |
+| **DAG sources** | `ray_graph_new`, `ray_scan`, `ray_const_i64`, `ray_const_f64`, `ray_const_str`, `ray_const_table` |
+| **Unary ops** | `ray_neg`, `ray_abs`, `ray_not`, `ray_sqrt_op`, `ray_log_op`, `ray_isnull`, `ray_cast`, `ray_upper`, `ray_lower`, `ray_trim_op` |
+| **Binary ops** | `ray_add`, `ray_sub`, `ray_mul`, `ray_div`, `ray_mod`, `ray_eq`, `ray_ne`, `ray_lt`, `ray_le`, `ray_gt`, `ray_ge`, `ray_and`, `ray_or`, `ray_like` |
+| **Aggregations** | `ray_sum`, `ray_count`, `ray_avg`, `ray_min_op`, `ray_max_op`, `ray_first`, `ray_last`, `ray_stddev`, `ray_count_distinct` |
+| **Structural** | `ray_filter`, `ray_sort_op`, `ray_group`, `ray_distinct`, `ray_join`, `ray_asof_join`, `ray_select`, `ray_head`, `ray_tail` |
+| **Window** | `ray_window_op` (ROW_NUMBER, RANK, DENSE_RANK, NTILE, SUM, AVG, LAG, LEAD, ...) |
+| **Graph** | `ray_expand`, `ray_var_expand`, `ray_shortest_path`, `ray_wco_join` |
+| **CSR / Relations**| `ray_rel_build`, `ray_rel_from_edges`, `ray_rel_save`, `ray_rel_load`, `ray_rel_mmap`, `ray_rel_free` |
+| **Optimizer** | `ray_optimize`, `ray_fuse_pass` |
+| **Executor** | `ray_execute` |
+| **Storage** | `ray_col_save`, `ray_col_load`, `ray_col_mmap`, `ray_splay_save`, `ray_splay_load`, `ray_part_load` |
+| **CSV** | `ray_read_csv`, `ray_read_csv_opts`, `ray_write_csv` |
+| **Parallelism** | `ray_pool_init`, `ray_pool_destroy`, `ray_parallel_begin`, `ray_parallel_end` |
 
 ## Performance
 
-Key design choices that make Teide fast:
+Key design choices that make Rayforce fast:
 
 - **Morsel-fused execution** — element-wise ops fused into a single pass over 1024-element chunks, maximizing L1 cache residency
 - **Radix-partitioned hash joins** — adaptive radix bits (2..14) size partitions to fit L2 cache
 - **Buddy + slab allocator** — O(1) alloc/free for common sizes, no system allocator overhead
 - **COW ref counting** — zero-copy slices and shared columns, copy only on mutation
-- **Selection bitmaps** — `TD_SEL` segments skip entire morsels when all rows pass or all are filtered
+- **Selection bitmaps** — `RAY_SEL` segments skip entire morsels when all rows pass or all are filtered
 
-Benchmarks: [teide-bench](https://github.com/TeideDB/teide-bench)
+Benchmarks: [rayforce-bench](https://github.com/RayforceDB/rayforce-bench)
 
 ## Build
 
@@ -300,13 +300,13 @@ cmake --build build_release
 cd build && ctest --output-on-failure
 
 # Run a single test suite
-./build/test_teide --suite /vec
+./build/test_rayforce --suite /vec
 ```
 
 ## Project Structure
 
 ```
-include/teide/td.h         Single public header (all types, opcodes, API)
+include/rayforce.h         Single public header (all types, opcodes, API)
 src/mem/                    Buddy allocator, slab cache, VM abstraction
 src/core/                   Type system, atoms, strings, symbols
 src/vec/                    Vector operations, morsel iterator

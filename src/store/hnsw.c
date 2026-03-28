@@ -135,13 +135,13 @@ static hnsw_visited_t visited_new(int64_t n_nodes) {
     hnsw_visited_t v;
     v.n_nodes = n_nodes;
     size_t sz = ((size_t)n_nodes + 7) / 8;
-    v.bits = (uint8_t*)td_sys_alloc(sz);
+    v.bits = (uint8_t*)ray_sys_alloc(sz);
     if (v.bits) memset(v.bits, 0, sz);
     return v;
 }
 
 static void visited_free(hnsw_visited_t* v) {
-    if (v->bits) td_sys_free(v->bits);
+    if (v->bits) ray_sys_free(v->bits);
     v->bits = NULL;
 }
 
@@ -159,7 +159,7 @@ static void visited_set(hnsw_visited_t* v, int64_t id) {
  * Layer helper: find index of global node id within a layer
  * -------------------------------------------------------------------------- */
 
-static int64_t layer_local_idx(const td_hnsw_layer_t* layer, int64_t global_id) {
+static int64_t layer_local_idx(const ray_hnsw_layer_t* layer, int64_t global_id) {
     /* For layer 0, all nodes are present: local == global */
     /* For higher layers, linear scan (small) or we could build a reverse map */
     for (int64_t i = 0; i < layer->n_nodes; i++) {
@@ -169,7 +169,7 @@ static int64_t layer_local_idx(const td_hnsw_layer_t* layer, int64_t global_id) 
 }
 
 /* Get neighbor list for a node in a layer (by global id) */
-static int64_t* layer_neighbors(const td_hnsw_layer_t* layer, int64_t global_id,
+static int64_t* layer_neighbors(const ray_hnsw_layer_t* layer, int64_t global_id,
                                   int64_t* out_M_max) {
     int64_t local = layer_local_idx(layer, global_id);
     if (local < 0) { *out_M_max = 0; return NULL; }
@@ -202,14 +202,14 @@ static bool add_neighbor(int64_t* nb, int64_t M_max, int64_t new_id) {
  * -------------------------------------------------------------------------- */
 
 static int64_t hnsw_search_layer(
-    const td_hnsw_t* idx,
+    const ray_hnsw_t* idx,
     const float* query,
     const int64_t* entry_points, int64_t n_entries,
     int32_t layer_idx,
     int32_t ef,
     hnsw_cand_t* results /* pre-allocated, ef entries */)
 {
-    const td_hnsw_layer_t* layer = &idx->layers[layer_idx];
+    const ray_hnsw_layer_t* layer = &idx->layers[layer_idx];
 
     /* Visited set */
     hnsw_visited_t vis = visited_new(idx->n_nodes);
@@ -217,7 +217,7 @@ static int64_t hnsw_search_layer(
 
     /* Min-heap: candidates to explore (sorted by distance, smallest first) */
     int64_t cand_cap = ef * 2 + n_entries + 1;
-    hnsw_cand_t* candidates = (hnsw_cand_t*)td_sys_alloc((size_t)cand_cap * sizeof(hnsw_cand_t));
+    hnsw_cand_t* candidates = (hnsw_cand_t*)ray_sys_alloc((size_t)cand_cap * sizeof(hnsw_cand_t));
     if (!candidates) { visited_free(&vis); return 0; }
     int64_t cand_sz = 0;
 
@@ -294,7 +294,7 @@ static int64_t hnsw_search_layer(
         }
     }
 
-    td_sys_free(candidates);
+    ray_sys_free(candidates);
     visited_free(&vis);
 
     /* Sort results by distance ascending (insertion sort, ef is small) */
@@ -315,9 +315,9 @@ static int64_t hnsw_search_layer(
  * Greedy closest: find single nearest neighbor in a layer (used during descent)
  * -------------------------------------------------------------------------- */
 
-static int64_t hnsw_greedy_closest(const td_hnsw_t* idx, const float* query,
+static int64_t hnsw_greedy_closest(const ray_hnsw_t* idx, const float* query,
                                      int64_t ep, int32_t layer_idx) {
-    const td_hnsw_layer_t* layer = &idx->layers[layer_idx];
+    const ray_hnsw_layer_t* layer = &idx->layers[layer_idx];
     double best_dist = hnsw_cosine_dist(query, idx->vectors + ep * idx->dim, idx->dim);
     bool changed = true;
 
@@ -345,7 +345,7 @@ static int64_t hnsw_greedy_closest(const td_hnsw_t* idx, const float* query,
  * Neighbor pruning: keep M closest neighbors (simple selection)
  * -------------------------------------------------------------------------- */
 
-static void prune_neighbors(const td_hnsw_t* idx, int64_t node_id,
+static void prune_neighbors(const ray_hnsw_t* idx, int64_t node_id,
                               int64_t* nb, int64_t M_max, int64_t M_keep) {
     /* Count current neighbors */
     int64_t count = count_neighbors(nb, M_max);
@@ -353,7 +353,7 @@ static void prune_neighbors(const td_hnsw_t* idx, int64_t node_id,
 
     /* Compute distances from node to each neighbor */
     const float* vec = idx->vectors + node_id * idx->dim;
-    hnsw_cand_t* ranked = (hnsw_cand_t*)td_sys_alloc((size_t)count * sizeof(hnsw_cand_t));
+    hnsw_cand_t* ranked = (hnsw_cand_t*)ray_sys_alloc((size_t)count * sizeof(hnsw_cand_t));
     if (!ranked) return;
 
     for (int64_t i = 0; i < count; i++) {
@@ -377,22 +377,22 @@ static void prune_neighbors(const td_hnsw_t* idx, int64_t node_id,
         nb[i] = (i < M_keep) ? ranked[i].id : -1;
     }
 
-    td_sys_free(ranked);
+    ray_sys_free(ranked);
 }
 
 /* --------------------------------------------------------------------------
  * HNSW Build (Algorithm 1 from HNSW paper)
  * -------------------------------------------------------------------------- */
 
-td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
+ray_hnsw_t* ray_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
                            int32_t M, int32_t ef_construction) {
     if (!vectors || n_nodes <= 0 || dim <= 0) return NULL;
     if (M <= 0) M = HNSW_DEFAULT_M;
     if (ef_construction <= 0) ef_construction = HNSW_DEFAULT_EF_C;
 
-    td_hnsw_t* idx = (td_hnsw_t*)td_sys_alloc(sizeof(td_hnsw_t));
+    ray_hnsw_t* idx = (ray_hnsw_t*)ray_sys_alloc(sizeof(ray_hnsw_t));
     if (!idx) return NULL;
-    memset(idx, 0, sizeof(td_hnsw_t));
+    memset(idx, 0, sizeof(ray_hnsw_t));
 
     idx->n_nodes = n_nodes;
     idx->dim = dim;
@@ -403,15 +403,15 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
     /* Copy vectors so the index owns its data — prevents use-after-free
      * if the caller frees the original buffer. */
     size_t vec_bytes = (size_t)n_nodes * (size_t)dim * sizeof(float);
-    float* vec_copy = (float*)td_sys_alloc(vec_bytes);
-    if (!vec_copy) { td_sys_free(idx); return NULL; }
+    float* vec_copy = (float*)ray_sys_alloc(vec_bytes);
+    if (!vec_copy) { ray_sys_free(idx); return NULL; }
     memcpy(vec_copy, vectors, vec_bytes);
     idx->vectors = vec_copy;
     idx->owns_data = true;
 
     /* Allocate node levels */
-    idx->node_level = (int8_t*)td_sys_alloc((size_t)n_nodes * sizeof(int8_t));
-    if (!idx->node_level) { td_hnsw_free(idx); return NULL; }
+    idx->node_level = (int8_t*)ray_sys_alloc((size_t)n_nodes * sizeof(int8_t));
+    if (!idx->node_level) { ray_hnsw_free(idx); return NULL; }
 
     /* Assign random levels to all nodes */
     int32_t max_level = 0;
@@ -424,7 +424,7 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
 
     /* Allocate layers */
     for (int32_t l = 0; l < idx->n_layers; l++) {
-        td_hnsw_layer_t* layer = &idx->layers[l];
+        ray_hnsw_layer_t* layer = &idx->layers[l];
 
         /* Count nodes at this layer */
         int64_t count = 0;
@@ -436,10 +436,10 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
 
         /* Allocate neighbor array and node_ids mapping */
         size_t nb_size = (size_t)count * (size_t)layer->M_max * sizeof(int64_t);
-        layer->neighbors = (int64_t*)td_sys_alloc(nb_size);
-        layer->node_ids  = (int64_t*)td_sys_alloc((size_t)count * sizeof(int64_t));
+        layer->neighbors = (int64_t*)ray_sys_alloc(nb_size);
+        layer->node_ids  = (int64_t*)ray_sys_alloc((size_t)count * sizeof(int64_t));
         if (!layer->neighbors || !layer->node_ids) {
-            td_hnsw_free(idx);
+            ray_hnsw_free(idx);
             return NULL;
         }
 
@@ -457,8 +457,8 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
 
     /* Temp buffer for search results during construction */
     int64_t max_ef = ef_construction > idx->M_max0 ? ef_construction : idx->M_max0;
-    hnsw_cand_t* search_buf = (hnsw_cand_t*)td_sys_alloc((size_t)(max_ef + 1) * sizeof(hnsw_cand_t));
-    if (!search_buf) { td_hnsw_free(idx); return NULL; }
+    hnsw_cand_t* search_buf = (hnsw_cand_t*)ray_sys_alloc((size_t)(max_ef + 1) * sizeof(hnsw_cand_t));
+    if (!search_buf) { ray_hnsw_free(idx); return NULL; }
 
     /* Insert nodes one by one */
     for (int64_t i = 1; i < n_nodes; i++) {
@@ -473,7 +473,7 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
 
         /* Phase 2: Insert into layers [node_level ... 0] */
         for (int32_t l = node_level; l >= 0; l--) {
-            td_hnsw_layer_t* layer = &idx->layers[l];
+            ray_hnsw_layer_t* layer = &idx->layers[l];
             int64_t M_max_l = layer->M_max;
             int64_t M_keep = (l == 0) ? idx->M_max0 : M;
 
@@ -515,7 +515,7 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
         }
     }
 
-    td_sys_free(search_buf);
+    ray_sys_free(search_buf);
     return idx;
 }
 
@@ -523,22 +523,22 @@ td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
  * Free
  * -------------------------------------------------------------------------- */
 
-void td_hnsw_free(td_hnsw_t* idx) {
+void ray_hnsw_free(ray_hnsw_t* idx) {
     if (!idx) return;
     for (int32_t l = 0; l < idx->n_layers; l++) {
-        if (idx->layers[l].neighbors) td_sys_free(idx->layers[l].neighbors);
-        if (idx->layers[l].node_ids) td_sys_free(idx->layers[l].node_ids);
+        if (idx->layers[l].neighbors) ray_sys_free(idx->layers[l].neighbors);
+        if (idx->layers[l].node_ids) ray_sys_free(idx->layers[l].node_ids);
     }
-    if (idx->node_level) td_sys_free(idx->node_level);
-    if (idx->owns_data && idx->vectors) td_sys_free((void*)idx->vectors);
-    td_sys_free(idx);
+    if (idx->node_level) ray_sys_free(idx->node_level);
+    if (idx->owns_data && idx->vectors) ray_sys_free((void*)idx->vectors);
+    ray_sys_free(idx);
 }
 
 /* --------------------------------------------------------------------------
  * Search: find K approximate nearest neighbors
  * -------------------------------------------------------------------------- */
 
-int64_t td_hnsw_search(const td_hnsw_t* idx,
+int64_t ray_hnsw_search(const ray_hnsw_t* idx,
                          const float* query, int32_t dim,
                          int64_t k, int32_t ef_search,
                          int64_t* out_ids, double* out_dists) {
@@ -553,7 +553,7 @@ int64_t td_hnsw_search(const td_hnsw_t* idx,
     }
 
     /* Phase 2: Beam search on layer 0 with ef_search width */
-    hnsw_cand_t* results = (hnsw_cand_t*)td_sys_alloc(
+    hnsw_cand_t* results = (hnsw_cand_t*)ray_sys_alloc(
         (size_t)ef_search * sizeof(hnsw_cand_t));
     if (!results) return 0;
 
@@ -566,7 +566,7 @@ int64_t td_hnsw_search(const td_hnsw_t* idx,
         out_dists[i] = results[i].dist;
     }
 
-    td_sys_free(results);
+    ray_sys_free(results);
     return result_count;
 }
 
@@ -574,7 +574,7 @@ int64_t td_hnsw_search(const td_hnsw_t* idx,
  * Accessors
  * -------------------------------------------------------------------------- */
 
-int32_t td_hnsw_dim(const td_hnsw_t* idx) {
+int32_t ray_hnsw_dim(const ray_hnsw_t* idx) {
     return idx ? idx->dim : 0;
 }
 
@@ -598,10 +598,10 @@ typedef struct {
     int64_t entry_point;
 } hnsw_file_header_t;
 
-td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir) {
-    if (!idx || !dir) return TD_ERR_IO;
+ray_err_t ray_hnsw_save(const ray_hnsw_t* idx, const char* dir) {
+    if (!idx || !dir) return RAY_ERR_IO;
 
-    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return TD_ERR_IO;
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return RAY_ERR_IO;
 
     char path[1024];
     FILE* f;
@@ -609,7 +609,7 @@ td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir) {
     /* Write header */
     snprintf(path, sizeof(path), "%s/hnsw_header.bin", dir);
     f = fopen(path, "wb");
-    if (!f) return TD_ERR_IO;
+    if (!f) return RAY_ERR_IO;
     hnsw_file_header_t hdr = {
         .n_nodes = idx->n_nodes,
         .dim = idx->dim,
@@ -620,35 +620,35 @@ td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir) {
         ._pad = 0,
         .entry_point = idx->entry_point
     };
-    if (fwrite(&hdr, sizeof(hdr), 1, f) != 1) { fclose(f); return TD_ERR_IO; }
+    if (fwrite(&hdr, sizeof(hdr), 1, f) != 1) { fclose(f); return RAY_ERR_IO; }
     fclose(f);
 
     /* Write node levels */
     snprintf(path, sizeof(path), "%s/hnsw_levels.bin", dir);
     f = fopen(path, "wb");
-    if (!f) return TD_ERR_IO;
+    if (!f) return RAY_ERR_IO;
     if (fwrite(idx->node_level, sizeof(int8_t), (size_t)idx->n_nodes, f) !=
         (size_t)idx->n_nodes) {
-        fclose(f); return TD_ERR_IO;
+        fclose(f); return RAY_ERR_IO;
     }
     fclose(f);
 
     /* Write each layer */
     for (int32_t l = 0; l < idx->n_layers; l++) {
-        const td_hnsw_layer_t* layer = &idx->layers[l];
+        const ray_hnsw_layer_t* layer = &idx->layers[l];
         snprintf(path, sizeof(path), "%s/hnsw_layer_%d.bin", dir, l);
         f = fopen(path, "wb");
-        if (!f) return TD_ERR_IO;
+        if (!f) return RAY_ERR_IO;
 
         /* Write layer metadata: n_nodes, M_max */
-        if (fwrite(&layer->n_nodes, sizeof(int64_t), 1, f) != 1) { fclose(f); return TD_ERR_IO; }
-        if (fwrite(&layer->M_max, sizeof(int64_t), 1, f) != 1) { fclose(f); return TD_ERR_IO; }
+        if (fwrite(&layer->n_nodes, sizeof(int64_t), 1, f) != 1) { fclose(f); return RAY_ERR_IO; }
+        if (fwrite(&layer->M_max, sizeof(int64_t), 1, f) != 1) { fclose(f); return RAY_ERR_IO; }
 
         /* Write neighbors */
         size_t nb_count = (size_t)layer->n_nodes * (size_t)layer->M_max;
         if (nb_count > 0) {
             if (fwrite(layer->neighbors, sizeof(int64_t), nb_count, f) != nb_count) {
-                fclose(f); return TD_ERR_IO;
+                fclose(f); return RAY_ERR_IO;
             }
         }
 
@@ -656,7 +656,7 @@ td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir) {
         if (layer->n_nodes > 0) {
             if (fwrite(layer->node_ids, sizeof(int64_t), (size_t)layer->n_nodes, f) !=
                 (size_t)layer->n_nodes) {
-                fclose(f); return TD_ERR_IO;
+                fclose(f); return RAY_ERR_IO;
             }
         }
 
@@ -666,19 +666,19 @@ td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir) {
     /* Write vectors */
     snprintf(path, sizeof(path), "%s/hnsw_vectors.bin", dir);
     f = fopen(path, "wb");
-    if (!f) return TD_ERR_IO;
+    if (!f) return RAY_ERR_IO;
     size_t vec_count = (size_t)idx->n_nodes * (size_t)idx->dim;
     if (vec_count > 0) {
         if (fwrite(idx->vectors, sizeof(float), vec_count, f) != vec_count) {
-            fclose(f); return TD_ERR_IO;
+            fclose(f); return RAY_ERR_IO;
         }
     }
     fclose(f);
 
-    return TD_OK;
+    return RAY_OK;
 }
 
-static td_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
+static ray_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
     if (!dir) return NULL;
     (void)use_mmap; /* mmap optimization deferred — both paths read into memory */
 
@@ -698,9 +698,9 @@ static td_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
         hdr.M <= 0 || hdr.M_max0 <= 0 ||
         hdr.entry_point < 0 || hdr.entry_point >= hdr.n_nodes) return NULL;
 
-    td_hnsw_t* idx = (td_hnsw_t*)td_sys_alloc(sizeof(td_hnsw_t));
+    ray_hnsw_t* idx = (ray_hnsw_t*)ray_sys_alloc(sizeof(ray_hnsw_t));
     if (!idx) return NULL;
-    memset(idx, 0, sizeof(td_hnsw_t));
+    memset(idx, 0, sizeof(ray_hnsw_t));
 
     idx->n_nodes = hdr.n_nodes;
     idx->dim = hdr.dim;
@@ -715,43 +715,43 @@ static td_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
     /* Read node levels */
     snprintf(path, sizeof(path), "%s/hnsw_levels.bin", dir);
     f = fopen(path, "rb");
-    if (!f) { td_hnsw_free(idx); return NULL; }
-    idx->node_level = (int8_t*)td_sys_alloc((size_t)hdr.n_nodes * sizeof(int8_t));
-    if (!idx->node_level) { fclose(f); td_hnsw_free(idx); return NULL; }
+    if (!f) { ray_hnsw_free(idx); return NULL; }
+    idx->node_level = (int8_t*)ray_sys_alloc((size_t)hdr.n_nodes * sizeof(int8_t));
+    if (!idx->node_level) { fclose(f); ray_hnsw_free(idx); return NULL; }
     if (fread(idx->node_level, sizeof(int8_t), (size_t)hdr.n_nodes, f) !=
         (size_t)hdr.n_nodes) {
-        fclose(f); td_hnsw_free(idx); return NULL;
+        fclose(f); ray_hnsw_free(idx); return NULL;
     }
     fclose(f);
 
     /* Read each layer */
     for (int32_t l = 0; l < hdr.n_layers; l++) {
-        td_hnsw_layer_t* layer = &idx->layers[l];
+        ray_hnsw_layer_t* layer = &idx->layers[l];
         snprintf(path, sizeof(path), "%s/hnsw_layer_%d.bin", dir, l);
         f = fopen(path, "rb");
-        if (!f) { td_hnsw_free(idx); return NULL; }
+        if (!f) { ray_hnsw_free(idx); return NULL; }
 
         /* Read layer metadata */
-        if (fread(&layer->n_nodes, sizeof(int64_t), 1, f) != 1) { fclose(f); td_hnsw_free(idx); return NULL; }
-        if (fread(&layer->M_max, sizeof(int64_t), 1, f) != 1) { fclose(f); td_hnsw_free(idx); return NULL; }
+        if (fread(&layer->n_nodes, sizeof(int64_t), 1, f) != 1) { fclose(f); ray_hnsw_free(idx); return NULL; }
+        if (fread(&layer->M_max, sizeof(int64_t), 1, f) != 1) { fclose(f); ray_hnsw_free(idx); return NULL; }
 
         /* Allocate and read neighbors */
         size_t nb_count = (size_t)layer->n_nodes * (size_t)layer->M_max;
         if (nb_count > 0) {
-            layer->neighbors = (int64_t*)td_sys_alloc(nb_count * sizeof(int64_t));
-            if (!layer->neighbors) { fclose(f); td_hnsw_free(idx); return NULL; }
+            layer->neighbors = (int64_t*)ray_sys_alloc(nb_count * sizeof(int64_t));
+            if (!layer->neighbors) { fclose(f); ray_hnsw_free(idx); return NULL; }
             if (fread(layer->neighbors, sizeof(int64_t), nb_count, f) != nb_count) {
-                fclose(f); td_hnsw_free(idx); return NULL;
+                fclose(f); ray_hnsw_free(idx); return NULL;
             }
         }
 
         /* Allocate and read node_ids */
         if (layer->n_nodes > 0) {
-            layer->node_ids = (int64_t*)td_sys_alloc((size_t)layer->n_nodes * sizeof(int64_t));
-            if (!layer->node_ids) { fclose(f); td_hnsw_free(idx); return NULL; }
+            layer->node_ids = (int64_t*)ray_sys_alloc((size_t)layer->n_nodes * sizeof(int64_t));
+            if (!layer->node_ids) { fclose(f); ray_hnsw_free(idx); return NULL; }
             if (fread(layer->node_ids, sizeof(int64_t), (size_t)layer->n_nodes, f) !=
                 (size_t)layer->n_nodes) {
-                fclose(f); td_hnsw_free(idx); return NULL;
+                fclose(f); ray_hnsw_free(idx); return NULL;
             }
         }
 
@@ -761,13 +761,13 @@ static td_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
     /* Read vectors */
     snprintf(path, sizeof(path), "%s/hnsw_vectors.bin", dir);
     f = fopen(path, "rb");
-    if (!f) { td_hnsw_free(idx); return NULL; }
+    if (!f) { ray_hnsw_free(idx); return NULL; }
     size_t vec_count = (size_t)hdr.n_nodes * (size_t)hdr.dim;
     if (vec_count > 0) {
-        float* vecs = (float*)td_sys_alloc(vec_count * sizeof(float));
-        if (!vecs) { fclose(f); td_hnsw_free(idx); return NULL; }
+        float* vecs = (float*)ray_sys_alloc(vec_count * sizeof(float));
+        if (!vecs) { fclose(f); ray_hnsw_free(idx); return NULL; }
         if (fread(vecs, sizeof(float), vec_count, f) != vec_count) {
-            fclose(f); td_sys_free(vecs); td_hnsw_free(idx); return NULL;
+            fclose(f); ray_sys_free(vecs); ray_hnsw_free(idx); return NULL;
         }
         idx->vectors = vecs;
     }
@@ -776,10 +776,10 @@ static td_hnsw_t* hnsw_load_impl(const char* dir, bool use_mmap) {
     return idx;
 }
 
-td_hnsw_t* td_hnsw_load(const char* dir) {
+ray_hnsw_t* ray_hnsw_load(const char* dir) {
     return hnsw_load_impl(dir, false);
 }
 
-td_hnsw_t* td_hnsw_mmap(const char* dir) {
+ray_hnsw_t* ray_hnsw_mmap(const char* dir) {
     return hnsw_load_impl(dir, true);
 }

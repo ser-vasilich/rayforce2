@@ -22,85 +22,85 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include "ops/fvec.h"
 
 static MunitResult test_ftable_new_free(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_ftable_t* ft = td_ftable_new(3);
+    ray_ftable_t* ft = ray_ftable_new(3);
     munit_assert_ptr_not_null(ft);
     munit_assert_uint(ft->n_cols, ==, 3);
 
-    td_ftable_free(ft);
-    td_heap_destroy();
+    ray_ftable_free(ft);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_ftable_materialize_flat(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
-    td_ftable_t* ft = td_ftable_new(1);
+    ray_ftable_t* ft = ray_ftable_new(1);
 
     /* Create a flat fvec: single value at index 0, cardinality 5 */
     int64_t vals[] = {42};
-    td_t* vec = td_vec_from_raw(TD_I64, vals, 1);
+    ray_t* vec = ray_vec_from_raw(RAY_I64, vals, 1);
     ft->columns[0].vec = vec;
     ft->columns[0].cur_idx = 0;
     ft->columns[0].cardinality = 5;
     ft->n_tuples = 5;
 
-    td_t* result = td_ftable_materialize(ft);
+    ray_t* result = ray_ftable_materialize(ft);
     munit_assert_ptr_not_null(result);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(result->type, ==, TD_TABLE);
-    munit_assert_int(td_table_nrows(result), ==, 5);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_TABLE);
+    munit_assert_int(ray_table_nrows(result), ==, 5);
 
     /* All rows should be 42 */
-    td_t* col = td_table_get_col_idx(result, 0);
-    int64_t* data_ptr = (int64_t*)td_data(col);
+    ray_t* col = ray_table_get_col_idx(result, 0);
+    int64_t* data_ptr = (int64_t*)ray_data(col);
     for (int i = 0; i < 5; i++)
         munit_assert_int(data_ptr[i], ==, 42);
 
-    td_release(result);
-    td_ftable_free(ft);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_ftable_free(ft);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_ftable_materialize_unflat(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
-    td_ftable_t* ft = td_ftable_new(1);
+    ray_ftable_t* ft = ray_ftable_new(1);
 
     int64_t vals[] = {10, 20, 30};
-    td_t* vec = td_vec_from_raw(TD_I64, vals, 3);
+    ray_t* vec = ray_vec_from_raw(RAY_I64, vals, 3);
     ft->columns[0].vec = vec;
     ft->columns[0].cur_idx = -1;  /* unflat */
     ft->columns[0].cardinality = 3;
     ft->n_tuples = 3;
 
-    td_t* result = td_ftable_materialize(ft);
+    ray_t* result = ray_ftable_materialize(ft);
     munit_assert_ptr_not_null(result);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(td_table_nrows(result), ==, 3);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(ray_table_nrows(result), ==, 3);
 
-    td_t* col = td_table_get_col_idx(result, 0);
-    int64_t* data_ptr = (int64_t*)td_data(col);
+    ray_t* col = ray_table_get_col_idx(result, 0);
+    int64_t* data_ptr = (int64_t*)ray_data(col);
     munit_assert_int(data_ptr[0], ==, 10);
     munit_assert_int(data_ptr[1], ==, 20);
     munit_assert_int(data_ptr[2], ==, 30);
 
-    td_release(result);
-    td_ftable_free(ft);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_ftable_free(ft);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 

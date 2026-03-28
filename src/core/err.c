@@ -24,25 +24,25 @@
 #include "err.h"
 
 static const char* err_strings[] = {
-    [TD_OK]          = "ok",
-    [TD_ERR_OOM]     = "out of memory",
-    [TD_ERR_TYPE]    = "type error",
-    [TD_ERR_RANGE]   = "range error",
-    [TD_ERR_LENGTH]  = "length mismatch",
-    [TD_ERR_RANK]    = "rank error",
-    [TD_ERR_DOMAIN]  = "domain error",
-    [TD_ERR_NYI]     = "not yet implemented",
-    [TD_ERR_IO]      = "I/O error",
-    [TD_ERR_SCHEMA]  = "schema error",
-    [TD_ERR_CORRUPT] = "corrupt data",
-    [TD_ERR_CANCEL]  = "query cancelled",
-    [TD_ERR_PARSE]   = "parse error",
-    [TD_ERR_NAME]    = "name error",
+    [RAY_OK]          = "ok",
+    [RAY_ERR_OOM]     = "out of memory",
+    [RAY_ERR_TYPE]    = "type error",
+    [RAY_ERR_RANGE]   = "range error",
+    [RAY_ERR_LENGTH]  = "length mismatch",
+    [RAY_ERR_RANK]    = "rank error",
+    [RAY_ERR_DOMAIN]  = "domain error",
+    [RAY_ERR_NYI]     = "not yet implemented",
+    [RAY_ERR_IO]      = "I/O error",
+    [RAY_ERR_SCHEMA]  = "schema error",
+    [RAY_ERR_CORRUPT] = "corrupt data",
+    [RAY_ERR_CANCEL]  = "query cancelled",
+    [RAY_ERR_PARSE]   = "parse error",
+    [RAY_ERR_NAME]    = "name error",
 };
 
 #define ERR_STRING_COUNT (sizeof(err_strings) / sizeof(err_strings[0]))
 
-const char* td_err_str(td_err_t e) {
+const char* ray_err_str(ray_err_t e) {
     if ((unsigned)e >= ERR_STRING_COUNT) return "unknown error";
     return err_strings[e];
 }

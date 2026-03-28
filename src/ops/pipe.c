@@ -29,13 +29,13 @@
 #endif
 
 /* --------------------------------------------------------------------------
- * td_pipe_new
+ * ray_pipe_new
  *
  * Allocate a new pipe structure with all fields zeroed and spill_fd = -1.
  * -------------------------------------------------------------------------- */
 
-td_pipe_t* td_pipe_new(void) {
-    td_pipe_t* p = (td_pipe_t*)td_sys_alloc(sizeof(td_pipe_t));
+ray_pipe_t* ray_pipe_new(void) {
+    ray_pipe_t* p = (ray_pipe_t*)ray_sys_alloc(sizeof(ray_pipe_t));
     if (!p) return NULL;
     /* L3: Zero-init the entire struct before setting individual fields,
        ensuring no uninitialized pointers or state. */
@@ -46,18 +46,18 @@ td_pipe_t* td_pipe_new(void) {
 }
 
 /* --------------------------------------------------------------------------
- * td_pipe_free
+ * ray_pipe_free
  *
  * Free a pipe. Closes the spill file descriptor if it was opened.
  * Does NOT recursively free upstream input pipes.
  * -------------------------------------------------------------------------- */
 
-void td_pipe_free(td_pipe_t* pipe) {
+void ray_pipe_free(ray_pipe_t* pipe) {
     if (!pipe) return;
 
     if (pipe->spill_fd >= 0) {
         close(pipe->spill_fd);
     }
 
-    td_sys_free(pipe);
+    ray_sys_free(pipe);
 }

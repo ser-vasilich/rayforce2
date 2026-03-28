@@ -1,4 +1,4 @@
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -6,21 +6,21 @@
 #include <unistd.h>
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    td_heap_init();
-    assert(td_sym_init() == TD_OK);
+    ray_heap_init();
+    assert(ray_sym_init() == RAY_OK);
 
     char path[] = "/tmp/fuzz_col_XXXXXX";
     int fd = mkstemp(path);
-    if (fd < 0) { td_sym_destroy(); td_heap_destroy(); return 0; }
+    if (fd < 0) { ray_sym_destroy(); ray_heap_destroy(); return 0; }
     write(fd, data, size);
     close(fd);
 
-    td_t* result = td_col_load(path);
-    if (result && !TD_IS_ERR(result))
-        td_release(result);
+    ray_t* result = ray_col_load(path);
+    if (result && !RAY_IS_ERR(result))
+        ray_release(result);
 
     unlink(path);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
     return 0;
 }

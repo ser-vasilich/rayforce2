@@ -21,18 +21,18 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_TABLE_H
-#define TD_TABLE_H
+#ifndef RAY_TABLE_H
+#define RAY_TABLE_H
 
 /*
  * table.h -- Table operations.
  *
- * A table has type = TD_TABLE (13), len = current column count.
- * Data region: first sizeof(td_t*) bytes = pointer to schema (I64 vector
- * of column name symbol IDs), then ncols * sizeof(td_t*) = column vector
+ * A table has type = RAY_TABLE (13), len = current column count.
+ * Data region: first sizeof(ray_t*) bytes = pointer to schema (I64 vector
+ * of column name symbol IDs), then ncols * sizeof(ray_t*) = column vector
  * pointers.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_TABLE_H */
+#endif /* RAY_TABLE_H */

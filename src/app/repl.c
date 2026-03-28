@@ -39,14 +39,14 @@ static int64_t time_now_ns(void) {
 #endif
 }
 
-#ifndef TEIDE_VERSION
-#define TEIDE_VERSION "dev"
+#ifndef RAYFORCE_VERSION
+#define RAYFORCE_VERSION "dev"
 #endif
-#ifndef TEIDE_GIT_COMMIT
-#define TEIDE_GIT_COMMIT "unknown"
+#ifndef RAYFORCE_GIT_COMMIT
+#define RAYFORCE_GIT_COMMIT "unknown"
 #endif
-#ifndef TEIDE_BUILD_DATE
-#define TEIDE_BUILD_DATE "unknown"
+#ifndef RAYFORCE_BUILD_DATE
+#define RAYFORCE_BUILD_DATE "unknown"
 #endif
 
 static void get_cpu_name(char* buf, size_t sz) {
@@ -111,10 +111,10 @@ static void print_banner(void) {
     int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
 
     fprintf(stdout,
-        "Teide %s (%s, %s)\n"
+        "Rayforce %s (%s, %s)\n"
         "%s | %d cores | %" PRId64 " MB RAM\n"
         "Apache-2.0 license | type :? for help\n\n",
-        TEIDE_VERSION, TEIDE_GIT_COMMIT, TEIDE_BUILD_DATE,
+        RAYFORCE_VERSION, RAYFORCE_GIT_COMMIT, RAYFORCE_BUILD_DATE,
         cpu, ncores, mem_mb);
 }
 
@@ -126,13 +126,13 @@ static void print_banner(void) {
 /* ===== Pretty-print helpers ===== */
 
 /* Check if vector element at idx is null */
-static bool vec_is_null(td_t* vec, int64_t idx) {
-    if (!(vec->attrs & TD_ATTR_HAS_NULLS)) return false;
+static bool vec_is_null(ray_t* vec, int64_t idx) {
+    if (!(vec->attrs & RAY_ATTR_HAS_NULLS)) return false;
     const uint8_t* bm;
-    if (vec->attrs & TD_ATTR_NULLMAP_EXT) {
-        td_t* ext = vec->ext_nullmap;
+    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
+        ray_t* ext = vec->ext_nullmap;
         if (!ext) return false;
-        bm = (const uint8_t*)td_data(ext);
+        bm = (const uint8_t*)ray_data(ext);
     } else {
         if (idx >= 128) return false;
         bm = vec->nullmap;
@@ -141,51 +141,51 @@ static bool vec_is_null(td_t* vec, int64_t idx) {
 }
 
 /* Format a single vector element into buf, return chars written */
-static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
+static int fmt_vec_elem(ray_t* vec, int64_t idx, char* out, int max) {
     if (vec_is_null(vec, idx))
         return snprintf(out, (size_t)max, "null");
 
     switch (vec->type) {
-    case TD_BOOL: {
-        bool* data = (bool*)td_data(vec);
+    case RAY_BOOL: {
+        bool* data = (bool*)ray_data(vec);
         return snprintf(out, (size_t)max, "%s", data[idx] ? "true" : "false");
     }
-    case TD_I64: {
-        int64_t* data = (int64_t*)td_data(vec);
+    case RAY_I64: {
+        int64_t* data = (int64_t*)ray_data(vec);
         return snprintf(out, (size_t)max, "%" PRId64, data[idx]);
     }
-    case TD_F64: {
-        double* data = (double*)td_data(vec);
+    case RAY_F64: {
+        double* data = (double*)ray_data(vec);
         return snprintf(out, (size_t)max, "%g", data[idx]);
     }
-    case TD_I32: {
-        int32_t* data = (int32_t*)td_data(vec);
+    case RAY_I32: {
+        int32_t* data = (int32_t*)ray_data(vec);
         return snprintf(out, (size_t)max, "%d", data[idx]);
     }
-    case TD_I16: {
-        int16_t* data = (int16_t*)td_data(vec);
+    case RAY_I16: {
+        int16_t* data = (int16_t*)ray_data(vec);
         return snprintf(out, (size_t)max, "%d", (int)data[idx]);
     }
-    case TD_SYM: {
-        uint8_t esz = (uint8_t)TD_SYM_ELEM(vec->attrs);
-        const uint8_t* base = (const uint8_t*)td_data(vec);
+    case RAY_SYM: {
+        uint8_t esz = (uint8_t)RAY_SYM_ELEM(vec->attrs);
+        const uint8_t* base = (const uint8_t*)ray_data(vec);
         int64_t sym_id = 0;
         memcpy(&sym_id, base + idx * esz, esz);
-        td_t* s = td_sym_str(sym_id);
+        ray_t* s = ray_sym_str(sym_id);
         if (s) return snprintf(out, (size_t)max, "%.*s",
-                               (int)td_str_len(s), td_str_ptr(s));
+                               (int)ray_str_len(s), ray_str_ptr(s));
         return snprintf(out, (size_t)max, "?sym%" PRId64, sym_id);
     }
-    case TD_STR: {
+    case RAY_STR: {
         size_t slen = 0;
-        const char* s = td_str_vec_get(vec, idx, &slen);
+        const char* s = ray_str_vec_get(vec, idx, &slen);
         if (s) return snprintf(out, (size_t)max, "%.*s", (int)slen, s);
         return snprintf(out, (size_t)max, "null");
     }
-    case TD_DATE: {
-        int64_t* data = (int64_t*)td_data(vec);
+    case RAY_DATE: {
+        int64_t* data = (int64_t*)ray_data(vec);
         int64_t d = data[idx];
-        /* Teide date = days since 2000-01-01 */
+        /* Rayforce date = days since 2000-01-01 */
         return snprintf(out, (size_t)max, "%" PRId64, d);
     }
     default:
@@ -194,10 +194,10 @@ static int fmt_vec_elem(td_t* vec, int64_t idx, char* out, int max) {
 }
 
 /* Print a vector in [1 2 3 ...] format */
-static void print_vector(FILE* fp, td_t* val) {
-    int64_t len = td_len(val);
-    td_t** elems = (td_t**)td_data(val);
-    bool is_dict = (val->attrs & TD_ATTR_DICT) != 0;
+static void print_vector(FILE* fp, ray_t* val) {
+    int64_t len = ray_len(val);
+    ray_t** elems = (ray_t**)ray_data(val);
+    bool is_dict = (val->attrs & RAY_ATTR_DICT) != 0;
 
     if (is_dict) {
         int64_t npairs = len / 2;
@@ -205,9 +205,9 @@ static void print_vector(FILE* fp, td_t* val) {
         fprintf(fp, "{");
         for (int64_t i = 0; i < show; i++) {
             if (i > 0) fprintf(fp, " ");
-            td_lang_print(fp, elems[i * 2]);
+            ray_lang_print(fp, elems[i * 2]);
             fprintf(fp, ": ");
-            td_lang_print(fp, elems[i * 2 + 1]);
+            ray_lang_print(fp, elems[i * 2 + 1]);
         }
         if (npairs > show) fprintf(fp, " ...(+%" PRId64 ")", npairs - show);
         fprintf(fp, "}");
@@ -218,15 +218,15 @@ static void print_vector(FILE* fp, td_t* val) {
     fprintf(fp, "[");
     for (int64_t i = 0; i < show; i++) {
         if (i > 0) fprintf(fp, " ");
-        td_lang_print(fp, elems[i]);
+        ray_lang_print(fp, elems[i]);
     }
     if (len > show) fprintf(fp, " ...(+%" PRId64 ")", len - show);
     fprintf(fp, "]");
 }
 
-/* Print a typed vector (TD_I64, TD_F64, TD_SYM, TD_STR, etc.) */
-static void print_typed_vector(FILE* fp, td_t* vec) {
-    int64_t len = td_len(vec);
+/* Print a typed vector (RAY_I64, RAY_F64, RAY_SYM, RAY_STR, etc.) */
+static void print_typed_vector(FILE* fp, ray_t* vec) {
+    int64_t len = ray_len(vec);
     char elem_buf[256];
     fprintf(fp, "[");
     int64_t show = len > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : len;
@@ -240,9 +240,9 @@ static void print_typed_vector(FILE* fp, td_t* vec) {
 }
 
 /* Print a table in columnar format */
-static void print_table(FILE* fp, td_t* tbl) {
-    int64_t ncols = td_table_ncols(tbl);
-    int64_t nrows = td_table_nrows(tbl);
+static void print_table(FILE* fp, ray_t* tbl) {
+    int64_t ncols = ray_table_ncols(tbl);
+    int64_t nrows = ray_table_nrows(tbl);
 
     if (ncols == 0) {
         fprintf(fp, "(empty table)\n");
@@ -250,19 +250,19 @@ static void print_table(FILE* fp, td_t* tbl) {
     }
 
     /* Collect column names and vectors */
-    td_t* cols[256];
+    ray_t* cols[256];
     const char* names[256];
     int name_lens[256];
     int col_widths[256];
     int actual_ncols = ncols > 256 ? 256 : (int)ncols;
 
     for (int c = 0; c < actual_ncols; c++) {
-        cols[c] = td_table_get_col_idx(tbl, c);
-        int64_t name_id = td_table_col_name(tbl, c);
-        td_t* ns = td_sym_str(name_id);
+        cols[c] = ray_table_get_col_idx(tbl, c);
+        int64_t name_id = ray_table_col_name(tbl, c);
+        ray_t* ns = ray_sym_str(name_id);
         if (ns) {
-            names[c] = td_str_ptr(ns);
-            name_lens[c] = (int)td_str_len(ns);
+            names[c] = ray_str_ptr(ns);
+            name_lens[c] = (int)ray_str_len(ns);
         } else {
             names[c] = "?";
             name_lens[c] = 1;
@@ -318,92 +318,92 @@ static void print_table(FILE* fp, td_t* tbl) {
 }
 
 /* Pretty-print a result value */
-static void repl_print_result(FILE* fp, td_t* val, bool use_color) {
+static void repl_print_result(FILE* fp, ray_t* val, bool use_color) {
     if (!val) return;
-    if (TD_IS_ERR(val)) {
-        td_err_t code = TD_ERR_CODE(val);
+    if (RAY_IS_ERR(val)) {
+        ray_err_t code = RAY_ERR_CODE(val);
         if (use_color) fprintf(fp, "\033[31m");
-        fprintf(fp, "error: %s", td_err_str(code));
+        fprintf(fp, "error: %s", ray_err_str(code));
         if (use_color) fprintf(fp, "\033[0m");
         fprintf(fp, "\n");
         return;
     }
 
     switch (val->type) {
-    case TD_TABLE:
+    case RAY_TABLE:
         print_table(fp, val);
         break;
-    case TD_LIST:
+    case RAY_LIST:
         print_vector(fp, val);
         fprintf(fp, "\n");
         break;
     default:
-        if (td_is_atom(val)) {
-            td_lang_print(fp, val);
+        if (ray_is_atom(val)) {
+            ray_lang_print(fp, val);
             fprintf(fp, "\n");
-        } else if (td_is_vec(val)) {
+        } else if (ray_is_vec(val)) {
             print_typed_vector(fp, val);
             fprintf(fp, "\n");
         } else {
-            td_lang_print(fp, val);
+            ray_lang_print(fp, val);
             fprintf(fp, "\n");
         }
         break;
     }
 }
 
-td_repl_t* td_repl_create(void) {
-    td_t* block = td_alloc(sizeof(td_repl_t));
+ray_repl_t* ray_repl_create(void) {
+    ray_t* block = ray_alloc(sizeof(ray_repl_t));
     if (!block) return NULL;
-    td_repl_t* repl = (td_repl_t*)td_data(block);
+    ray_repl_t* repl = (ray_repl_t*)ray_data(block);
     memset(repl, 0, sizeof(*repl));
     repl->_block = block;
 
     if (isatty(STDIN_FD)) {
-        repl->term = td_term_create();
+        repl->term = ray_term_create();
         if (repl->term)
-            td_term_install_signals(repl->term);
+            ray_term_install_signals(repl->term);
     }
     return repl;
 }
 
-void td_repl_destroy(td_repl_t* repl) {
+void ray_repl_destroy(ray_repl_t* repl) {
     if (!repl) return;
     if (repl->term) {
-        td_term_destroy(repl->term);
+        ray_term_destroy(repl->term);
     }
-    td_free(repl->_block);
+    ray_free(repl->_block);
 }
 
-static void eval_and_print(td_term_t* term, const char* input,
+static void eval_and_print(ray_term_t* term, const char* input,
                            bool use_color, bool timeit) {
     int64_t t0 = 0, t1 = 0;
     if (timeit) t0 = time_now_ns();
 
-    td_term_clear_interrupt();
-    td_eval_clear_interrupt();
-    if (term) td_term_eval_begin(term);
-    td_t* result = td_eval_str(input);
-    if (term) td_term_eval_end(term);
+    ray_term_clear_interrupt();
+    ray_eval_clear_interrupt();
+    if (term) ray_term_eval_begin(term);
+    ray_t* result = ray_eval_str(input);
+    if (term) ray_term_eval_end(term);
 
     if (timeit) t1 = time_now_ns();
 
-    if (td_term_interrupted()) {
-        td_term_clear_interrupt();
-        td_eval_clear_interrupt();
+    if (ray_term_interrupted()) {
+        ray_term_clear_interrupt();
+        ray_eval_clear_interrupt();
         fprintf(stdout, "\n^C\n");
         fflush(stdout);
-        if (result && !TD_IS_ERR(result)) td_release(result);
+        if (result && !RAY_IS_ERR(result)) ray_release(result);
         return;
     }
 
-    if (TD_IS_ERR(result)) {
+    if (RAY_IS_ERR(result)) {
         repl_print_result(stdout, result, use_color);
         fflush(stdout);
     } else if (result) {
         repl_print_result(stdout, result, use_color);
         fflush(stdout);
-        td_release(result);
+        ray_release(result);
     }
 
     if (timeit) {
@@ -415,18 +415,18 @@ static void eval_and_print(td_term_t* term, const char* input,
     }
 }
 
-static const char* type_label(td_t* val) {
+static const char* type_label(ray_t* val) {
     if (!val) return "nil";
     switch (val->type) {
-    case TD_ATOM_UNARY:  return "builtin/1";
-    case TD_ATOM_BINARY: return "builtin/2";
-    case TD_ATOM_VARY:   return "builtin/n";
-    case TD_ATOM_LAMBDA: return "lambda";
-    case TD_TABLE:       return "table";
-    case TD_LIST:        return "list";
+    case RAY_ATOM_UNARY:  return "builtin/1";
+    case RAY_ATOM_BINARY: return "builtin/2";
+    case RAY_ATOM_VARY:   return "builtin/n";
+    case RAY_ATOM_LAMBDA: return "lambda";
+    case RAY_TABLE:       return "table";
+    case RAY_LIST:        return "list";
     default:
-        if (td_is_vec(val)) return "vector";
-        if (td_is_atom(val)) return "atom";
+        if (ray_is_vec(val)) return "vector";
+        if (ray_is_atom(val)) return "atom";
         return "?";
     }
 }
@@ -446,7 +446,7 @@ static bool cmd_match(const char* cmd, size_t clen,
     return true;
 }
 
-static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
+static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     if (len == 0 || str[0] != ':') return false;
 
     const char* cmd = str + 1;
@@ -481,11 +481,11 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
 
     if (cmd_match(cmd, clen, "env", 3, &arg, &arg_len)) {
         int64_t sym_ids[512];
-        td_t* vals[512];
-        int32_t n = td_env_list(sym_ids, vals, 512);
+        ray_t* vals[512];
+        int32_t n = ray_env_list(sym_ids, vals, 512);
         for (int32_t i = 0; i < n; i++) {
-            td_t* s = td_sym_str(sym_ids[i]);
-            const char* name = s ? td_str_ptr(s) : "?";
+            ray_t* s = ray_sym_str(sym_ids[i]);
+            const char* name = s ? ray_str_ptr(s) : "?";
             fprintf(stdout, "  %-20s %s\n", name, type_label(vals[i]));
         }
         fprintf(stdout, "(%d entries)\n", n);
@@ -503,26 +503,26 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
     return true;
 }
 
-static void run_interactive(td_repl_t* repl) {
-    td_term_t* term = repl->term;
+static void run_interactive(ray_repl_t* repl) {
+    ray_term_t* term = repl->term;
     print_banner();
 
     for (;;) {
-        td_t* line = td_term_read(term);
+        ray_t* line = ray_term_read(term);
         if (!line) break; /* EOF / Ctrl-D */
 
-        const char* str = td_str_ptr(line);
-        size_t len = td_str_len(line);
+        const char* str = ray_str_ptr(line);
+        size_t len = ray_str_len(line);
 
         if (len == 0) {
-            td_release(line);
+            ray_release(line);
             continue;
         }
 
         /* Exit commands */
         if ((len == 2 && memcmp(str, "\\\\", 2) == 0) ||
             (len == 4 && memcmp(str, "exit", 4) == 0)) {
-            td_release(line);
+            ray_release(line);
             break;
         }
 
@@ -533,16 +533,16 @@ static void run_interactive(td_repl_t* repl) {
             const char* cmd = str + 1;
             if ((clen == 1 && cmd[0] == 'q') ||
                 (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
-                td_release(line);
+                ray_release(line);
                 break;
             }
             handle_command(repl, str, len);
-            td_release(line);
+            ray_release(line);
             continue;
         }
 
         eval_and_print(repl->term, str, true, repl->timeit);
-        td_release(line);
+        ray_release(line);
     }
 }
 
@@ -598,7 +598,7 @@ static int32_t count_unmatched(const char* s, size_t len) {
     return d > 0 ? d : 0;
 }
 
-static void run_piped(td_repl_t* repl) {
+static void run_piped(ray_repl_t* repl) {
     char line[PIPE_BUF_SIZE];
     char accum[PIPE_BUF_SIZE];
     size_t accum_len = 0;
@@ -709,7 +709,7 @@ static void run_piped(td_repl_t* repl) {
     }
 }
 
-void td_repl_run(td_repl_t* repl) {
+void ray_repl_run(ray_repl_t* repl) {
     if (repl->term) {
         run_interactive(repl);
     } else {
@@ -717,7 +717,7 @@ void td_repl_run(td_repl_t* repl) {
     }
 }
 
-int td_repl_run_file(const char* path) {
+int ray_repl_run_file(const char* path) {
     FILE* f = fopen(path, "r");
     if (!f) {
         fprintf(stderr, "error: cannot open '%s'\n", path);
@@ -732,25 +732,25 @@ int td_repl_run_file(const char* path) {
         return 1;
     }
 
-    td_t* block = td_alloc((int64_t)flen + 1);
+    ray_t* block = ray_alloc((int64_t)flen + 1);
     if (!block) {
         fclose(f);
         fprintf(stderr, "error: out of memory\n");
         return 1;
     }
-    char* buf = (char*)td_data(block);
+    char* buf = (char*)ray_data(block);
     size_t nread = fread(buf, 1, (size_t)flen, f);
     fclose(f);
     buf[nread] = '\0';
 
-    td_t* result = td_eval_str(buf);
-    td_release(block);
-    if (TD_IS_ERR(result)) {
+    ray_t* result = ray_eval_str(buf);
+    ray_release(block);
+    if (RAY_IS_ERR(result)) {
         repl_print_result(stderr, result, false);
         return 1;
     } else if (result) {
         repl_print_result(stdout, result, false);
-        td_release(result);
+        ray_release(result);
     }
     return 0;
 }

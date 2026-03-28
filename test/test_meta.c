@@ -22,26 +22,26 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 #include <unistd.h>
 
-#define TMP_META_PATH "/tmp/teide_test_meta.d"
+#define TMP_META_PATH "/tmp/rayforce_test_meta.d"
 
 /* ---- Setup / Teardown -------------------------------------------------- */
 
 static void* meta_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
     return NULL;
 }
 
 static void meta_teardown(void* fixture) {
     (void)fixture;
     unlink(TMP_META_PATH);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
 }
 
 /* ---- test_meta_save_load_roundtrip ------------------------------------- */
@@ -51,30 +51,30 @@ static MunitResult test_meta_save_load_roundtrip(const void* params, void* fixtu
 
     /* Build a small I64 schema vector */
     int64_t ids[] = {100, 200, 300};
-    td_t* schema = td_vec_from_raw(TD_I64, ids, 3);
+    ray_t* schema = ray_vec_from_raw(RAY_I64, ids, 3);
     munit_assert_ptr_not_null(schema);
-    munit_assert_false(TD_IS_ERR(schema));
+    munit_assert_false(RAY_IS_ERR(schema));
 
     /* Save */
-    td_err_t err = td_meta_save_d(schema, TMP_META_PATH);
-    munit_assert_int(err, ==, TD_OK);
+    ray_err_t err = ray_meta_save_d(schema, TMP_META_PATH);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Load back */
-    td_t* loaded = td_meta_load_d(TMP_META_PATH);
+    ray_t* loaded = ray_meta_load_d(TMP_META_PATH);
     munit_assert_ptr_not_null(loaded);
-    munit_assert_false(TD_IS_ERR(loaded));
+    munit_assert_false(RAY_IS_ERR(loaded));
 
     /* Verify contents */
-    munit_assert_int(td_type(loaded), ==, TD_I64);
-    munit_assert_int(td_len(loaded), ==, 3);
+    munit_assert_int(ray_type(loaded), ==, RAY_I64);
+    munit_assert_int(ray_len(loaded), ==, 3);
 
-    int64_t* out = (int64_t*)td_data(loaded);
+    int64_t* out = (int64_t*)ray_data(loaded);
     munit_assert_int(out[0], ==, 100);
     munit_assert_int(out[1], ==, 200);
     munit_assert_int(out[2], ==, 300);
 
-    td_free(schema);
-    td_free(loaded);
+    ray_free(schema);
+    ray_free(loaded);
     return MUNIT_OK;
 }
 
@@ -83,8 +83,8 @@ static MunitResult test_meta_save_load_roundtrip(const void* params, void* fixtu
 static MunitResult test_meta_save_null_returns_error(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_err_t err = td_meta_save_d(NULL, TMP_META_PATH);
-    munit_assert_int(err, !=, TD_OK);
+    ray_err_t err = ray_meta_save_d(NULL, TMP_META_PATH);
+    munit_assert_int(err, !=, RAY_OK);
 
     return MUNIT_OK;
 }
@@ -94,9 +94,9 @@ static MunitResult test_meta_save_null_returns_error(const void* params, void* f
 static MunitResult test_meta_save_err_ptr_returns_error(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* bad = TD_ERR_PTR(TD_ERR_TYPE);
-    td_err_t err = td_meta_save_d(bad, TMP_META_PATH);
-    munit_assert_int(err, !=, TD_OK);
+    ray_t* bad = RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_err_t err = ray_meta_save_d(bad, TMP_META_PATH);
+    munit_assert_int(err, !=, RAY_OK);
 
     return MUNIT_OK;
 }
@@ -106,9 +106,9 @@ static MunitResult test_meta_save_err_ptr_returns_error(const void* params, void
 static MunitResult test_meta_load_nonexistent(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* loaded = td_meta_load_d("/tmp/teide_no_such_file_meta.d");
+    ray_t* loaded = ray_meta_load_d("/tmp/rayforce_no_such_file_meta.d");
     /* Should return NULL or error pointer for missing file */
-    munit_assert_true(loaded == NULL || TD_IS_ERR(loaded));
+    munit_assert_true(loaded == NULL || RAY_IS_ERR(loaded));
 
     return MUNIT_OK;
 }

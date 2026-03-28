@@ -22,7 +22,7 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include "mem/heap.h"
 #include <string.h>
 #include <stdatomic.h>
@@ -31,13 +31,13 @@
 
 static void* buddy_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    td_heap_init();
+    ray_heap_init();
     return NULL;
 }
 
 static void buddy_teardown(void* fixture) {
     (void)fixture;
-    td_heap_destroy();
+    ray_heap_destroy();
 }
 
 /* ---- Basic alloc/free -------------------------------------------------- */
@@ -45,14 +45,14 @@ static void buddy_teardown(void* fixture) {
 static MunitResult test_alloc_basic(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_alloc(0);  /* minimum: just a header */
+    ray_t* v = ray_alloc(0);  /* minimum: just a header */
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
+    munit_assert_false(RAY_IS_ERR(v));
     munit_assert_uint(v->mmod, ==, 0);
-    munit_assert_uint(v->order, >=, TD_ORDER_MIN);
+    munit_assert_uint(v->order, >=, RAY_ORDER_MIN);
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -60,12 +60,12 @@ static MunitResult test_alloc_small_atom(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Atom: 0 bytes of data beyond the 32-byte header */
-    td_t* v = td_alloc(0);
+    ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
     /* Header should be zeroed (except mmod, order, rc set by allocator) */
     munit_assert_int(v->type, ==, 0);
     munit_assert_uint(v->attrs, ==, 0);
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -74,12 +74,12 @@ static MunitResult test_alloc_medium_vector(const void* params, void* fixture) {
 
     /* Vector of 100 i64s: 100 * 8 = 800 bytes of data */
     size_t data_size = 100 * sizeof(int64_t);
-    td_t* v = td_alloc(data_size);
+    ray_t* v = ray_alloc(data_size);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
+    munit_assert_false(RAY_IS_ERR(v));
 
     /* We should be able to write and read data */
-    int64_t* data = (int64_t*)td_data(v);
+    int64_t* data = (int64_t*)ray_data(v);
     for (int i = 0; i < 100; i++) {
         data[i] = (int64_t)(i * 42);
     }
@@ -87,7 +87,7 @@ static MunitResult test_alloc_medium_vector(const void* params, void* fixture) {
         munit_assert_int(data[i], ==, (int64_t)(i * 42));
     }
 
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -96,18 +96,18 @@ static MunitResult test_alloc_large(const void* params, void* fixture) {
 
     /* Large allocation: 1 MiB */
     size_t data_size = 1024 * 1024;
-    td_t* v = td_alloc(data_size);
+    ray_t* v = ray_alloc(data_size);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
+    munit_assert_false(RAY_IS_ERR(v));
     munit_assert_uint(v->mmod, ==, 0);  /* still within buddy range */
 
     /* Write pattern */
-    uint8_t* data = (uint8_t*)td_data(v);
+    uint8_t* data = (uint8_t*)ray_data(v);
     memset(data, 0xAB, data_size);
     munit_assert_uint(data[0], ==, 0xAB);
     munit_assert_uint(data[data_size - 1], ==, 0xAB);
 
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -116,7 +116,7 @@ static MunitResult test_alloc_large(const void* params, void* fixture) {
 static MunitResult test_header_zeroed(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_alloc(64);
+    ray_t* v = ray_alloc(64);
     munit_assert_ptr_not_null(v);
 
     /* Check nullmap region is zeroed */
@@ -131,7 +131,7 @@ static MunitResult test_header_zeroed(const void* params, void* fixture) {
     /* rc should be 1 */
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -141,26 +141,26 @@ static MunitResult test_small_block_reuse(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Allocate and free many small blocks; verify they can be re-allocated */
-    td_t* blocks[128];
+    ray_t* blocks[128];
     for (int i = 0; i < 128; i++) {
-        blocks[i] = td_alloc(0);
+        blocks[i] = ray_alloc(0);
         munit_assert_ptr_not_null(blocks[i]);
     }
     for (int i = 0; i < 128; i++) {
-        td_free(blocks[i]);
+        ray_free(blocks[i]);
     }
     /* Re-allocate after freeing -- buddy should reuse freed blocks */
     for (int i = 0; i < 128; i++) {
-        blocks[i] = td_alloc(0);
+        blocks[i] = ray_alloc(0);
         munit_assert_ptr_not_null(blocks[i]);
     }
 
-    td_mem_stats_t stats;
-    td_mem_stats(&stats);
+    ray_mem_stats_t stats;
+    ray_mem_stats(&stats);
     munit_assert_size(stats.alloc_count, >=, 256);
 
     for (int i = 0; i < 128; i++) {
-        td_free(blocks[i]);
+        ray_free(blocks[i]);
     }
     return MUNIT_OK;
 }
@@ -172,11 +172,11 @@ static MunitResult test_pool_growth(const void* params, void* fixture) {
 
     /* Allocate blocks until we exhaust the first 32 MiB pool.
      * Each block is 2^15 = 32 KiB, so ~1024 blocks to fill 32 MiB. */
-    size_t block_data_size = (1 << 15) - 32;  /* order 15 (32B td_t header) */
+    size_t block_data_size = (1 << 15) - 32;  /* order 15 (32B ray_t header) */
     int count = 0;
-    td_t* blocks[4096];
+    ray_t* blocks[4096];
     for (int i = 0; i < 4096; i++) {
-        blocks[i] = td_alloc(block_data_size);
+        blocks[i] = ray_alloc(block_data_size);
         if (!blocks[i]) break;
         count++;
     }
@@ -184,7 +184,7 @@ static MunitResult test_pool_growth(const void* params, void* fixture) {
     munit_assert_int(count, >, 1000);
 
     for (int i = 0; i < count; i++) {
-        td_free(blocks[i]);
+        ray_free(blocks[i]);
     }
     return MUNIT_OK;
 }
@@ -194,29 +194,29 @@ static MunitResult test_pool_growth(const void* params, void* fixture) {
 static MunitResult test_mem_stats(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_mem_stats_t stats0;
-    td_mem_stats(&stats0);
+    ray_mem_stats_t stats0;
+    ray_mem_stats(&stats0);
     size_t base_alloc = stats0.alloc_count;
     size_t base_free = stats0.free_count;
 
-    td_t* a = td_alloc(64);
-    td_t* b = td_alloc(64);
-    td_t* c = td_alloc(64);
+    ray_t* a = ray_alloc(64);
+    ray_t* b = ray_alloc(64);
+    ray_t* c = ray_alloc(64);
 
-    td_mem_stats_t stats1;
-    td_mem_stats(&stats1);
+    ray_mem_stats_t stats1;
+    ray_mem_stats(&stats1);
     munit_assert_size(stats1.alloc_count, ==, base_alloc + 3);
     munit_assert_size(stats1.bytes_allocated, >, 0);
 
-    td_free(a);
-    td_free(b);
+    ray_free(a);
+    ray_free(b);
 
-    td_mem_stats_t stats2;
-    td_mem_stats(&stats2);
+    ray_mem_stats_t stats2;
+    ray_mem_stats(&stats2);
     munit_assert_size(stats2.free_count, ==, base_free + 2);
     munit_assert_size(stats2.alloc_count, ==, base_alloc + 3);
 
-    td_free(c);
+    ray_free(c);
     return MUNIT_OK;
 }
 
@@ -228,50 +228,50 @@ static MunitResult test_coalescing(const void* params, void* fixture) {
     /* Allocate two blocks of order 10 (1024 bytes each), then free them.
      * After freeing both, they should coalesce into a larger block.
      * Verify by allocating one block of order 11 (2048 bytes). */
-    size_t data_size = (1 << 10) - 32;  /* order 10 (32B td_t header) */
-    td_t* a = td_alloc(data_size);
-    td_t* b = td_alloc(data_size);
+    size_t data_size = (1 << 10) - 32;  /* order 10 (32B ray_t header) */
+    ray_t* a = ray_alloc(data_size);
+    ray_t* b = ray_alloc(data_size);
     munit_assert_ptr_not_null(a);
     munit_assert_ptr_not_null(b);
 
-    td_free(a);
-    td_free(b);
+    ray_free(a);
+    ray_free(b);
 
     /* Now allocate a block that requires order 11 */
     size_t bigger = (1 << 11) - 32;
-    td_t* c = td_alloc(bigger);
+    ray_t* c = ray_alloc(bigger);
     munit_assert_ptr_not_null(c);
 
-    td_free(c);
+    ray_free(c);
     return MUNIT_OK;
 }
 
-/* ---- td_alloc_copy ----------------------------------------------------- */
+/* ---- ray_alloc_copy ----------------------------------------------------- */
 
 static MunitResult test_alloc_copy(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Create a block with some data */
     size_t data_size = 100 * sizeof(int64_t);
-    td_t* orig = td_alloc(data_size);
+    ray_t* orig = ray_alloc(data_size);
     munit_assert_ptr_not_null(orig);
 
-    orig->type = TD_I64;
+    orig->type = RAY_I64;
     orig->len = 100;
-    int64_t* data = (int64_t*)td_data(orig);
+    int64_t* data = (int64_t*)ray_data(orig);
     for (int i = 0; i < 100; i++) {
         data[i] = (int64_t)(i * 7 + 13);
     }
 
     /* Copy */
-    td_t* copy = td_alloc_copy(orig);
+    ray_t* copy = ray_alloc_copy(orig);
     munit_assert_ptr_not_null(copy);
     munit_assert_true((void*)copy != (void*)orig);
 
     /* Verify copy has same content */
-    munit_assert_int(copy->type, ==, TD_I64);
+    munit_assert_int(copy->type, ==, RAY_I64);
     munit_assert_int(copy->len, ==, 100);
-    int64_t* copy_data = (int64_t*)td_data(copy);
+    int64_t* copy_data = (int64_t*)ray_data(copy);
     for (int i = 0; i < 100; i++) {
         munit_assert_int(copy_data[i], ==, (int64_t)(i * 7 + 13));
     }
@@ -279,8 +279,8 @@ static MunitResult test_alloc_copy(const void* params, void* fixture) {
     /* Copy should have rc=1, independent of original */
     munit_assert_uint(atomic_load_explicit(&copy->rc, memory_order_relaxed), ==, 1);
 
-    td_free(orig);
-    td_free(copy);
+    ray_free(orig);
+    ray_free(copy);
     return MUNIT_OK;
 }
 
@@ -291,13 +291,13 @@ static MunitResult test_alloc_free_cycles(const void* params, void* fixture) {
 
     /* Repeated alloc/free should not leak or crash */
     for (int round = 0; round < 10; round++) {
-        td_t* blocks[64];
+        ray_t* blocks[64];
         for (int i = 0; i < 64; i++) {
-            blocks[i] = td_alloc((size_t)(i * 8));
+            blocks[i] = ray_alloc((size_t)(i * 8));
             munit_assert_ptr_not_null(blocks[i]);
         }
         for (int i = 63; i >= 0; i--) {
-            td_free(blocks[i]);
+            ray_free(blocks[i]);
         }
     }
     return MUNIT_OK;
@@ -313,18 +313,18 @@ static MunitResult test_various_sizes(const void* params, void* fixture) {
                        512, 1000, 1024, 4096, 8192, 65536, 1048576 };
     int n = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
-    td_t* blocks[20];
+    ray_t* blocks[20];
     for (int i = 0; i < n; i++) {
-        blocks[i] = td_alloc(sizes[i]);
+        blocks[i] = ray_alloc(sizes[i]);
         munit_assert_ptr_not_null(blocks[i]);
-        munit_assert_false(TD_IS_ERR(blocks[i]));
+        munit_assert_false(RAY_IS_ERR(blocks[i]));
         /* Write some data */
         if (sizes[i] > 0) {
-            memset(td_data(blocks[i]), 0xFF, sizes[i]);
+            memset(ray_data(blocks[i]), 0xFF, sizes[i]);
         }
     }
     for (int i = 0; i < n; i++) {
-        td_free(blocks[i]);
+        ray_free(blocks[i]);
     }
     return MUNIT_OK;
 }
@@ -334,20 +334,20 @@ static MunitResult test_various_sizes(const void* params, void* fixture) {
 static MunitResult test_order_for_size(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    /* 0 data bytes -> need 32 bytes total (32B td_t header) -> order 6 (2^6=64) */
-    munit_assert_uint(td_order_for_size(0), ==, 6);
+    /* 0 data bytes -> need 32 bytes total (32B ray_t header) -> order 6 (2^6=64) */
+    munit_assert_uint(ray_order_for_size(0), ==, 6);
 
     /* 1 data byte -> 33 bytes -> order 6 (2^6=64) */
-    munit_assert_uint(td_order_for_size(1), ==, 6);
+    munit_assert_uint(ray_order_for_size(1), ==, 6);
 
     /* 32 data bytes -> 64 bytes -> order 6 (exact fit) */
-    munit_assert_uint(td_order_for_size(32), ==, 6);
+    munit_assert_uint(ray_order_for_size(32), ==, 6);
 
     /* 33 data bytes -> 65 bytes -> order 7 (2^7=128) */
-    munit_assert_uint(td_order_for_size(33), ==, 7);
+    munit_assert_uint(ray_order_for_size(33), ==, 7);
 
     /* 800 data bytes (100 i64s) -> 832 bytes -> order 10 (2^10=1024) */
-    munit_assert_uint(td_order_for_size(800), ==, 10);
+    munit_assert_uint(ray_order_for_size(800), ==, 10);
 
     return MUNIT_OK;
 }
@@ -358,7 +358,7 @@ static MunitResult test_pool_alignment(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Allocate a block and verify self-aligned pool derivation */
-    td_t* v = td_alloc(64);
+    ray_t* v = ray_alloc(64);
     munit_assert_ptr_not_null(v);
 
     /* Block must be inside a self-aligned pool */
@@ -371,7 +371,7 @@ static MunitResult test_pool_alignment(const void* params, void* fixture) {
     /* Block must be within pool */
     munit_assert_true(addr >= pool_base && addr < pool_base + pool_size);
 
-    td_free(v);
+    ray_free(v);
     return MUNIT_OK;
 }
 
@@ -381,26 +381,26 @@ static MunitResult test_heap_id_derivation(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Allocate blocks and verify pool header heap_id matches current heap */
-    td_t* v1 = td_alloc(0);
-    td_t* v2 = td_alloc(1024);
-    td_t* v3 = td_alloc(65536);
+    ray_t* v1 = ray_alloc(0);
+    ray_t* v2 = ray_alloc(1024);
+    ray_t* v3 = ray_alloc(65536);
     munit_assert_ptr_not_null(v1);
     munit_assert_ptr_not_null(v2);
     munit_assert_ptr_not_null(v3);
 
-    td_heap_t* h = td_tl_heap;
+    ray_heap_t* h = ray_tl_heap;
 
     /* Pool header heap_id should match current heap for all blocks */
-    td_pool_hdr_t* phdr1 = td_pool_of(v1);
-    td_pool_hdr_t* phdr2 = td_pool_of(v2);
-    td_pool_hdr_t* phdr3 = td_pool_of(v3);
+    ray_pool_hdr_t* phdr1 = ray_pool_of(v1);
+    ray_pool_hdr_t* phdr2 = ray_pool_of(v2);
+    ray_pool_hdr_t* phdr3 = ray_pool_of(v3);
     munit_assert_uint(phdr1->heap_id, ==, h->id);
     munit_assert_uint(phdr2->heap_id, ==, h->id);
     munit_assert_uint(phdr3->heap_id, ==, h->id);
 
-    td_free(v1);
-    td_free(v2);
-    td_free(v3);
+    ray_free(v1);
+    ray_free(v2);
+    ray_free(v3);
     return MUNIT_OK;
 }
 
@@ -410,43 +410,43 @@ static MunitResult test_cross_heap_free(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* heap_a is the current heap (from buddy_setup) */
-    td_heap_t* heap_a = td_tl_heap;
+    ray_heap_t* heap_a = ray_tl_heap;
     uint16_t heap_a_id = heap_a->id;
 
     /* Create heap_b by switching thread-local pointer */
-    td_tl_heap = NULL;
-    td_heap_init();
-    td_heap_t* heap_b = td_tl_heap;
+    ray_tl_heap = NULL;
+    ray_heap_init();
+    ray_heap_t* heap_b = ray_tl_heap;
     munit_assert_ptr_not_null(heap_b);
     munit_assert_uint(heap_b->id, !=, heap_a_id);
 
     /* Allocate blocks on heap_b */
-    td_t* blk1 = td_alloc(0);
-    td_t* blk2 = td_alloc(128);
-    td_t* blk3 = td_alloc(4096);
+    ray_t* blk1 = ray_alloc(0);
+    ray_t* blk2 = ray_alloc(128);
+    ray_t* blk3 = ray_alloc(4096);
     munit_assert_ptr_not_null(blk1);
     munit_assert_ptr_not_null(blk2);
     munit_assert_ptr_not_null(blk3);
 
     /* Pool headers should carry heap_b's ID */
-    munit_assert_uint(td_pool_of(blk1)->heap_id, ==, heap_b->id);
-    munit_assert_uint(td_pool_of(blk2)->heap_id, ==, heap_b->id);
+    munit_assert_uint(ray_pool_of(blk1)->heap_id, ==, heap_b->id);
+    munit_assert_uint(ray_pool_of(blk2)->heap_id, ==, heap_b->id);
 
     /* Switch to heap_a and free blocks from the wrong heap */
-    td_tl_heap = heap_a;
-    td_free(blk1);  /* should go to heap_a->foreign */
-    td_free(blk2);
-    td_free(blk3);
+    ray_tl_heap = heap_a;
+    ray_free(blk1);  /* should go to heap_a->foreign */
+    ray_free(blk2);
+    ray_free(blk3);
 
     /* Flush foreign blocks back to their owning heap */
-    td_heap_flush_foreign();
+    ray_heap_flush_foreign();
 
     /* Cleanup: destroy heap_b */
-    td_tl_heap = heap_b;
-    td_heap_destroy();
+    ray_tl_heap = heap_b;
+    ray_heap_destroy();
 
     /* Restore heap_a for teardown */
-    td_tl_heap = heap_a;
+    ray_tl_heap = heap_a;
     return MUNIT_OK;
 }
 
@@ -456,27 +456,27 @@ static MunitResult test_heap_pending_merge(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* heap_a is the current heap (from buddy_setup) */
-    td_heap_t* heap_a = td_tl_heap;
+    ray_heap_t* heap_a = ray_tl_heap;
     uint32_t pools_before = heap_a->pool_count;
 
     /* Create heap_b */
-    td_tl_heap = NULL;
-    td_heap_init();
-    td_heap_t* heap_b = td_tl_heap;
+    ray_tl_heap = NULL;
+    ray_heap_init();
+    ray_heap_t* heap_b = ray_tl_heap;
     munit_assert_ptr_not_null(heap_b);
 
     /* Allocate on heap_b to force pool creation */
-    td_t* blk = td_alloc(0);
+    ray_t* blk = ray_alloc(0);
     munit_assert_ptr_not_null(blk);
     uint32_t heap_b_pools = heap_b->pool_count;
     munit_assert_uint(heap_b_pools, >, 0);
 
     /* Push heap_b onto pending queue (simulating worker teardown) */
-    td_tl_heap = heap_a;
-    td_heap_push_pending(heap_b);
+    ray_tl_heap = heap_a;
+    ray_heap_push_pending(heap_b);
 
     /* Drain pending — merges heap_b into heap_a, destroys heap_b */
-    td_heap_drain_pending();
+    ray_heap_drain_pending();
 
     /* heap_a should have gained heap_b's pools */
     munit_assert_uint(heap_a->pool_count, ==, pools_before + heap_b_pools);
@@ -486,8 +486,8 @@ static MunitResult test_heap_pending_merge(const void* params, void* fixture) {
 
     /* Free the block — goes via foreign path (heap_id mismatch)
      * then flush reclaims it locally */
-    td_free(blk);
-    td_heap_flush_foreign();
+    ray_free(blk);
+    ray_heap_flush_foreign();
 
     return MUNIT_OK;
 }

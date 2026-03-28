@@ -29,14 +29,14 @@
 /* --------------------------------------------------------------------------
  * Static asserts
  * -------------------------------------------------------------------------- */
-_Static_assert(sizeof(td_pool_hdr_t) <= 16,
-               "td_pool_hdr_t must fit in nullmap (16 bytes)");
+_Static_assert(sizeof(ray_pool_hdr_t) <= 16,
+               "ray_pool_hdr_t must fit in nullmap (16 bytes)");
 
 /* --------------------------------------------------------------------------
  * Thread-local state
  * -------------------------------------------------------------------------- */
-TD_TLS td_heap_t*     td_tl_heap  = NULL;
-TD_TLS td_mem_stats_t td_tl_stats;
+RAY_TLS ray_heap_t*     ray_tl_heap  = NULL;
+RAY_TLS ray_mem_stats_t ray_tl_stats;
 
 /* --------------------------------------------------------------------------
  * Bitmap-based heap ID allocator (atomic CAS, reusable IDs)
@@ -45,19 +45,19 @@ TD_TLS td_mem_stats_t td_tl_stats;
  * releasing clears it. IDs are reused after release (unlike a monotonic
  * counter). Cursor rotates to spread contention across words.
  * -------------------------------------------------------------------------- */
-static _Atomic(uint64_t) g_heap_id_bitmap[TD_HEAP_ID_WORDS] = { [0] = 1ULL };
+static _Atomic(uint64_t) g_heap_id_bitmap[RAY_HEAP_ID_WORDS] = { [0] = 1ULL };
 static _Atomic(uint64_t) g_heap_id_cursor = 0;
 
-td_heap_t* td_heap_registry[TD_HEAP_REGISTRY_SIZE];
+ray_heap_t* ray_heap_registry[RAY_HEAP_REGISTRY_SIZE];
 
 /* Pending-merge queue head (lock-free LIFO) */
-_Atomic(td_heap_t*) td_heap_pending_merge = NULL;
+_Atomic(ray_heap_t*) ray_heap_pending_merge = NULL;
 
 static int heap_id_acquire(void) {
     uint64_t start = atomic_fetch_add_explicit(&g_heap_id_cursor, 1,
                                                 memory_order_relaxed);
-    for (uint64_t off = 0; off < TD_HEAP_ID_WORDS; off++) {
-        uint64_t idx = (start + off) % TD_HEAP_ID_WORDS;
+    for (uint64_t off = 0; off < RAY_HEAP_ID_WORDS; off++) {
+        uint64_t idx = (start + off) % RAY_HEAP_ID_WORDS;
         uint64_t word = atomic_load_explicit(&g_heap_id_bitmap[idx],
                                               memory_order_relaxed);
         while (~word != 0ULL) {
@@ -77,7 +77,7 @@ static int heap_id_acquire(void) {
 }
 
 static void heap_id_release(int id) {
-    if (id < 0 || id >= (int)TD_HEAP_ID_BITS) return;
+    if (id < 0 || id >= (int)RAY_HEAP_ID_BITS) return;
     uint64_t idx = (uint64_t)id >> 6;
     uint64_t bit = (uint64_t)id & 63ULL;
     uint64_t mask = ~(1ULL << bit);
@@ -88,7 +88,7 @@ static void heap_id_release(int id) {
 /* --------------------------------------------------------------------------
  * Parallel flag
  * -------------------------------------------------------------------------- */
-_Atomic(uint32_t) td_parallel_flag = 0;
+_Atomic(uint32_t) ray_parallel_flag = 0;
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -99,11 +99,11 @@ static uint8_t ceil_log2(size_t n) {
     return (uint8_t)(64 - __builtin_clzll(n - 1));
 }
 
-uint8_t td_order_for_size(size_t data_size) {
-    if (data_size > SIZE_MAX - 32) return TD_HEAP_MAX_ORDER + 1;
-    size_t total = data_size + 32;  /* 32B td_t header (no prefix) */
+uint8_t ray_order_for_size(size_t data_size) {
+    if (data_size > SIZE_MAX - 32) return RAY_HEAP_MAX_ORDER + 1;
+    size_t total = data_size + 32;  /* 32B ray_t header (no prefix) */
     uint8_t k = ceil_log2(total);
-    if (k < TD_ORDER_MIN) k = TD_ORDER_MIN;
+    if (k < RAY_ORDER_MIN) k = RAY_ORDER_MIN;
     return k;
 }
 
@@ -118,20 +118,20 @@ uint8_t td_order_for_size(size_t data_size) {
  * so the cascading split produces a right-half block of the needed order.
  * -------------------------------------------------------------------------- */
 
-static bool heap_add_pool(td_heap_t* h, uint8_t order);
+static bool heap_add_pool(ray_heap_t* h, uint8_t order);
 
 /* --------------------------------------------------------------------------
  * Freelist operations (circular sentinel via fl_prev/fl_next)
  *
- * Each freelist[order] is a td_fl_head_t sentinel. fl_remove() unlinks a
+ * Each freelist[order] is a ray_fl_head_t sentinel. fl_remove() unlinks a
  * block from ANY circular list without needing the head pointer — enabling
  * safe cross-heap buddy coalescing.
  * -------------------------------------------------------------------------- */
 
-TD_INLINE void heap_insert_block(td_heap_t* h, td_t* blk, uint8_t order) {
-    td_fl_head_t* head = &h->freelist[order];
-    td_t* first = head->fl_next;
-    blk->fl_prev = (td_t*)head;
+RAY_INLINE void heap_insert_block(ray_heap_t* h, ray_t* blk, uint8_t order) {
+    ray_fl_head_t* head = &h->freelist[order];
+    ray_t* first = head->fl_next;
+    blk->fl_prev = (ray_t*)head;
     blk->fl_next = first;
     first->fl_prev = blk;
     head->fl_next = blk;
@@ -142,17 +142,17 @@ TD_INLINE void heap_insert_block(td_heap_t* h, td_t* blk, uint8_t order) {
 
 /* heap_remove_block: currently unused — retained for future coalescing paths */
 static void __attribute__((unused))
-heap_remove_block(td_heap_t* h, td_t* blk, uint8_t order) {
+heap_remove_block(ray_heap_t* h, ray_t* blk, uint8_t order) {
     fl_remove(blk);  /* circular unlink — works across heaps */
     if (fl_empty(&h->freelist[order]))
         h->avail &= ~(1ULL << order);
 }
 
-TD_INLINE void heap_split_block(td_heap_t* h, td_t* blk,
+RAY_INLINE void heap_split_block(ray_heap_t* h, ray_t* blk,
                                 uint8_t target_order, uint8_t block_order) {
     while (block_order > target_order) {
         block_order--;
-        td_t* buddy = (td_t*)((char*)blk + BSIZEOF(block_order));
+        ray_t* buddy = (ray_t*)((char*)blk + BSIZEOF(block_order));
         buddy->mmod  = 0;
         buddy->order = block_order;
         heap_insert_block(h, buddy, block_order);
@@ -162,17 +162,17 @@ TD_INLINE void heap_split_block(td_heap_t* h, td_t* blk,
 /* --------------------------------------------------------------------------
  * Coalescing: merge block with buddies up to pool_order
  *
- * Pool header at offset 0 has rc=1 and order=TD_ORDER_MIN, so buddy
+ * Pool header at offset 0 has rc=1 and order=RAY_ORDER_MIN, so buddy
  * checks always fail before reaching the header. Safe sentinel.
  * -------------------------------------------------------------------------- */
 
-static void heap_coalesce(td_heap_t* h, td_t* blk,
+static void heap_coalesce(ray_heap_t* h, ray_t* blk,
                           uintptr_t pool_base, uint8_t pool_order) {
     uint8_t order = blk->order;
 
     /* During parallel execution, skip coalescing entirely — buddies may
      * belong to other heaps' freelists, and fl_remove would corrupt them. */
-    if (atomic_load_explicit(&td_parallel_flag, memory_order_relaxed) != 0) {
+    if (atomic_load_explicit(&ray_parallel_flag, memory_order_relaxed) != 0) {
         heap_insert_block(h, blk, order);
         return;
     }
@@ -180,7 +180,7 @@ static void heap_coalesce(td_heap_t* h, td_t* blk,
     for (;; order++) {
         if (order >= pool_order) break;
 
-        td_t* buddy = td_buddy_of(blk, order, pool_base);
+        ray_t* buddy = ray_buddy_of(blk, order, pool_base);
         __builtin_prefetch(buddy, 0, 1);
 
         uint32_t buddy_rc = atomic_load_explicit(&buddy->rc, memory_order_relaxed);
@@ -200,38 +200,38 @@ static void heap_coalesce(td_heap_t* h, td_t* blk,
  * heap_add_pool implementation
  * -------------------------------------------------------------------------- */
 
-static bool heap_add_pool(td_heap_t* h, uint8_t order) {
-    if (h->pool_count >= TD_MAX_POOLS) return false;
+static bool heap_add_pool(ray_heap_t* h, uint8_t order) {
+    if (h->pool_count >= RAY_MAX_POOLS) return false;
 
     uint8_t pool_order;
-    if (order >= TD_HEAP_POOL_ORDER)
+    if (order >= RAY_HEAP_POOL_ORDER)
         pool_order = order + 1;  /* need one order larger for header + block */
     else
-        pool_order = TD_HEAP_POOL_ORDER;
+        pool_order = RAY_HEAP_POOL_ORDER;
 
-    if (pool_order > TD_HEAP_MAX_ORDER) return false;
+    if (pool_order > RAY_HEAP_MAX_ORDER) return false;
     size_t pool_size = BSIZEOF(pool_order);
 
-    void* mem = td_vm_alloc_aligned(pool_size, pool_size);
+    void* mem = ray_vm_alloc_aligned(pool_size, pool_size);
     if (!mem) return false;
 
     /* --- Write pool header at offset 0 --- */
-    td_t* hdr_block = (td_t*)mem;
-    memset(hdr_block, 0, BSIZEOF(TD_ORDER_MIN));
+    ray_t* hdr_block = (ray_t*)mem;
+    memset(hdr_block, 0, BSIZEOF(RAY_ORDER_MIN));
     hdr_block->mmod  = 0;
-    hdr_block->order = TD_ORDER_MIN;
+    hdr_block->order = RAY_ORDER_MIN;
     atomic_store_explicit(&hdr_block->rc, 1, memory_order_relaxed);  /* sentinel: never free */
 
-    td_pool_hdr_t* hdr = (td_pool_hdr_t*)hdr_block;  /* overlay on nullmap */
+    ray_pool_hdr_t* hdr = (ray_pool_hdr_t*)hdr_block;  /* overlay on nullmap */
     hdr->heap_id    = h->id;
     hdr->pool_order = pool_order;
     hdr->vm_base    = mem;  /* on POSIX, same as aligned base */
 
-    /* --- Cascading split: split from pool_order down to TD_ORDER_MIN.
+    /* --- Cascading split: split from pool_order down to RAY_ORDER_MIN.
      *     Right half of each split → freelist.
      *     Leftmost min-block = pool header (already set, rc=1). --- */
-    for (uint8_t o = pool_order; o > TD_ORDER_MIN; o--) {
-        td_t* right = (td_t*)((char*)mem + BSIZEOF(o - 1));
+    for (uint8_t o = pool_order; o > RAY_ORDER_MIN; o--) {
+        ray_t* right = (ray_t*)((char*)mem + BSIZEOF(o - 1));
         right->mmod  = 0;
         right->order = (uint8_t)(o - 1);
         heap_insert_block(h, right, (uint8_t)(o - 1));
@@ -249,10 +249,10 @@ static bool heap_add_pool(td_heap_t* h, uint8_t order) {
  * Slab cache flush (with coalescing for GC effectiveness)
  * -------------------------------------------------------------------------- */
 
-static void heap_flush_slabs(td_heap_t* h) {
-    for (int i = 0; i < TD_SLAB_ORDERS; i++) {
+static void heap_flush_slabs(ray_heap_t* h) {
+    for (int i = 0; i < RAY_SLAB_ORDERS; i++) {
         while (h->slabs[i].count > 0) {
-            td_t* blk = h->slabs[i].stack[--h->slabs[i].count];
+            ray_t* blk = h->slabs[i].stack[--h->slabs[i].count];
             int pidx = heap_find_pool(h, blk);
             uintptr_t pb;
             uint8_t po;
@@ -260,7 +260,7 @@ static void heap_flush_slabs(td_heap_t* h) {
                 pb = (uintptr_t)h->pools[pidx].base;
                 po = h->pools[pidx].pool_order;
             } else {
-                td_pool_hdr_t* phdr = td_pool_of(blk);
+                ray_pool_hdr_t* phdr = ray_pool_of(blk);
                 pb = (uintptr_t)phdr;
                 po = phdr->pool_order;
             }
@@ -277,17 +277,17 @@ static void heap_flush_slabs(td_heap_t* h) {
  * can reuse their pools across queries instead of allocating new ones.
  *
  * return_to_owner must only be true when workers are idle (on semaphore),
- * i.e. td_parallel_flag == 0. Otherwise coalesce into current heap.
+ * i.e. ray_parallel_flag == 0. Otherwise coalesce into current heap.
  * -------------------------------------------------------------------------- */
 
-static void heap_flush_foreign(td_heap_t* h, bool return_to_owner) {
-    td_t* blk = h->foreign;
+static void heap_flush_foreign(ray_heap_t* h, bool return_to_owner) {
+    ray_t* blk = h->foreign;
     while (blk) {
-        td_t* next = blk->fl_next;
+        ray_t* next = blk->fl_next;
         if (return_to_owner) {
-            td_pool_hdr_t* phdr = td_pool_of(blk);  /* GC path, not hot */
+            ray_pool_hdr_t* phdr = ray_pool_of(blk);  /* GC path, not hot */
             uint16_t owner_id = phdr->heap_id;
-            td_heap_t* owner = td_heap_registry[owner_id % TD_HEAP_REGISTRY_SIZE];
+            ray_heap_t* owner = ray_heap_registry[owner_id % RAY_HEAP_REGISTRY_SIZE];
             if (owner && owner->id == owner_id && owner != h) {
                 int pidx = heap_find_pool(owner, blk);
                 uintptr_t pb;
@@ -312,7 +312,7 @@ static void heap_flush_foreign(td_heap_t* h, bool return_to_owner) {
             pb = (uintptr_t)h->pools[pidx].base;
             po = h->pools[pidx].pool_order;
         } else {
-            td_pool_hdr_t* phdr = td_pool_of(blk);
+            ray_pool_hdr_t* phdr = ray_pool_of(blk);
             pb = (uintptr_t)phdr;
             po = phdr->pool_order;
         }
@@ -326,245 +326,245 @@ static void heap_flush_foreign(td_heap_t* h, bool return_to_owner) {
  * Owned-reference helpers
  * -------------------------------------------------------------------------- */
 
-static bool td_atom_str_is_sso(const td_t* s) {
+static bool ray_atom_str_is_sso(const ray_t* s) {
     if (s->slen >= 1 && s->slen <= 7) return true;
     if (s->slen == 0 && s->obj == NULL) return true;
     return false;
 }
 
-static bool td_atom_owns_obj(const td_t* v) {
-    if (v->type == TD_ATOM_GUID) return v->obj != NULL;
-    if (v->type == TD_ATOM_STR) return !td_atom_str_is_sso(v);
+static bool ray_atom_owns_obj(const ray_t* v) {
+    if (v->type == RAY_ATOM_GUID) return v->obj != NULL;
+    if (v->type == RAY_ATOM_STR) return !ray_atom_str_is_sso(v);
     return false;
 }
 
-static void td_release_owned_refs(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
+static void ray_release_owned_refs(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
 
-    if (td_is_atom(v)) {
-        if (v->type == TD_ATOM_LAMBDA) {
-            /* Lambda stores [params, body, bytecode, constants] in td_data */
-            td_t** slots = (td_t**)td_data(v);
+    if (ray_is_atom(v)) {
+        if (v->type == RAY_ATOM_LAMBDA) {
+            /* Lambda stores [params, body, bytecode, constants] in ray_data */
+            ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) {
-                if (slots[i] && !TD_IS_ERR(slots[i]))
-                    td_release(slots[i]);
+                if (slots[i] && !RAY_IS_ERR(slots[i]))
+                    ray_release(slots[i]);
             }
             return;
         }
-        if (td_atom_owns_obj(v) && v->obj && !TD_IS_ERR(v->obj))
-            td_release(v->obj);
+        if (ray_atom_owns_obj(v) && v->obj && !RAY_IS_ERR(v->obj))
+            ray_release(v->obj);
         return;
     }
 
-    if (v->attrs & TD_ATTR_SLICE) {
-        if (v->slice_parent && !TD_IS_ERR(v->slice_parent))
-            td_release(v->slice_parent);
+    if (v->attrs & RAY_ATTR_SLICE) {
+        if (v->slice_parent && !RAY_IS_ERR(v->slice_parent))
+            ray_release(v->slice_parent);
         return;
     }
 
-    if ((v->attrs & TD_ATTR_NULLMAP_EXT) &&
-        v->ext_nullmap && !TD_IS_ERR(v->ext_nullmap))
-        td_release(v->ext_nullmap);
+    if ((v->attrs & RAY_ATTR_NULLMAP_EXT) &&
+        v->ext_nullmap && !RAY_IS_ERR(v->ext_nullmap))
+        ray_release(v->ext_nullmap);
 
-    if (v->type == TD_STR && v->str_pool && !TD_IS_ERR(v->str_pool))
-        td_release(v->str_pool);
+    if (v->type == RAY_STR && v->str_pool && !RAY_IS_ERR(v->str_pool))
+        ray_release(v->str_pool);
 
-    if (TD_IS_PARTED(v->type)) {
+    if (RAY_IS_PARTED(v->type)) {
         int64_t n_segs = v->len;
-        td_t** segs = (td_t**)td_data(v);
+        ray_t** segs = (ray_t**)ray_data(v);
         for (int64_t i = 0; i < n_segs; i++) {
-            if (segs[i] && !TD_IS_ERR(segs[i]))
-                td_release(segs[i]);
+            if (segs[i] && !RAY_IS_ERR(segs[i]))
+                ray_release(segs[i]);
         }
         return;
     }
 
-    if (v->type == TD_MAPCOMMON) {
-        td_t** ptrs = (td_t**)td_data(v);
-        if (ptrs[0] && !TD_IS_ERR(ptrs[0])) td_release(ptrs[0]);
-        if (ptrs[1] && !TD_IS_ERR(ptrs[1])) td_release(ptrs[1]);
+    if (v->type == RAY_MAPCOMMON) {
+        ray_t** ptrs = (ray_t**)ray_data(v);
+        if (ptrs[0] && !RAY_IS_ERR(ptrs[0])) ray_release(ptrs[0]);
+        if (ptrs[1] && !RAY_IS_ERR(ptrs[1])) ray_release(ptrs[1]);
         return;
     }
 
-    if (v->type == TD_TABLE) {
+    if (v->type == RAY_TABLE) {
         if (v->len < 0) return;
-        td_t** slots = (td_t**)td_data(v);
-        td_t* schema = slots[0];
-        if (schema && !TD_IS_ERR(schema)) td_release(schema);
+        ray_t** slots = (ray_t**)ray_data(v);
+        ray_t* schema = slots[0];
+        if (schema && !RAY_IS_ERR(schema)) ray_release(schema);
 
-        td_t** cols = slots + 1;
+        ray_t** cols = slots + 1;
         for (int64_t i = 0; i < v->len; i++) {
-            td_t* col = cols[i];
-            if (col && !TD_IS_ERR(col)) td_release(col);
+            ray_t* col = cols[i];
+            if (col && !RAY_IS_ERR(col)) ray_release(col);
         }
         return;
     }
 
-    if (v->type == TD_LIST) {
-        td_t** ptrs = (td_t**)td_data(v);
+    if (v->type == RAY_LIST) {
+        ray_t** ptrs = (ray_t**)ray_data(v);
         for (int64_t i = 0; i < v->len; i++) {
-            td_t* child = ptrs[i];
-            if (child && !TD_IS_ERR(child)) td_release(child);
+            ray_t* child = ptrs[i];
+            if (child && !RAY_IS_ERR(child)) ray_release(child);
         }
     }
 }
 
-void td_retain_owned_refs(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
+void ray_retain_owned_refs(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
 
-    if (td_is_atom(v)) {
-        if (v->type == TD_ATOM_LAMBDA) {
-            td_t** slots = (td_t**)td_data(v);
+    if (ray_is_atom(v)) {
+        if (v->type == RAY_ATOM_LAMBDA) {
+            ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) {
-                if (slots[i] && !TD_IS_ERR(slots[i]))
-                    td_retain(slots[i]);
+                if (slots[i] && !RAY_IS_ERR(slots[i]))
+                    ray_retain(slots[i]);
             }
             return;
         }
-        if (td_atom_owns_obj(v) && v->obj && !TD_IS_ERR(v->obj))
-            td_retain(v->obj);
+        if (ray_atom_owns_obj(v) && v->obj && !RAY_IS_ERR(v->obj))
+            ray_retain(v->obj);
         return;
     }
 
-    if (v->attrs & TD_ATTR_SLICE) {
-        if (v->slice_parent && !TD_IS_ERR(v->slice_parent))
-            td_retain(v->slice_parent);
+    if (v->attrs & RAY_ATTR_SLICE) {
+        if (v->slice_parent && !RAY_IS_ERR(v->slice_parent))
+            ray_retain(v->slice_parent);
         return;
     }
 
-    if ((v->attrs & TD_ATTR_NULLMAP_EXT) &&
-        v->ext_nullmap && !TD_IS_ERR(v->ext_nullmap))
-        td_retain(v->ext_nullmap);
+    if ((v->attrs & RAY_ATTR_NULLMAP_EXT) &&
+        v->ext_nullmap && !RAY_IS_ERR(v->ext_nullmap))
+        ray_retain(v->ext_nullmap);
 
-    if (v->type == TD_STR && v->str_pool && !TD_IS_ERR(v->str_pool))
-        td_retain(v->str_pool);
+    if (v->type == RAY_STR && v->str_pool && !RAY_IS_ERR(v->str_pool))
+        ray_retain(v->str_pool);
 
-    if (TD_IS_PARTED(v->type)) {
+    if (RAY_IS_PARTED(v->type)) {
         int64_t n_segs = v->len;
-        td_t** segs = (td_t**)td_data(v);
+        ray_t** segs = (ray_t**)ray_data(v);
         for (int64_t i = 0; i < n_segs; i++) {
-            if (segs[i] && !TD_IS_ERR(segs[i]))
-                td_retain(segs[i]);
+            if (segs[i] && !RAY_IS_ERR(segs[i]))
+                ray_retain(segs[i]);
         }
         return;
     }
 
-    if (v->type == TD_MAPCOMMON) {
-        td_t** ptrs = (td_t**)td_data(v);
-        if (ptrs[0] && !TD_IS_ERR(ptrs[0])) td_retain(ptrs[0]);
-        if (ptrs[1] && !TD_IS_ERR(ptrs[1])) td_retain(ptrs[1]);
+    if (v->type == RAY_MAPCOMMON) {
+        ray_t** ptrs = (ray_t**)ray_data(v);
+        if (ptrs[0] && !RAY_IS_ERR(ptrs[0])) ray_retain(ptrs[0]);
+        if (ptrs[1] && !RAY_IS_ERR(ptrs[1])) ray_retain(ptrs[1]);
         return;
     }
 
-    if (v->type == TD_TABLE) {
-        td_t** slots = (td_t**)td_data(v);
-        td_t* schema = slots[0];
-        if (schema && !TD_IS_ERR(schema)) td_retain(schema);
+    if (v->type == RAY_TABLE) {
+        ray_t** slots = (ray_t**)ray_data(v);
+        ray_t* schema = slots[0];
+        if (schema && !RAY_IS_ERR(schema)) ray_retain(schema);
 
-        td_t** cols = slots + 1;
+        ray_t** cols = slots + 1;
         for (int64_t i = 0; i < v->len; i++) {
-            td_t* col = cols[i];
-            if (col && !TD_IS_ERR(col)) td_retain(col);
+            ray_t* col = cols[i];
+            if (col && !RAY_IS_ERR(col)) ray_retain(col);
         }
         return;
     }
 
-    if (v->type == TD_LIST) {
-        td_t** ptrs = (td_t**)td_data(v);
+    if (v->type == RAY_LIST) {
+        ray_t** ptrs = (ray_t**)ray_data(v);
         for (int64_t i = 0; i < v->len; i++) {
-            td_t* child = ptrs[i];
-            if (child && !TD_IS_ERR(child)) td_retain(child);
+            ray_t* child = ptrs[i];
+            if (child && !RAY_IS_ERR(child)) ray_retain(child);
         }
     }
 }
 
-static void td_detach_owned_refs(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
+static void ray_detach_owned_refs(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
 
-    if (td_is_atom(v)) {
-        if (v->type == TD_ATOM_LAMBDA) {
-            td_t** slots = (td_t**)td_data(v);
+    if (ray_is_atom(v)) {
+        if (v->type == RAY_ATOM_LAMBDA) {
+            ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) slots[i] = NULL;
             return;
         }
-        if (td_atom_owns_obj(v)) v->obj = NULL;
+        if (ray_atom_owns_obj(v)) v->obj = NULL;
         return;
     }
 
-    if (v->attrs & TD_ATTR_SLICE) {
+    if (v->attrs & RAY_ATTR_SLICE) {
         v->slice_parent = NULL;
         v->slice_offset = 0;
-        v->attrs &= (uint8_t)~TD_ATTR_SLICE;
+        v->attrs &= (uint8_t)~RAY_ATTR_SLICE;
         return;
     }
 
-    if (v->attrs & TD_ATTR_NULLMAP_EXT) {
+    if (v->attrs & RAY_ATTR_NULLMAP_EXT) {
         v->ext_nullmap = NULL;
-        v->attrs &= (uint8_t)~TD_ATTR_NULLMAP_EXT;
+        v->attrs &= (uint8_t)~RAY_ATTR_NULLMAP_EXT;
     }
 
-    if (v->type == TD_STR) {
+    if (v->type == RAY_STR) {
         v->str_pool = NULL;
     }
 
-    if (TD_IS_PARTED(v->type)) {
+    if (RAY_IS_PARTED(v->type)) {
         int64_t n_segs = v->len;
-        td_t** segs = (td_t**)td_data(v);
+        ray_t** segs = (ray_t**)ray_data(v);
         for (int64_t i = 0; i < n_segs; i++)
             segs[i] = NULL;
         return;
     }
 
-    if (v->type == TD_MAPCOMMON) {
-        td_t** ptrs = (td_t**)td_data(v);
+    if (v->type == RAY_MAPCOMMON) {
+        ray_t** ptrs = (ray_t**)ray_data(v);
         ptrs[0] = NULL;
         ptrs[1] = NULL;
         return;
     }
 
-    if (v->type == TD_TABLE) {
-        td_t** slots = (td_t**)td_data(v);
+    if (v->type == RAY_TABLE) {
+        ray_t** slots = (ray_t**)ray_data(v);
         slots[0] = NULL;
         v->len = 0;
         return;
     }
 
-    if (v->type == TD_LIST) {
+    if (v->type == RAY_LIST) {
         v->len = 0;
     }
 }
 
 /* --------------------------------------------------------------------------
- * td_alloc
+ * ray_alloc
  * -------------------------------------------------------------------------- */
 
-td_t* td_alloc(size_t data_size) {
-    td_heap_t* h = td_tl_heap;
-    if (TD_UNLIKELY(!h)) {
-        td_heap_init();
-        h = td_tl_heap;
+ray_t* ray_alloc(size_t data_size) {
+    ray_heap_t* h = ray_tl_heap;
+    if (RAY_UNLIKELY(!h)) {
+        ray_heap_init();
+        h = ray_tl_heap;
         if (!h) return NULL;
     }
 
-    uint8_t order = td_order_for_size(data_size);
-    if (order > TD_HEAP_MAX_ORDER) return NULL;
+    uint8_t order = ray_order_for_size(data_size);
+    if (order > RAY_HEAP_MAX_ORDER) return NULL;
 
     /* Slab fast path */
-    if (TD_LIKELY(IS_SLAB_ORDER(order))) {
+    if (RAY_LIKELY(IS_SLAB_ORDER(order))) {
         int idx = SLAB_INDEX(order);
-        if (TD_LIKELY(h->slabs[idx].count > 0)) {
-            td_t* v = h->slabs[idx].stack[--h->slabs[idx].count];
+        if (RAY_LIKELY(h->slabs[idx].count > 0)) {
+            ray_t* v = h->slabs[idx].stack[--h->slabs[idx].count];
 
             memset(v, 0, 32);
             v->mmod  = 0;
             v->order = order;
             atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
 
-            td_tl_stats.alloc_count++;
-            td_tl_stats.slab_hits++;
-            td_tl_stats.bytes_allocated += BSIZEOF(order);
-            if (td_tl_stats.bytes_allocated > td_tl_stats.peak_bytes)
-                td_tl_stats.peak_bytes = td_tl_stats.bytes_allocated;
+            ray_tl_stats.alloc_count++;
+            ray_tl_stats.slab_hits++;
+            ray_tl_stats.bytes_allocated += BSIZEOF(order);
+            if (ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes)
+                ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated;
             return v;
         }
     }
@@ -574,8 +574,8 @@ td_t* td_alloc(size_t data_size) {
      * to find a genuinely non-empty freelist. */
     uint64_t candidates = h->avail & (UINT64_MAX << order);
 
-    if (TD_UNLIKELY(candidates == 0)) {
-        heap_flush_foreign(h, false);  /* always local in td_alloc */
+    if (RAY_UNLIKELY(candidates == 0)) {
+        heap_flush_foreign(h, false);  /* always local in ray_alloc */
 
         candidates = h->avail & (UINT64_MAX << order);
 
@@ -602,8 +602,8 @@ td_t* td_alloc(size_t data_size) {
     }
 
     /* Pop from circular sentinel freelist */
-    td_fl_head_t* head = &h->freelist[found_order];
-    td_t* blk = head->fl_next;
+    ray_fl_head_t* head = &h->freelist[found_order];
+    ray_t* blk = head->fl_next;
     fl_remove(blk);
     if (fl_empty(head))
         h->avail &= ~(1ULL << found_order);
@@ -611,81 +611,81 @@ td_t* td_alloc(size_t data_size) {
     /* Split down to requested order */
     heap_split_block(h, blk, order, found_order);
 
-    /* Zero td_t header and set metadata */
+    /* Zero ray_t header and set metadata */
     memset(blk, 0, 32);
     blk->mmod  = 0;
     blk->order = order;
     atomic_store_explicit(&blk->rc, 1, memory_order_relaxed);
 
-    td_tl_stats.alloc_count++;
-    td_tl_stats.bytes_allocated += BSIZEOF(order);
-    if (td_tl_stats.bytes_allocated > td_tl_stats.peak_bytes)
-        td_tl_stats.peak_bytes = td_tl_stats.bytes_allocated;
+    ray_tl_stats.alloc_count++;
+    ray_tl_stats.bytes_allocated += BSIZEOF(order);
+    if (ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes)
+        ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated;
 
     return blk;
 }
 
 /* --------------------------------------------------------------------------
- * td_free
+ * ray_free
  * -------------------------------------------------------------------------- */
 
-void td_free(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
-    if (v->attrs & TD_ATTR_ARENA) return;  /* arena-owned, bulk-freed */
+void ray_free(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
+    if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, bulk-freed */
 
     /* Guard: keep rc=1 while releasing children so buddy coalescing
      * won't merge this block prematurely (it checks buddy_rc==0). */
     atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
 
-    td_release_owned_refs(v);
+    ray_release_owned_refs(v);
 
     /* File-mapped: munmap */
     if (v->mmod == 1) {
-        if (v->type == TD_TABLE || v->type == TD_LIST) return;
-        if (v->type > 0 && v->type < TD_TYPE_COUNT) {
-            uint8_t esz = td_sym_elem_size(v->type, v->attrs);
+        if (v->type == RAY_TABLE || v->type == RAY_LIST) return;
+        if (v->type > 0 && v->type < RAY_TYPE_COUNT) {
+            uint8_t esz = ray_sym_elem_size(v->type, v->attrs);
             size_t data_size = 32 + (size_t)v->len * esz;
-            if (v->attrs & TD_ATTR_NULLMAP_EXT)
+            if (v->attrs & RAY_ATTR_NULLMAP_EXT)
                 data_size += ((size_t)v->len + 7) / 8;
             size_t mapped_size = (data_size + 4095) & ~(size_t)4095;
-            td_vm_unmap_file(v, mapped_size);
+            ray_vm_unmap_file(v, mapped_size);
         } else {
-            td_vm_unmap_file(v, 4096);
+            ray_vm_unmap_file(v, 4096);
         }
-        td_tl_stats.free_count++;
+        ray_tl_stats.free_count++;
         return;
     }
 
     /* Legacy mmod==2 guard */
     if (v->mmod == 2) return;
 
-    td_heap_t* h = td_tl_heap;
+    ray_heap_t* h = ray_tl_heap;
     if (!h) return;
 
     uint8_t order = v->order;
 
-    if (order < TD_ORDER_MIN || order > TD_HEAP_MAX_ORDER) return;
+    if (order < RAY_ORDER_MIN || order > RAY_HEAP_MAX_ORDER) return;
 
     size_t block_size = BSIZEOF(order);
 
     /* O(1) ownership check via pool header heap_id.
-     * td_pool_of() derives pool base in O(1) via self-aligned AND mask.
+     * ray_pool_of() derives pool base in O(1) via self-aligned AND mask.
      * Pool header stores heap_id stamped at pool creation. */
-    td_pool_hdr_t* phdr = td_pool_of(v);
+    ray_pool_hdr_t* phdr = ray_pool_of(v);
     bool is_local = (phdr->heap_id == h->id);
 
     /* Slab fast path (same heap only) */
     if (IS_SLAB_ORDER(order) && is_local) {
         int idx = SLAB_INDEX(order);
-        if (h->slabs[idx].count < TD_SLAB_CACHE_SIZE) {
+        if (h->slabs[idx].count < RAY_SLAB_CACHE_SIZE) {
             /* Mark rc=1 so buddy coalescing skips slab-cached blocks.
-             * Blocks freed via td_release arrive with rc=0; without this,
+             * Blocks freed via ray_release arrive with rc=0; without this,
              * a buddy being freed would see rc==0 and incorrectly merge
              * with the slab-cached block, causing overlapping allocations. */
             atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
             h->slabs[idx].stack[h->slabs[idx].count++] = v;
-            td_tl_stats.free_count++;
-            td_tl_stats.bytes_allocated -= block_size;
+            ray_tl_stats.free_count++;
+            ray_tl_stats.bytes_allocated -= block_size;
             return;
         }
     }
@@ -694,47 +694,47 @@ void td_free(td_t* v) {
     if (!is_local) {
         v->fl_next = h->foreign;
         h->foreign = v;
-        td_tl_stats.free_count++;
-        td_tl_stats.bytes_allocated -= block_size;
+        ray_tl_stats.free_count++;
+        ray_tl_stats.bytes_allocated -= block_size;
         return;
     }
 
     /* Local block — coalesce with buddy */
     heap_coalesce(h, v, (uintptr_t)phdr, phdr->pool_order);
 
-    td_tl_stats.free_count++;
-    td_tl_stats.bytes_allocated -= block_size;
+    ray_tl_stats.free_count++;
+    ray_tl_stats.bytes_allocated -= block_size;
 }
 
 /* --------------------------------------------------------------------------
- * td_alloc_copy
+ * ray_alloc_copy
  * -------------------------------------------------------------------------- */
 
-td_t* td_alloc_copy(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return NULL;
+ray_t* ray_alloc_copy(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return NULL;
     size_t data_size;
-    if (td_is_atom(v)) {
+    if (ray_is_atom(v)) {
         data_size = 0;
-    } else if (v->type == TD_TABLE) {
-        if (v->len < 0) return TD_ERR_PTR(TD_ERR_OOM);
-        data_size = (size_t)(td_len(v) + 1) * sizeof(td_t*);
-    } else if (TD_IS_PARTED(v->type) || v->type == TD_MAPCOMMON) {
+    } else if (v->type == RAY_TABLE) {
+        if (v->len < 0) return RAY_ERR_PTR(RAY_ERR_OOM);
+        data_size = (size_t)(ray_len(v) + 1) * sizeof(ray_t*);
+    } else if (RAY_IS_PARTED(v->type) || v->type == RAY_MAPCOMMON) {
         int64_t n_ptrs = v->len;
-        if (v->type == TD_MAPCOMMON) n_ptrs = 2;
-        if (n_ptrs < 0) return TD_ERR_PTR(TD_ERR_OOM);
-        data_size = (size_t)n_ptrs * sizeof(td_t*);
+        if (v->type == RAY_MAPCOMMON) n_ptrs = 2;
+        if (n_ptrs < 0) return RAY_ERR_PTR(RAY_ERR_OOM);
+        data_size = (size_t)n_ptrs * sizeof(ray_t*);
     } else {
-        int8_t t = td_type(v);
-        if (t <= 0 || t >= TD_TYPE_COUNT)
+        int8_t t = ray_type(v);
+        if (t <= 0 || t >= RAY_TYPE_COUNT)
             data_size = 0;
         else {
-            uint8_t esz = td_sym_elem_size(t, v->attrs);
+            uint8_t esz = ray_sym_elem_size(t, v->attrs);
             if (v->len < 0 || (esz > 0 && (uint64_t)v->len > SIZE_MAX / esz))
-                return TD_ERR_PTR(TD_ERR_OOM);
-            data_size = (size_t)td_len(v) * esz;
+                return RAY_ERR_PTR(RAY_ERR_OOM);
+            data_size = (size_t)ray_len(v) * esz;
         }
     }
-    td_t* copy = td_alloc(data_size);
+    ray_t* copy = ray_alloc(data_size);
     if (!copy) return NULL;
 
     uint8_t new_order = copy->order;
@@ -743,43 +743,43 @@ td_t* td_alloc_copy(td_t* v) {
     copy->mmod  = new_mmod;
     copy->order = new_order;
     atomic_store_explicit(&copy->rc, 1, memory_order_relaxed);
-    td_retain_owned_refs(copy);
+    ray_retain_owned_refs(copy);
     return copy;
 }
 
 /* --------------------------------------------------------------------------
- * td_scratch_alloc / td_scratch_realloc
+ * ray_scratch_alloc / ray_scratch_realloc
  * -------------------------------------------------------------------------- */
 
-td_t* td_scratch_alloc(size_t data_size) {
-    return td_alloc(data_size);
+ray_t* ray_scratch_alloc(size_t data_size) {
+    return ray_alloc(data_size);
 }
 
-td_t* td_scratch_realloc(td_t* v, size_t new_data_size) {
-    td_t* new_v = td_alloc(new_data_size);
+ray_t* ray_scratch_realloc(ray_t* v, size_t new_data_size) {
+    ray_t* new_v = ray_alloc(new_data_size);
     if (!new_v) return NULL;
-    if (v && !TD_IS_ERR(v)) {
+    if (v && !RAY_IS_ERR(v)) {
         size_t old_data;
-        if (td_is_atom(v))
+        if (ray_is_atom(v))
             old_data = 0;
-        else if (v->type == TD_LIST) {
+        else if (v->type == RAY_LIST) {
             if (v->len < 0) { old_data = 0; }
-            else old_data = (size_t)td_len(v) * sizeof(td_t*);
-        } else if (v->type == TD_TABLE) {
+            else old_data = (size_t)ray_len(v) * sizeof(ray_t*);
+        } else if (v->type == RAY_TABLE) {
             if (v->len < 0) { old_data = 0; }
-            else old_data = (size_t)(td_len(v) + 1) * sizeof(td_t*);
-        } else if (TD_IS_PARTED(v->type) || v->type == TD_MAPCOMMON) {
+            else old_data = (size_t)(ray_len(v) + 1) * sizeof(ray_t*);
+        } else if (RAY_IS_PARTED(v->type) || v->type == RAY_MAPCOMMON) {
             int64_t n_ptrs = v->len;
-            if (v->type == TD_MAPCOMMON) n_ptrs = 2;
+            if (v->type == RAY_MAPCOMMON) n_ptrs = 2;
             if (n_ptrs < 0) n_ptrs = 0;
-            old_data = (size_t)n_ptrs * sizeof(td_t*);
+            old_data = (size_t)n_ptrs * sizeof(ray_t*);
         } else {
-            int8_t t = td_type(v);
-            old_data = (t > 0 && t < TD_TYPE_COUNT && v->len >= 0) ?
-                       (size_t)td_len(v) * td_sym_elem_size(t, v->attrs) : 0;
+            int8_t t = ray_type(v);
+            old_data = (t > 0 && t < RAY_TYPE_COUNT && v->len >= 0) ?
+                       (size_t)ray_len(v) * ray_sym_elem_size(t, v->attrs) : 0;
         }
         /* Clamp old_data to actual allocation size */
-        if (v->mmod == 0 && v->order >= TD_ORDER_MIN) {
+        if (v->mmod == 0 && v->order >= RAY_ORDER_MIN) {
             size_t alloc_data = BSIZEOF(v->order) - 32;
             if (old_data > alloc_data) old_data = alloc_data;
         }
@@ -791,21 +791,21 @@ td_t* td_scratch_realloc(td_t* v, size_t new_data_size) {
         new_v->order = new_order;
         atomic_store_explicit(&new_v->rc, 1, memory_order_relaxed);
         /* Ownership transfers via memcpy — no retain needed on new_v.
-         * Detach nulls old pointers so td_free won't double-release. */
-        td_detach_owned_refs(v);
-        td_free(v);
+         * Detach nulls old pointers so ray_free won't double-release. */
+        ray_detach_owned_refs(v);
+        ray_free(v);
     }
     return new_v;
 }
 
 /* --------------------------------------------------------------------------
- * td_mem_stats
+ * ray_mem_stats
  * -------------------------------------------------------------------------- */
 
-void td_mem_stats(td_mem_stats_t* out) {
-    *out = td_tl_stats;
+void ray_mem_stats(ray_mem_stats_t* out) {
+    *out = ray_tl_stats;
     int64_t sc = 0, sp = 0;
-    td_sys_get_stat(&sc, &sp);
+    ray_sys_get_stat(&sc, &sp);
     out->sys_current = (size_t)sc;
     out->sys_peak    = (size_t)sp;
 }
@@ -814,57 +814,57 @@ void td_mem_stats(td_mem_stats_t* out) {
  * Heap lifecycle
  * -------------------------------------------------------------------------- */
 
-void td_heap_init(void) {
-    if (td_tl_heap) return;
+void ray_heap_init(void) {
+    if (ray_tl_heap) return;
 
-    size_t heap_sz = (sizeof(td_heap_t) + 4095) & ~(size_t)4095;
-    td_heap_t* h = (td_heap_t*)td_vm_alloc(heap_sz);
+    size_t heap_sz = (sizeof(ray_heap_t) + 4095) & ~(size_t)4095;
+    ray_heap_t* h = (ray_heap_t*)ray_vm_alloc(heap_sz);
     if (!h) return;
     memset(h, 0, heap_sz);
 
     /* Bitmap-based ID: acquire reusable ID via atomic CAS */
     int id = heap_id_acquire();
     if (id < 0) {
-        td_vm_free(h, heap_sz);
+        ray_vm_free(h, heap_sz);
         return;  /* ID pool exhausted */
     }
     h->id = (uint16_t)id;
 
     /* Register in global heap registry */
-    td_heap_registry[h->id % TD_HEAP_REGISTRY_SIZE] = h;
+    ray_heap_registry[h->id % RAY_HEAP_REGISTRY_SIZE] = h;
 
     /* Initialize circular sentinel freelists */
-    for (int i = 0; i < TD_HEAP_FL_SIZE; i++)
+    for (int i = 0; i < RAY_HEAP_FL_SIZE; i++)
         fl_init(&h->freelist[i]);
 
-    td_tl_heap = h;
-    memset(&td_tl_stats, 0, sizeof(td_tl_stats));
+    ray_tl_heap = h;
+    memset(&ray_tl_stats, 0, sizeof(ray_tl_stats));
 }
 
-void td_heap_destroy(void) {
-    td_heap_t* h = td_tl_heap;
+void ray_heap_destroy(void) {
+    ray_heap_t* h = ray_tl_heap;
     if (!h) return;
 
     uint16_t saved_id = h->id;
 
     /* Unregister from global heap registry */
-    td_heap_registry[h->id % TD_HEAP_REGISTRY_SIZE] = NULL;
+    ray_heap_registry[h->id % RAY_HEAP_REGISTRY_SIZE] = NULL;
 
     /* Skip flush_slabs and flush_foreign — all pools are about to be
      * munmap'd. Flushing would coalesce blocks and fl_remove buddies
      * from other heaps' freelists, which races with concurrent worker
-     * destruction during td_pool_free(). */
+     * destruction during ray_pool_free(). */
 
     /* Munmap all tracked pools */
     for (uint32_t i = 0; i < h->pool_count; i++) {
-        td_pool_hdr_t* hdr = (td_pool_hdr_t*)h->pools[i].base;
-        td_vm_free(hdr->vm_base, BSIZEOF(h->pools[i].pool_order));
+        ray_pool_hdr_t* hdr = (ray_pool_hdr_t*)h->pools[i].base;
+        ray_vm_free(hdr->vm_base, BSIZEOF(h->pools[i].pool_order));
     }
 
-    size_t heap_sz = (sizeof(td_heap_t) + 4095) & ~(size_t)4095;
-    td_vm_free(h, heap_sz);
-    td_tl_heap = NULL;
-    memset(&td_tl_stats, 0, sizeof(td_tl_stats));
+    size_t heap_sz = (sizeof(ray_heap_t) + 4095) & ~(size_t)4095;
+    ray_vm_free(h, heap_sz);
+    ray_tl_heap = NULL;
+    memset(&ray_tl_stats, 0, sizeof(ray_tl_stats));
 
     /* Release bitmap ID after all memory is freed */
     heap_id_release(saved_id);
@@ -873,27 +873,27 @@ void td_heap_destroy(void) {
 /* --------------------------------------------------------------------------
  * Return worker-pool blocks from this heap's freelists to their owners.
  *
- * After td_alloc flushes foreign blocks locally (coalesce + madvise),
+ * After ray_alloc flushes foreign blocks locally (coalesce + madvise),
  * worker-pool blocks sit on main's freelists with released physical pages.
  * This function walks the freelists, finds blocks whose pool header
  * heap_id != ours, removes them, and inserts into the owning worker heap.
  * Workers can then reuse their pools without allocating new ones.
  *
- * ONLY safe when workers are idle (on semaphore, td_parallel_flag == 0).
+ * ONLY safe when workers are idle (on semaphore, ray_parallel_flag == 0).
  * -------------------------------------------------------------------------- */
 
-static void heap_return_foreign_freelist(td_heap_t* h) {
-    for (int order = TD_ORDER_MIN; order < TD_HEAP_FL_SIZE; order++) {
-        td_fl_head_t* head = &h->freelist[order];
-        td_t* blk = head->fl_next;
-        while (blk != (td_t*)head) {
-            td_t* next = blk->fl_next;
+static void heap_return_foreign_freelist(ray_heap_t* h) {
+    for (int order = RAY_ORDER_MIN; order < RAY_HEAP_FL_SIZE; order++) {
+        ray_fl_head_t* head = &h->freelist[order];
+        ray_t* blk = head->fl_next;
+        while (blk != (ray_t*)head) {
+            ray_t* next = blk->fl_next;
             /* Use heap_find_pool on h first — if found, block is local */
             int pidx = heap_find_pool(h, blk);
             if (pidx < 0) {
                 /* Foreign block — find owner via pool header (GC path) */
-                td_pool_hdr_t* phdr = td_pool_of(blk);
-                td_heap_t* owner = td_heap_registry[phdr->heap_id % TD_HEAP_REGISTRY_SIZE];
+                ray_pool_hdr_t* phdr = ray_pool_of(blk);
+                ray_heap_t* owner = ray_heap_registry[phdr->heap_id % RAY_HEAP_REGISTRY_SIZE];
                 if (owner && owner->id == phdr->heap_id) {
                     fl_remove(blk);
                     if (fl_empty(head))
@@ -917,11 +917,11 @@ static void heap_return_foreign_freelist(td_heap_t* h) {
     }
 }
 
-void td_heap_gc(void) {
-    td_heap_t* h = td_tl_heap;
+void ray_heap_gc(void) {
+    ray_heap_t* h = ray_tl_heap;
     if (!h) return;
 
-    bool safe = (atomic_load_explicit(&td_parallel_flag, memory_order_relaxed) == 0);
+    bool safe = (atomic_load_explicit(&ray_parallel_flag, memory_order_relaxed) == 0);
 
     /* Phase 1: Flush main heap's foreign blocks and slab caches.
      * When safe (workers idle), return foreign blocks to their owners
@@ -937,32 +937,32 @@ void td_heap_gc(void) {
         /* Phase 3: Flush foreign + slabs on all worker heaps.
          * Workers may have accumulated foreign blocks from other workers,
          * and slab caches prevent buddy coalescing needed for reclamation. */
-        for (int hid = 0; hid < TD_HEAP_REGISTRY_SIZE; hid++) {
-            td_heap_t* wh = td_heap_registry[hid];
+        for (int hid = 0; hid < RAY_HEAP_REGISTRY_SIZE; hid++) {
+            ray_heap_t* wh = ray_heap_registry[hid];
             if (!wh || wh == h) continue;
             heap_flush_foreign(wh, true);
             heap_flush_slabs(wh);
         }
 
         /* Phase 4: Reclaim OVERSIZED empty pools.
-         * Standard pools (pool_order == TD_HEAP_POOL_ORDER) are never
+         * Standard pools (pool_order == RAY_HEAP_POOL_ORDER) are never
          * munmapped — physical pages released via madvise (phase 5)
          * re-fault cheaply on next query.
-         * Only oversized pools (pool_order > TD_HEAP_POOL_ORDER) are
+         * Only oversized pools (pool_order > RAY_HEAP_POOL_ORDER) are
          * candidates — these are one-off large allocations.
          *
          * Emptiness is computed by walking all heaps' freelists and slab
          * caches to sum free capacity within the pool. This avoids atomic
          * live_count operations on the alloc/free hot path. */
-        for (int hid = 0; hid < TD_HEAP_REGISTRY_SIZE; hid++) {
-            td_heap_t* gh = td_heap_registry[hid];
+        for (int hid = 0; hid < RAY_HEAP_REGISTRY_SIZE; hid++) {
+            ray_heap_t* gh = ray_heap_registry[hid];
             if (!gh) continue;
 
             for (uint32_t p = 0; p < gh->pool_count; ) {
-                td_pool_hdr_t* phdr = (td_pool_hdr_t*)gh->pools[p].base;
+                ray_pool_hdr_t* phdr = (ray_pool_hdr_t*)gh->pools[p].base;
 
                 /* Skip standard pools and last-remaining pool */
-                if (phdr->pool_order <= TD_HEAP_POOL_ORDER
+                if (phdr->pool_order <= RAY_HEAP_POOL_ORDER
                     || gh->pool_count <= 1) {
                     p++;
                     continue;
@@ -972,27 +972,27 @@ void td_heap_gc(void) {
                 uintptr_t pb = (uintptr_t)phdr;
                 uintptr_t pe = pb + BSIZEOF(po);
                 /* Total usable capacity (minus header block) */
-                size_t pool_capacity = BSIZEOF(po) - BSIZEOF(TD_ORDER_MIN);
+                size_t pool_capacity = BSIZEOF(po) - BSIZEOF(RAY_ORDER_MIN);
 
                 /* Sum free bytes: walk all heaps' freelists + slab caches */
                 size_t free_bytes = 0;
-                for (int scan_hid = 0; scan_hid < TD_HEAP_REGISTRY_SIZE; scan_hid++) {
-                    td_heap_t* scan_h = td_heap_registry[scan_hid];
+                for (int scan_hid = 0; scan_hid < RAY_HEAP_REGISTRY_SIZE; scan_hid++) {
+                    ray_heap_t* scan_h = ray_heap_registry[scan_hid];
                     if (!scan_h) continue;
-                    for (int ord = TD_ORDER_MIN; ord < TD_HEAP_FL_SIZE; ord++) {
-                        td_fl_head_t* fh = &scan_h->freelist[ord];
-                        td_t* blk = fh->fl_next;
-                        while (blk != (td_t*)fh) {
+                    for (int ord = RAY_ORDER_MIN; ord < RAY_HEAP_FL_SIZE; ord++) {
+                        ray_fl_head_t* fh = &scan_h->freelist[ord];
+                        ray_t* blk = fh->fl_next;
+                        while (blk != (ray_t*)fh) {
                             if ((uintptr_t)blk >= pb && (uintptr_t)blk < pe)
                                 free_bytes += BSIZEOF(ord);
                             blk = blk->fl_next;
                         }
                     }
-                    for (int si = 0; si < TD_SLAB_ORDERS; si++) {
+                    for (int si = 0; si < RAY_SLAB_ORDERS; si++) {
                         for (uint32_t j = 0; j < scan_h->slabs[si].count; j++) {
-                            td_t* sb = scan_h->slabs[si].stack[j];
+                            ray_t* sb = scan_h->slabs[si].stack[j];
                             if ((uintptr_t)sb >= pb && (uintptr_t)sb < pe)
-                                free_bytes += BSIZEOF(TD_SLAB_MIN + si);
+                                free_bytes += BSIZEOF(RAY_SLAB_MIN + si);
                         }
                     }
                 }
@@ -1004,14 +1004,14 @@ void td_heap_gc(void) {
 
                 /* Pool is empty — remove all blocks from all freelists
                  * and slab caches before munmap. */
-                for (int scan_hid = 0; scan_hid < TD_HEAP_REGISTRY_SIZE; scan_hid++) {
-                    td_heap_t* scan_h = td_heap_registry[scan_hid];
+                for (int scan_hid = 0; scan_hid < RAY_HEAP_REGISTRY_SIZE; scan_hid++) {
+                    ray_heap_t* scan_h = ray_heap_registry[scan_hid];
                     if (!scan_h) continue;
-                    for (int ord = TD_ORDER_MIN; ord < TD_HEAP_FL_SIZE; ord++) {
-                        td_fl_head_t* fh = &scan_h->freelist[ord];
-                        td_t* blk = fh->fl_next;
-                        while (blk != (td_t*)fh) {
-                            td_t* next = blk->fl_next;
+                    for (int ord = RAY_ORDER_MIN; ord < RAY_HEAP_FL_SIZE; ord++) {
+                        ray_fl_head_t* fh = &scan_h->freelist[ord];
+                        ray_t* blk = fh->fl_next;
+                        while (blk != (ray_t*)fh) {
+                            ray_t* next = blk->fl_next;
                             if ((uintptr_t)blk >= pb && (uintptr_t)blk < pe) {
                                 fl_remove(blk);
                                 if (fl_empty(fh))
@@ -1020,10 +1020,10 @@ void td_heap_gc(void) {
                             blk = next;
                         }
                     }
-                    for (int si = 0; si < TD_SLAB_ORDERS; si++) {
+                    for (int si = 0; si < RAY_SLAB_ORDERS; si++) {
                         uint32_t dst = 0;
                         for (uint32_t j = 0; j < scan_h->slabs[si].count; j++) {
-                            td_t* sb = scan_h->slabs[si].stack[j];
+                            ray_t* sb = scan_h->slabs[si].stack[j];
                             if ((uintptr_t)sb >= pb && (uintptr_t)sb < pe)
                                 continue;
                             scan_h->slabs[si].stack[dst++] = sb;
@@ -1032,7 +1032,7 @@ void td_heap_gc(void) {
                     }
                 }
 
-                td_vm_free(phdr->vm_base, BSIZEOF(po));
+                ray_vm_free(phdr->vm_base, BSIZEOF(po));
                 gh->pools[p] = gh->pools[--gh->pool_count];
                 /* Don't increment p — check swapped entry */
             }
@@ -1041,32 +1041,32 @@ void td_heap_gc(void) {
 
 }
 
-void td_heap_release_pages(void) {
-    td_heap_t* h = td_tl_heap;
+void ray_heap_release_pages(void) {
+    ray_heap_t* h = ray_tl_heap;
     if (!h) return;
-    for (int i = 13; i < TD_HEAP_FL_SIZE; i++) {
-        td_fl_head_t* head = &h->freelist[i];
-        td_t* blk = head->fl_next;
-        while (blk != (td_t*)head) {
+    for (int i = 13; i < RAY_HEAP_FL_SIZE; i++) {
+        ray_fl_head_t* head = &h->freelist[i];
+        ray_t* blk = head->fl_next;
+        while (blk != (ray_t*)head) {
             size_t bsize = BSIZEOF(i);
             if (bsize > 4096)
-                td_vm_release((char*)blk + 4096, bsize - 4096);
+                ray_vm_release((char*)blk + 4096, bsize - 4096);
             blk = blk->fl_next;
         }
     }
 }
 
-void td_heap_merge(td_heap_t* src) {
-    td_heap_t* dst = td_tl_heap;
+void ray_heap_merge(ray_heap_t* src) {
+    ray_heap_t* dst = ray_tl_heap;
     if (!dst || !src) return;
 
     /* Transfer slabs: fit into dst cache, coalesce overflow */
-    for (int i = 0; i < TD_SLAB_ORDERS; i++) {
-        while (src->slabs[i].count > 0 && dst->slabs[i].count < TD_SLAB_CACHE_SIZE)
+    for (int i = 0; i < RAY_SLAB_ORDERS; i++) {
+        while (src->slabs[i].count > 0 && dst->slabs[i].count < RAY_SLAB_CACHE_SIZE)
             dst->slabs[i].stack[dst->slabs[i].count++] =
                 src->slabs[i].stack[--src->slabs[i].count];
         while (src->slabs[i].count > 0) {
-            td_t* blk = src->slabs[i].stack[--src->slabs[i].count];
+            ray_t* blk = src->slabs[i].stack[--src->slabs[i].count];
             int pidx = heap_find_pool(dst, blk);
             uintptr_t pb;
             uint8_t po;
@@ -1074,7 +1074,7 @@ void td_heap_merge(td_heap_t* src) {
                 pb = (uintptr_t)dst->pools[pidx].base;
                 po = dst->pools[pidx].pool_order;
             } else {
-                td_pool_hdr_t* phdr = td_pool_of(blk);
+                ray_pool_hdr_t* phdr = ray_pool_of(blk);
                 pb = (uintptr_t)phdr;
                 po = phdr->pool_order;
             }
@@ -1083,9 +1083,9 @@ void td_heap_merge(td_heap_t* src) {
     }
 
     /* Free foreign blocks via coalescing */
-    td_t* fblk = src->foreign;
+    ray_t* fblk = src->foreign;
     while (fblk) {
-        td_t* next = fblk->fl_next;
+        ray_t* next = fblk->fl_next;
         int pidx = heap_find_pool(dst, fblk);
         uintptr_t pb;
         uint8_t po;
@@ -1093,7 +1093,7 @@ void td_heap_merge(td_heap_t* src) {
             pb = (uintptr_t)dst->pools[pidx].base;
             po = dst->pools[pidx].pool_order;
         } else {
-            td_pool_hdr_t* phdr = td_pool_of(fblk);
+            ray_pool_hdr_t* phdr = ray_pool_of(fblk);
             pb = (uintptr_t)phdr;
             po = phdr->pool_order;
         }
@@ -1103,20 +1103,20 @@ void td_heap_merge(td_heap_t* src) {
     src->foreign = NULL;
 
     /* Merge freelists: circular list splice (src chain into dst chain) */
-    for (int i = TD_ORDER_MIN; i < TD_HEAP_FL_SIZE; i++) {
+    for (int i = RAY_ORDER_MIN; i < RAY_HEAP_FL_SIZE; i++) {
         if (fl_empty(&src->freelist[i])) continue;
 
-        td_fl_head_t* src_head = &src->freelist[i];
-        td_fl_head_t* dst_head = &dst->freelist[i];
+        ray_fl_head_t* src_head = &src->freelist[i];
+        ray_fl_head_t* dst_head = &dst->freelist[i];
 
         /* Splice: src's chain [src_first...src_last] into dst after sentinel */
-        td_t* src_first = src_head->fl_next;
-        td_t* src_last  = src_head->fl_prev;
-        td_t* dst_first = dst_head->fl_next;
+        ray_t* src_first = src_head->fl_next;
+        ray_t* src_last  = src_head->fl_prev;
+        ray_t* dst_first = dst_head->fl_next;
 
         /* src_first goes after dst sentinel */
         dst_head->fl_next = src_first;
-        src_first->fl_prev = (td_t*)dst_head;
+        src_first->fl_prev = (ray_t*)dst_head;
 
         /* src_last connects to old dst_first */
         src_last->fl_next = dst_first;
@@ -1134,14 +1134,14 @@ void td_heap_merge(td_heap_t* src) {
      * Do NOT rewrite heap_id for pools that can't be tracked — that would
      * make coalescing reference a pool not in dst's pool table. */
     for (uint32_t i = 0; i < src->pool_count; i++) {
-        if (dst->pool_count < TD_MAX_POOLS) {
-            td_pool_hdr_t* hdr = (td_pool_hdr_t*)src->pools[i].base;
+        if (dst->pool_count < RAY_MAX_POOLS) {
+            ray_pool_hdr_t* hdr = (ray_pool_hdr_t*)src->pools[i].base;
             hdr->heap_id = dst->id;
             dst->pools[dst->pool_count++] = src->pools[i];
         } else {
-            /* Pool overflow: only triggers at TD_MAX_POOLS (512 pools = 16GB+).
+            /* Pool overflow: only triggers at RAY_MAX_POOLS (512 pools = 16GB+).
              * Assert in debug builds to catch unexpected growth. */
-            assert(0 && "td_heap_merge: pool overflow at TD_MAX_POOLS");
+            assert(0 && "ray_heap_merge: pool overflow at RAY_MAX_POOLS");
         }
     }
     src->pool_count = 0;
@@ -1151,10 +1151,10 @@ void td_heap_merge(td_heap_t* src) {
  * Public foreign-blocks flush
  * -------------------------------------------------------------------------- */
 
-void td_heap_flush_foreign(void) {
-    td_heap_t* h = td_tl_heap;
+void ray_heap_flush_foreign(void) {
+    ray_heap_t* h = ray_tl_heap;
     if (!h) return;
-    bool safe = (atomic_load_explicit(&td_parallel_flag,
+    bool safe = (atomic_load_explicit(&ray_parallel_flag,
                                        memory_order_relaxed) == 0);
     heap_flush_foreign(h, safe);
 }
@@ -1167,31 +1167,31 @@ void td_heap_flush_foreign(void) {
  * each pending heap into its own and then destroying it.
  * -------------------------------------------------------------------------- */
 
-void td_heap_push_pending(td_heap_t* heap) {
+void ray_heap_push_pending(ray_heap_t* heap) {
     if (!heap) return;
     /* Unregister so no new foreign blocks target this heap */
-    td_heap_registry[heap->id % TD_HEAP_REGISTRY_SIZE] = NULL;
+    ray_heap_registry[heap->id % RAY_HEAP_REGISTRY_SIZE] = NULL;
     /* Lock-free push: CAS loop on global LIFO head */
-    heap->pending_next = atomic_load_explicit(&td_heap_pending_merge, memory_order_relaxed);
+    heap->pending_next = atomic_load_explicit(&ray_heap_pending_merge, memory_order_relaxed);
     while (!atomic_compare_exchange_weak_explicit(
-            &td_heap_pending_merge,
+            &ray_heap_pending_merge,
             &heap->pending_next, heap,
             memory_order_release, memory_order_relaxed))
         ;
 }
 
-void td_heap_drain_pending(void) {
+void ray_heap_drain_pending(void) {
     /* Atomically steal the entire pending list */
-    td_heap_t* pending = atomic_exchange_explicit(
-        &td_heap_pending_merge, NULL,
+    ray_heap_t* pending = atomic_exchange_explicit(
+        &ray_heap_pending_merge, NULL,
         memory_order_acquire);
     while (pending) {
-        td_heap_t* next = pending->pending_next;
-        td_heap_merge(pending);
+        ray_heap_t* next = pending->pending_next;
+        ray_heap_merge(pending);
         /* Free the heap struct (pools already transferred by merge) */
         uint16_t saved_id = pending->id;
-        size_t heap_sz = (sizeof(td_heap_t) + 4095) & ~(size_t)4095;
-        td_vm_free(pending, heap_sz);
+        size_t heap_sz = (sizeof(ray_heap_t) + 4095) & ~(size_t)4095;
+        ray_vm_free(pending, heap_sz);
         heap_id_release(saved_id);
         pending = next;
     }
@@ -1201,23 +1201,23 @@ void td_heap_drain_pending(void) {
  * Scratch arena: bump allocator backed by buddy-allocated 64KB blocks
  * -------------------------------------------------------------------------- */
 
-void* td_scratch_arena_push(td_scratch_arena_t* a, size_t nbytes) {
+void* ray_scratch_arena_push(ray_scratch_arena_t* a, size_t nbytes) {
     /* 16-byte alignment */
     nbytes = (nbytes + 15) & ~(size_t)15;
 
-    if (TD_LIKELY(a->ptr != NULL && a->ptr + nbytes <= a->end))
+    if (RAY_LIKELY(a->ptr != NULL && a->ptr + nbytes <= a->end))
         goto bump;
 
     /* Need a new backing block */
-    if (a->n_backing >= TD_ARENA_MAX_BACKING) return NULL;
+    if (a->n_backing >= RAY_ARENA_MAX_BACKING) return NULL;
 
-    size_t block_data = BSIZEOF(TD_ARENA_BLOCK_ORDER) - 32;
+    size_t block_data = BSIZEOF(RAY_ARENA_BLOCK_ORDER) - 32;
     /* If request exceeds standard block, allocate exact-fit */
     size_t alloc_size = nbytes > block_data ? nbytes : block_data;
-    td_t* blk = td_alloc(alloc_size);
+    ray_t* blk = ray_alloc(alloc_size);
     if (!blk) return NULL;
     a->backing[a->n_backing++] = blk;
-    a->ptr = (char*)td_data(blk);
+    a->ptr = (char*)ray_data(blk);
     a->end = (char*)blk + BSIZEOF(blk->order);
 
 bump:;
@@ -1226,9 +1226,9 @@ bump:;
     return ret;
 }
 
-void td_scratch_arena_reset(td_scratch_arena_t* a) {
+void ray_scratch_arena_reset(ray_scratch_arena_t* a) {
     for (int i = 0; i < a->n_backing; i++)
-        td_free(a->backing[i]);
+        ray_free(a->backing[i]);
     a->n_backing = 0;
     a->ptr = NULL;
     a->end = NULL;
@@ -1238,8 +1238,8 @@ void td_scratch_arena_reset(td_scratch_arena_t* a) {
  * Parallel begin / end
  * -------------------------------------------------------------------------- */
 
-void td_parallel_begin(void) { atomic_store(&td_parallel_flag, 1); }
-void td_parallel_end(void) {
-    atomic_store(&td_parallel_flag, 0);
-    td_heap_gc();
+void ray_parallel_begin(void) { atomic_store(&ray_parallel_flag, 1); }
+void ray_parallel_end(void) {
+    atomic_store(&ray_parallel_flag, 0);
+    ray_heap_gc();
 }

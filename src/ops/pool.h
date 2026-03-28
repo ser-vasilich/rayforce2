@@ -21,39 +21,39 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_POOL_H
-#define TD_POOL_H
+#ifndef RAY_POOL_H
+#define RAY_POOL_H
 
 /*
  * pool.h -- Persistent thread pool for parallel morsel dispatch.
  *
- * Workers sleep on a semaphore and wake when td_pool_dispatch() submits tasks.
+ * Workers sleep on a semaphore and wake when ray_pool_dispatch() submits tasks.
  * The main thread participates as worker 0 (no thread spawned for it).
- * Each worker initializes its own thread-local heap via td_heap_init().
+ * Each worker initializes its own thread-local heap via ray_heap_init().
  */
 
 #include "core/platform.h"
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* Callback: process elements [start, end) with the given worker_id */
-typedef void (*td_pool_fn)(void* ctx, uint32_t worker_id, int64_t start, int64_t end);
+typedef void (*ray_pool_fn)(void* ctx, uint32_t worker_id, int64_t start, int64_t end);
 
 /* A single work item in the task ring */
 typedef struct {
-    td_pool_fn  fn;
+    ray_pool_fn  fn;
     void*       ctx;
     int64_t     start;
     int64_t     end;
-} td_pool_task_t;
+} ray_pool_task_t;
 
 /* Thread pool */
-struct td_pool {
-    td_thread_t*       threads;       /* worker thread handles [n_workers] */
+struct ray_pool {
+    ray_thread_t*       threads;       /* worker thread handles [n_workers] */
     uint32_t           n_workers;     /* number of background threads (nproc - 1) */
     _Atomic(uint32_t)  shutdown;
 
     /* SPMC task ring (single producer = main, multi consumer = workers + main) */
-    td_pool_task_t*    tasks;         /* ring buffer [task_cap] */
+    ray_pool_task_t*    tasks;         /* ring buffer [task_cap] */
     uint32_t           task_cap;      /* power of 2 */
     uint32_t           task_head;     /* next to write (main only, no atomic needed) */
     _Atomic(uint32_t)  task_tail;     /* next to claim (workers, atomic_fetch_add) */
@@ -61,31 +61,31 @@ struct td_pool {
 
     /* Barrier */
     _Atomic(uint32_t)  pending;       /* decremented by each task completion */
-    td_sem_t           work_ready;    /* workers sleep here */
+    ray_sem_t           work_ready;    /* workers sleep here */
 
-    /* Query cancellation — set by td_cancel(), checked per-morsel */
+    /* Query cancellation — set by ray_cancel(), checked per-morsel */
     _Atomic(uint32_t)  cancelled;
 };
 
 /* Total workers = n_workers + 1 (main thread is worker 0) */
-#define td_pool_total_workers(p) ((p)->n_workers + 1)
+#define ray_pool_total_workers(p) ((p)->n_workers + 1)
 
 /* Initialize pool with n_workers background threads.
  * Pass 0 to auto-detect (nproc - 1). */
-td_err_t td_pool_create(td_pool_t* pool, uint32_t n_workers);
+ray_err_t ray_pool_create(ray_pool_t* pool, uint32_t n_workers);
 
 /* Shutdown and free all resources */
-void td_pool_free(td_pool_t* pool);
+void ray_pool_free(ray_pool_t* pool);
 
 /* Dispatch fn over [0, total_elems) partitioned into morsel-sized tasks.
  * Blocks until all tasks complete. Main thread participates as worker 0. */
-void td_pool_dispatch(td_pool_t* pool, td_pool_fn fn, void* ctx, int64_t total_elems);
+void ray_pool_dispatch(ray_pool_t* pool, ray_pool_fn fn, void* ctx, int64_t total_elems);
 
 /* Dispatch exactly n_tasks tasks, each with range [i, i+1).
  * Used for partition-parallel workloads where each task is one partition. */
-void td_pool_dispatch_n(td_pool_t* pool, td_pool_fn fn, void* ctx, uint32_t n_tasks);
+void ray_pool_dispatch_n(ray_pool_t* pool, ray_pool_fn fn, void* ctx, uint32_t n_tasks);
 
 /* Global pool lifecycle (lazy singleton) */
-td_pool_t* td_pool_get(void);
+ray_pool_t* ray_pool_get(void);
 
-#endif /* TD_POOL_H */
+#endif /* RAY_POOL_H */

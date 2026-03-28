@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -24,16 +24,16 @@ static void generate_csv(const char* path, int64_t n_rows, int64_t n_unique) {
 static void bench(const char* label, const char* path, int64_t n_rows, int reps) {
     double best = 1e18;
     for (int r = 0; r < reps; r++) {
-        td_heap_init();
-        { td_err_t _e = td_sym_init(); (void)_e; };
+        ray_heap_init();
+        { ray_err_t _e = ray_sym_init(); (void)_e; };
 
         double start = now_ns();
-        td_t* t = td_read_csv(path);
+        ray_t* t = ray_read_csv(path);
         double elapsed = now_ns() - start;
 
-        if (t && !TD_IS_ERR(t)) td_release(t);
-        td_sym_destroy();
-        td_heap_destroy();
+        if (t && !RAY_IS_ERR(t)) ray_release(t);
+        ray_sym_destroy();
+        ray_heap_destroy();
 
         if (elapsed < best) best = elapsed;
     }
@@ -43,7 +43,7 @@ static void bench(const char* label, const char* path, int64_t n_rows, int reps)
 }
 
 int main(void) {
-    const char* csv_path = "/tmp/teide_bench_csv_detail.csv";
+    const char* csv_path = "/tmp/rayforce_bench_csv_detail.csv";
 
     printf("%-36s  %8s       %8s  %12s\n",
            "Benchmark", "Rows", "Time", "Throughput");

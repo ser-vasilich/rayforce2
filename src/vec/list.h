@@ -21,16 +21,16 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_LIST_H
-#define TD_LIST_H
+#ifndef RAY_LIST_H
+#define RAY_LIST_H
 
 /*
  * list.h -- LIST type operations.
  *
- * A LIST has type = TD_LIST (0) and stores an array of td_t* pointers
- * in the data region. Items are reference-counted via td_retain/td_release.
+ * A LIST has type = RAY_LIST (0) and stores an array of ray_t* pointers
+ * in the data region. Items are reference-counted via ray_retain/ray_release.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_LIST_H */
+#endif /* RAY_LIST_H */

@@ -22,7 +22,7 @@
  */
 
 /*
- * hash.h — Fast wyhash-based hashing for Teide
+ * hash.h — Fast wyhash-based hashing for Rayforce
  *
  * Based on wyhash final version 4.2 by Wang Yi <godspeed_china@yeah.net>
  * Original: https://github.com/wangyi-fudan/wyhash
@@ -32,8 +32,8 @@
  * See the original repository for full license text.
  */
 
-#ifndef TD_HASH_H
-#define TD_HASH_H
+#ifndef RAY_HASH_H
+#define RAY_HASH_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -42,11 +42,11 @@
 /* ---- Platform detection ------------------------------------------------- */
 
 #if defined(__GNUC__) || defined(__INTEL_COMPILER) || defined(__clang__)
-  #define TD_HASH_LIKELY(x)   __builtin_expect(!!(x), 1)
-  #define TD_HASH_UNLIKELY(x) __builtin_expect(!!(x), 0)
+  #define RAY_HASH_LIKELY(x)   __builtin_expect(!!(x), 1)
+  #define RAY_HASH_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
-  #define TD_HASH_LIKELY(x)   (x)
-  #define TD_HASH_UNLIKELY(x) (x)
+  #define RAY_HASH_LIKELY(x)   (x)
+  #define RAY_HASH_UNLIKELY(x) (x)
 #endif
 
 #if defined(_MSC_VER) && defined(_M_X64)
@@ -54,22 +54,22 @@
   #pragma intrinsic(_umul128)
 #endif
 
-#ifndef TD_HASH_LITTLE_ENDIAN
+#ifndef RAY_HASH_LITTLE_ENDIAN
   #if defined(_WIN32) || defined(__LITTLE_ENDIAN__) || \
       (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-    #define TD_HASH_LITTLE_ENDIAN 1
+    #define RAY_HASH_LITTLE_ENDIAN 1
   #elif defined(__BIG_ENDIAN__) || \
         (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-    #define TD_HASH_LITTLE_ENDIAN 0
+    #define RAY_HASH_LITTLE_ENDIAN 0
   #else
-    #define TD_HASH_LITTLE_ENDIAN 1
+    #define RAY_HASH_LITTLE_ENDIAN 1
   #endif
 #endif
 
 /* ---- Internal primitives ------------------------------------------------ */
 
 /* 128-bit multiply: *A and *B become the low and high 64 bits of A*B */
-static inline void td__wymum(uint64_t *A, uint64_t *B) {
+static inline void ray__wymum(uint64_t *A, uint64_t *B) {
 #if defined(__SIZEOF_INT128__)
     __uint128_t r = (__uint128_t)*A * *B;
     *A = (uint64_t)r;
@@ -90,17 +90,17 @@ static inline void td__wymum(uint64_t *A, uint64_t *B) {
 }
 
 /* Mix two 64-bit values via multiply-then-xor */
-static inline uint64_t td__wymix(uint64_t A, uint64_t B) {
-    td__wymum(&A, &B);
+static inline uint64_t ray__wymix(uint64_t A, uint64_t B) {
+    ray__wymum(&A, &B);
     return A ^ B;
 }
 
 /* ---- Byte readers (endian-aware) ---------------------------------------- */
 
-static inline uint64_t td__wyr8(const uint8_t *p) {
+static inline uint64_t ray__wyr8(const uint8_t *p) {
     uint64_t v;
     memcpy(&v, p, 8);
-#if TD_HASH_LITTLE_ENDIAN
+#if RAY_HASH_LITTLE_ENDIAN
     return v;
 #elif defined(__GNUC__) || defined(__clang__)
     return __builtin_bswap64(v);
@@ -114,10 +114,10 @@ static inline uint64_t td__wyr8(const uint8_t *p) {
 #endif
 }
 
-static inline uint64_t td__wyr4(const uint8_t *p) {
+static inline uint64_t ray__wyr4(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, 4);
-#if TD_HASH_LITTLE_ENDIAN
+#if RAY_HASH_LITTLE_ENDIAN
     return v;
 #elif defined(__GNUC__) || defined(__clang__)
     return __builtin_bswap32(v);
@@ -129,13 +129,13 @@ static inline uint64_t td__wyr4(const uint8_t *p) {
 #endif
 }
 
-static inline uint64_t td__wyr3(const uint8_t *p, size_t k) {
+static inline uint64_t ray__wyr3(const uint8_t *p, size_t k) {
     return ((uint64_t)p[0] << 16) | ((uint64_t)p[k >> 1] << 8) | p[k - 1];
 }
 
 /* ---- Secret constants (from wyhash final4.2) ---------------------------- */
 
-static const uint64_t td__wyp[4] = {
+static const uint64_t ray__wyp[4] = {
     0x2d358dccaa6c78a5ULL,
     0x8bb84b93962eacc9ULL,
     0x4b33a62ed433d4a3ULL,
@@ -145,7 +145,7 @@ static const uint64_t td__wyp[4] = {
 /* ---- Core: hash arbitrary bytes ----------------------------------------- */
 
 /*
- * td_hash_bytes -- hash a byte buffer of length `len`.
+ * ray_hash_bytes -- hash a byte buffer of length `len`.
  *
  * This is the full wyhash final4.2 algorithm: ~3 cycles/8 bytes on
  * modern x86-64. Seed is fixed at 0 for deterministic, repeatable hashing
@@ -154,68 +154,68 @@ static const uint64_t td__wyp[4] = {
 /* L2: Fixed seed=0 is acceptable for in-process dataframe operations;
  * use a random seed if processing adversarial input (e.g., untrusted
  * CSV with crafted hash collisions). */
-static inline uint64_t td_hash_bytes(const void *data, size_t len) {
+static inline uint64_t ray_hash_bytes(const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
     uint64_t seed = 0;
-    seed ^= td__wymix(seed ^ td__wyp[0], td__wyp[1]);
+    seed ^= ray__wymix(seed ^ ray__wyp[0], ray__wyp[1]);
 
     uint64_t a, b;
-    if (TD_HASH_LIKELY(len <= 16)) {
-        if (TD_HASH_LIKELY(len >= 4)) {
-            a = (td__wyr4(p) << 32) | td__wyr4(p + ((len >> 3) << 2));
-            b = (td__wyr4(p + len - 4) << 32) | td__wyr4(p + len - 4 - ((len >> 3) << 2));
-        } else if (TD_HASH_LIKELY(len > 0)) {
-            a = td__wyr3(p, len);
+    if (RAY_HASH_LIKELY(len <= 16)) {
+        if (RAY_HASH_LIKELY(len >= 4)) {
+            a = (ray__wyr4(p) << 32) | ray__wyr4(p + ((len >> 3) << 2));
+            b = (ray__wyr4(p + len - 4) << 32) | ray__wyr4(p + len - 4 - ((len >> 3) << 2));
+        } else if (RAY_HASH_LIKELY(len > 0)) {
+            a = ray__wyr3(p, len);
             b = 0;
         } else {
             a = b = 0;
         }
     } else {
         size_t i = len;
-        if (TD_HASH_UNLIKELY(i >= 48)) {
+        if (RAY_HASH_UNLIKELY(i >= 48)) {
             uint64_t see1 = seed, see2 = seed;
             do {
-                seed = td__wymix(td__wyr8(p)      ^ td__wyp[1], td__wyr8(p + 8)  ^ seed);
-                see1 = td__wymix(td__wyr8(p + 16)  ^ td__wyp[2], td__wyr8(p + 24) ^ see1);
-                see2 = td__wymix(td__wyr8(p + 32)  ^ td__wyp[3], td__wyr8(p + 40) ^ see2);
+                seed = ray__wymix(ray__wyr8(p)      ^ ray__wyp[1], ray__wyr8(p + 8)  ^ seed);
+                see1 = ray__wymix(ray__wyr8(p + 16)  ^ ray__wyp[2], ray__wyr8(p + 24) ^ see1);
+                see2 = ray__wymix(ray__wyr8(p + 32)  ^ ray__wyp[3], ray__wyr8(p + 40) ^ see2);
                 p += 48;
                 i -= 48;
-            } while (TD_HASH_LIKELY(i >= 48));
+            } while (RAY_HASH_LIKELY(i >= 48));
             seed ^= see1 ^ see2;
         }
-        while (TD_HASH_UNLIKELY(i > 16)) {
-            seed = td__wymix(td__wyr8(p) ^ td__wyp[1], td__wyr8(p + 8) ^ seed);
+        while (RAY_HASH_UNLIKELY(i > 16)) {
+            seed = ray__wymix(ray__wyr8(p) ^ ray__wyp[1], ray__wyr8(p + 8) ^ seed);
             i -= 16;
             p += 16;
         }
-        a = td__wyr8(p + i - 16);
-        b = td__wyr8(p + i - 8);
+        a = ray__wyr8(p + i - 16);
+        b = ray__wyr8(p + i - 8);
     }
-    a ^= td__wyp[1];
+    a ^= ray__wyp[1];
     b ^= seed;
-    td__wymum(&a, &b);
-    return td__wymix(a ^ td__wyp[0] ^ len, b ^ td__wyp[1]);
+    ray__wymum(&a, &b);
+    return ray__wymix(a ^ ray__wyp[0] ^ len, b ^ ray__wyp[1]);
 }
 
 /* ---- Convenience: hash a single int64 ----------------------------------- */
 
 /*
- * td_hash_i64 -- hash a 64-bit integer.
+ * ray_hash_i64 -- hash a 64-bit integer.
  *
  * Uses wyhash64 two-round mixing which is faster than feeding 8 bytes
  * through the generic path while retaining excellent distribution.
  */
-static inline uint64_t td_hash_i64(int64_t val) {
+static inline uint64_t ray_hash_i64(int64_t val) {
     uint64_t A = (uint64_t)val ^ 0x2d358dccaa6c78a5ULL;
     uint64_t B = (uint64_t)val ^ 0x8bb84b93962eacc9ULL;
-    td__wymum(&A, &B);
-    return td__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
+    ray__wymum(&A, &B);
+    return ray__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
 }
 
 /* ---- Convenience: hash a double ----------------------------------------- */
 
 /*
- * td_hash_f64 -- hash a 64-bit float by its bit pattern.
+ * ray_hash_f64 -- hash a 64-bit float by its bit pattern.
  *
  * Normalizes negative zero to positive zero so that -0.0 and +0.0
  * hash identically (they compare equal via ==).
@@ -223,30 +223,30 @@ static inline uint64_t td_hash_i64(int64_t val) {
  * Note: different NaN bit patterns hash differently; SQL NULL is
  * handled separately at a higher level and never reaches this path.
  */
-static inline uint64_t td_hash_f64(double val) {
+static inline uint64_t ray_hash_f64(double val) {
     uint64_t bits;
     if (val == 0.0) { uint64_t z = 0; memcpy(&val, &z, sizeof(val)); } /* normalize -0.0 → +0.0 */
     memcpy(&bits, &val, sizeof(bits));
     uint64_t A = bits ^ 0x2d358dccaa6c78a5ULL;
     uint64_t B = bits ^ 0x8bb84b93962eacc9ULL;
-    td__wymum(&A, &B);
-    return td__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
+    ray__wymum(&A, &B);
+    return ray__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
 }
 
 /* ---- Combine two hashes ------------------------------------------------- */
 
 /*
- * td_hash_combine -- mix two hash values into one.
+ * ray_hash_combine -- mix two hash values into one.
  *
  * Uses the wyhash64 two-input mixer. This is order-dependent:
  * combine(a,b) != combine(b,a), which is the desired behaviour for
  * multi-column key hashing where column order matters.
  */
-static inline uint64_t td_hash_combine(uint64_t h1, uint64_t h2) {
+static inline uint64_t ray_hash_combine(uint64_t h1, uint64_t h2) {
     uint64_t A = h1 ^ 0x2d358dccaa6c78a5ULL;
     uint64_t B = h2 ^ 0x8bb84b93962eacc9ULL;
-    td__wymum(&A, &B);
-    return td__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
+    ray__wymum(&A, &B);
+    return ray__wymix(A ^ 0x2d358dccaa6c78a5ULL, B ^ 0x8bb84b93962eacc9ULL);
 }
 
-#endif /* TD_HASH_H */
+#endif /* RAY_HASH_H */

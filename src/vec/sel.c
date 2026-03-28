@@ -21,24 +21,24 @@
  *   SOFTWARE.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 
 /* --------------------------------------------------------------------------
  * Layout size computation
  *
- * Data payload after 32-byte td_t header:
- *   td_sel_meta_t          16 bytes
+ * Data payload after 32-byte ray_t header:
+ *   ray_sel_meta_t          16 bytes
  *   seg_flags[n_segs]      align8(n_segs) bytes
  *   seg_popcnt[n_segs]     align8(n_segs * 2) bytes
  *   bits[n_words]          n_words * 8 bytes
  * -------------------------------------------------------------------------- */
 
 static size_t sel_data_size(int64_t nrows) {
-    uint32_t n_segs = (uint32_t)((nrows + TD_MORSEL_ELEMS - 1) / TD_MORSEL_ELEMS);
+    uint32_t n_segs = (uint32_t)((nrows + RAY_MORSEL_ELEMS - 1) / RAY_MORSEL_ELEMS);
     uint32_t n_words = (uint32_t)((nrows + 63) / 64);
 
-    size_t sz = sizeof(td_sel_meta_t);
+    size_t sz = sizeof(ray_sel_meta_t);
     sz += (n_segs + 7u) & ~(size_t)7;           /* seg_flags, 8-aligned */
     sz += ((size_t)n_segs * 2 + 7u) & ~(size_t)7; /* seg_popcnt, 8-aligned */
     sz += (size_t)n_words * 8;                   /* bits */
@@ -46,50 +46,50 @@ static size_t sel_data_size(int64_t nrows) {
 }
 
 /* --------------------------------------------------------------------------
- * td_sel_new — allocate a selection with all bits zero (no rows pass)
+ * ray_sel_new — allocate a selection with all bits zero (no rows pass)
  * -------------------------------------------------------------------------- */
 
-td_t* td_sel_new(int64_t nrows) {
-    if (nrows < 0) return TD_ERR_PTR(TD_ERR_RANGE);
+ray_t* ray_sel_new(int64_t nrows) {
+    if (nrows < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
 
     size_t dsz = sel_data_size(nrows);
-    td_t* s = td_alloc(dsz);
-    if (!s || TD_IS_ERR(s)) return s;
+    ray_t* s = ray_alloc(dsz);
+    if (!s || RAY_IS_ERR(s)) return s;
 
-    s->type = TD_SEL;
+    s->type = RAY_SEL;
     s->len  = nrows;
-    memset(td_data(s), 0, dsz);
+    memset(ray_data(s), 0, dsz);
 
-    td_sel_meta_t* m = td_sel_meta(s);
+    ray_sel_meta_t* m = ray_sel_meta(s);
     m->total_pass = 0;
-    m->n_segs = (uint32_t)((nrows + TD_MORSEL_ELEMS - 1) / TD_MORSEL_ELEMS);
-    /* seg_flags[] already zero = TD_SEL_NONE, seg_popcnt[] = 0, bits[] = 0 */
+    m->n_segs = (uint32_t)((nrows + RAY_MORSEL_ELEMS - 1) / RAY_MORSEL_ELEMS);
+    /* seg_flags[] already zero = RAY_SEL_NONE, seg_popcnt[] = 0, bits[] = 0 */
 
     return s;
 }
 
 /* --------------------------------------------------------------------------
- * td_sel_recompute — rebuild seg_flags + seg_popcnt from bits[]
+ * ray_sel_recompute — rebuild seg_flags + seg_popcnt from bits[]
  *
  * Called after direct writes into bits[] (e.g., fused predicate evaluation).
  * -------------------------------------------------------------------------- */
 
-void td_sel_recompute(td_t* sel) {
-    if (!sel || sel->type != TD_SEL) return;
+void ray_sel_recompute(ray_t* sel) {
+    if (!sel || sel->type != RAY_SEL) return;
 
-    td_sel_meta_t* m = td_sel_meta(sel);
-    uint8_t*  flags  = td_sel_flags(sel);
-    uint16_t* pcnt   = td_sel_popcnt(sel);
-    uint64_t* bits   = td_sel_bits(sel);
+    ray_sel_meta_t* m = ray_sel_meta(sel);
+    uint8_t*  flags  = ray_sel_flags(sel);
+    uint16_t* pcnt   = ray_sel_popcnt(sel);
+    uint64_t* bits   = ray_sel_bits(sel);
 
     int64_t total = 0;
     int64_t nrows = sel->len;
     uint32_t n_segs = m->n_segs;
 
     for (uint32_t seg = 0; seg < n_segs; seg++) {
-        int64_t seg_start = (int64_t)seg * TD_MORSEL_ELEMS;
+        int64_t seg_start = (int64_t)seg * RAY_MORSEL_ELEMS;
         int64_t seg_rows  = nrows - seg_start;
-        if (seg_rows > TD_MORSEL_ELEMS) seg_rows = TD_MORSEL_ELEMS;
+        if (seg_rows > RAY_MORSEL_ELEMS) seg_rows = RAY_MORSEL_ELEMS;
 
         /* Count bits in this segment's words */
         uint32_t word_start = (uint32_t)(seg_start / 64);
@@ -111,31 +111,31 @@ void td_sel_recompute(td_t* sel) {
         total += seg_pop;
 
         if (seg_pop == 0)
-            flags[seg] = TD_SEL_NONE;
+            flags[seg] = RAY_SEL_NONE;
         else if (seg_pop == seg_rows)
-            flags[seg] = TD_SEL_ALL;
+            flags[seg] = RAY_SEL_ALL;
         else
-            flags[seg] = TD_SEL_MIX;
+            flags[seg] = RAY_SEL_MIX;
     }
 
     m->total_pass = total;
 }
 
 /* --------------------------------------------------------------------------
- * td_sel_from_pred — convert a TD_BOOL byte-per-row vector to TD_SEL
+ * ray_sel_from_pred — convert a RAY_BOOL byte-per-row vector to RAY_SEL
  * -------------------------------------------------------------------------- */
 
-td_t* td_sel_from_pred(td_t* pred) {
-    if (!pred || TD_IS_ERR(pred)) return pred;
-    if (pred->type != TD_BOOL) return TD_ERR_PTR(TD_ERR_TYPE);
+ray_t* ray_sel_from_pred(ray_t* pred) {
+    if (!pred || RAY_IS_ERR(pred)) return pred;
+    if (pred->type != RAY_BOOL) return RAY_ERR_PTR(RAY_ERR_TYPE);
 
     int64_t nrows = pred->len;
-    td_t* sel = td_sel_new(nrows);
-    if (!sel || TD_IS_ERR(sel)) return sel;
+    ray_t* sel = ray_sel_new(nrows);
+    if (!sel || RAY_IS_ERR(sel)) return sel;
 
     /* Pack byte-per-row into bitpacked uint64_t words */
-    uint64_t* bits = td_sel_bits(sel);
-    const uint8_t* src = (const uint8_t*)td_data(pred);
+    uint64_t* bits = ray_sel_bits(sel);
+    const uint8_t* src = (const uint8_t*)ray_data(pred);
 
     int64_t full_words = nrows / 64;
     for (int64_t w = 0; w < full_words; w++) {
@@ -156,34 +156,34 @@ td_t* td_sel_from_pred(td_t* pred) {
         bits[full_words] = word;
     }
 
-    td_sel_recompute(sel);
+    ray_sel_recompute(sel);
     return sel;
 }
 
 /* --------------------------------------------------------------------------
- * td_sel_and — AND two selections of equal length, returns new TD_SEL
+ * ray_sel_and — AND two selections of equal length, returns new RAY_SEL
  * -------------------------------------------------------------------------- */
 
-td_t* td_sel_and(td_t* a, td_t* b) {
-    if (!a || TD_IS_ERR(a)) return a;
-    if (!b || TD_IS_ERR(b)) return b;
-    if (a->type != TD_SEL || b->type != TD_SEL)
-        return TD_ERR_PTR(TD_ERR_TYPE);
+ray_t* ray_sel_and(ray_t* a, ray_t* b) {
+    if (!a || RAY_IS_ERR(a)) return a;
+    if (!b || RAY_IS_ERR(b)) return b;
+    if (a->type != RAY_SEL || b->type != RAY_SEL)
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (a->len != b->len)
-        return TD_ERR_PTR(TD_ERR_RANGE);
+        return RAY_ERR_PTR(RAY_ERR_RANGE);
 
     int64_t nrows = a->len;
-    td_t* out = td_sel_new(nrows);
-    if (!out || TD_IS_ERR(out)) return out;
+    ray_t* out = ray_sel_new(nrows);
+    if (!out || RAY_IS_ERR(out)) return out;
 
-    uint64_t* dst = td_sel_bits(out);
-    const uint64_t* sa = td_sel_bits(a);
-    const uint64_t* sb = td_sel_bits(b);
+    uint64_t* dst = ray_sel_bits(out);
+    const uint64_t* sa = ray_sel_bits(a);
+    const uint64_t* sb = ray_sel_bits(b);
     uint32_t n_words = (uint32_t)((nrows + 63) / 64);
 
     for (uint32_t w = 0; w < n_words; w++)
         dst[w] = sa[w] & sb[w];
 
-    td_sel_recompute(out);
+    ray_sel_recompute(out);
     return out;
 }

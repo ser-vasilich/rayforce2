@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -30,37 +30,37 @@ static void generate_csv(const char* path, int64_t n_rows, int64_t n_unique) {
 
 static void bench_csv_load(const char* label, const char* path, int64_t n_rows) {
     /* Warm up */
-    td_heap_init();
-    { td_err_t _e = td_sym_init(); (void)_e; };
-    td_t* t = td_read_csv(path);
-    if (t && !TD_IS_ERR(t)) td_release(t);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_heap_init();
+    { ray_err_t _e = ray_sym_init(); (void)_e; };
+    ray_t* t = ray_read_csv(path);
+    if (t && !RAY_IS_ERR(t)) ray_release(t);
+    ray_sym_destroy();
+    ray_heap_destroy();
 
     /* Timed run */
-    td_heap_init();
-    { td_err_t _e = td_sym_init(); (void)_e; };
+    ray_heap_init();
+    { ray_err_t _e = ray_sym_init(); (void)_e; };
 
     double start = now_ns();
-    t = td_read_csv(path);
+    t = ray_read_csv(path);
     double elapsed = now_ns() - start;
 
-    if (!t || TD_IS_ERR(t)) {
+    if (!t || RAY_IS_ERR(t)) {
         printf("%-32s  FAILED\n", label);
     } else {
         double ms = elapsed / 1e6;
         double rows_per_sec = (double)n_rows / (elapsed / 1e9);
         printf("%-32s  %8lld rows  %8.1f ms  %12.0f rows/sec\n",
                label, (long long)n_rows, ms, rows_per_sec);
-        td_release(t);
+        ray_release(t);
     }
 
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
 }
 
 int main(void) {
-    const char* csv_path = "/tmp/teide_bench_csv.csv";
+    const char* csv_path = "/tmp/rayforce_bench_csv.csv";
 
     printf("%-32s  %8s       %8s  %12s\n",
            "Benchmark", "Rows", "Time", "Throughput");

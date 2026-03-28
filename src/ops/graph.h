@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_GRAPH_H
-#define TD_GRAPH_H
+#ifndef RAY_GRAPH_H
+#define RAY_GRAPH_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_GRAPH_H */
+#endif /* RAY_GRAPH_H */

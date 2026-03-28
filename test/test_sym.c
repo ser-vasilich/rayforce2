@@ -22,7 +22,7 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -30,15 +30,15 @@
 
 static void* sym_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
     return NULL;
 }
 
 static void sym_teardown(void* fixture) {
     (void)fixture;
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
 }
 
 /* ---- sym_init_destroy -------------------------------------------------- */
@@ -47,7 +47,7 @@ static MunitResult test_sym_init_destroy(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* After init, count should be 0 */
-    munit_assert_uint(td_sym_count(), ==, 0);
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
     return MUNIT_OK;
 }
@@ -57,9 +57,9 @@ static MunitResult test_sym_init_destroy(const void* params, void* fixture) {
 static MunitResult test_sym_intern_basic(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    int64_t id = td_sym_intern("hello", 5);
+    int64_t id = ray_sym_intern("hello", 5);
     munit_assert_int(id, >=, 0);
-    munit_assert_uint(td_sym_count(), ==, 1);
+    munit_assert_uint(ray_sym_count(), ==, 1);
 
     return MUNIT_OK;
 }
@@ -69,10 +69,10 @@ static MunitResult test_sym_intern_basic(const void* params, void* fixture) {
 static MunitResult test_sym_intern_duplicate(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    int64_t id1 = td_sym_intern("hello", 5);
-    int64_t id2 = td_sym_intern("hello", 5);
+    int64_t id1 = ray_sym_intern("hello", 5);
+    int64_t id2 = ray_sym_intern("hello", 5);
     munit_assert_int(id1, ==, id2);
-    munit_assert_uint(td_sym_count(), ==, 1);
+    munit_assert_uint(ray_sym_count(), ==, 1);
 
     return MUNIT_OK;
 }
@@ -82,8 +82,8 @@ static MunitResult test_sym_intern_duplicate(const void* params, void* fixture) 
 static MunitResult test_sym_find_existing(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    int64_t id = td_sym_intern("world", 5);
-    int64_t found = td_sym_find("world", 5);
+    int64_t id = ray_sym_intern("world", 5);
+    int64_t found = ray_sym_find("world", 5);
     munit_assert_int(found, ==, id);
 
     return MUNIT_OK;
@@ -94,7 +94,7 @@ static MunitResult test_sym_find_existing(const void* params, void* fixture) {
 static MunitResult test_sym_find_missing(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    int64_t found = td_sym_find("nonexistent", 11);
+    int64_t found = ray_sym_find("nonexistent", 11);
     munit_assert_int(found, ==, -1);
 
     return MUNIT_OK;
@@ -105,13 +105,13 @@ static MunitResult test_sym_find_missing(const void* params, void* fixture) {
 static MunitResult test_sym_str_roundtrip(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    int64_t id = td_sym_intern("roundtrip", 9);
+    int64_t id = ray_sym_intern("roundtrip", 9);
     munit_assert_int(id, >=, 0);
 
-    td_t* s = td_sym_str(id);
+    ray_t* s = ray_sym_str(id);
     munit_assert_ptr_not_null(s);
-    munit_assert_size(td_str_len(s), ==, 9);
-    munit_assert_memory_equal(9, td_str_ptr(s), "roundtrip");
+    munit_assert_size(ray_str_len(s), ==, 9);
+    munit_assert_memory_equal(9, ray_str_ptr(s), "roundtrip");
 
     return MUNIT_OK;
 }
@@ -121,20 +121,20 @@ static MunitResult test_sym_str_roundtrip(const void* params, void* fixture) {
 static MunitResult test_sym_count(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    munit_assert_uint(td_sym_count(), ==, 0);
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
-    td_sym_intern("a", 1);
-    munit_assert_uint(td_sym_count(), ==, 1);
+    ray_sym_intern("a", 1);
+    munit_assert_uint(ray_sym_count(), ==, 1);
 
-    td_sym_intern("b", 1);
-    munit_assert_uint(td_sym_count(), ==, 2);
+    ray_sym_intern("b", 1);
+    munit_assert_uint(ray_sym_count(), ==, 2);
 
-    td_sym_intern("c", 1);
-    munit_assert_uint(td_sym_count(), ==, 3);
+    ray_sym_intern("c", 1);
+    munit_assert_uint(ray_sym_count(), ==, 3);
 
     /* Duplicate should not increase count */
-    td_sym_intern("a", 1);
-    munit_assert_uint(td_sym_count(), ==, 3);
+    ray_sym_intern("a", 1);
+    munit_assert_uint(ray_sym_count(), ==, 3);
 
     return MUNIT_OK;
 }
@@ -149,11 +149,11 @@ static MunitResult test_sym_many(const void* params, void* fixture) {
     char buf[32];
     for (int i = 0; i < 1000; i++) {
         int len = snprintf(buf, sizeof(buf), "sym_%d", i);
-        ids[i] = td_sym_intern(buf, (size_t)len);
+        ids[i] = ray_sym_intern(buf, (size_t)len);
         munit_assert_int(ids[i], >=, 0);
     }
 
-    munit_assert_uint(td_sym_count(), ==, 1000);
+    munit_assert_uint(ray_sym_count(), ==, 1000);
 
     /* Verify all are distinct IDs */
     for (int i = 0; i < 1000; i++) {
@@ -165,20 +165,20 @@ static MunitResult test_sym_many(const void* params, void* fixture) {
     /* Verify all are retrievable with correct strings */
     for (int i = 0; i < 1000; i++) {
         int len = snprintf(buf, sizeof(buf), "sym_%d", i);
-        td_t* s = td_sym_str(ids[i]);
+        ray_t* s = ray_sym_str(ids[i]);
         munit_assert_ptr_not_null(s);
-        munit_assert_size(td_str_len(s), ==, (size_t)len);
-        munit_assert_memory_equal((size_t)len, td_str_ptr(s), buf);
+        munit_assert_size(ray_str_len(s), ==, (size_t)len);
+        munit_assert_memory_equal((size_t)len, ray_str_ptr(s), buf);
     }
 
     /* Re-interning should return same IDs */
     for (int i = 0; i < 1000; i++) {
         int len = snprintf(buf, sizeof(buf), "sym_%d", i);
-        int64_t id2 = td_sym_intern(buf, (size_t)len);
+        int64_t id2 = ray_sym_intern(buf, (size_t)len);
         munit_assert_int(id2, ==, ids[i]);
     }
 
-    munit_assert_uint(td_sym_count(), ==, 1000);
+    munit_assert_uint(ray_sym_count(), ==, 1000);
 
     return MUNIT_OK;
 }
@@ -190,40 +190,40 @@ static MunitResult test_sym_bulk(const void* params, void* fixture) {
 
     #define BULK_N 100000
 
-    /* Pre-reserve capacity (tests td_sym_ensure_cap) */
-    bool cap_ok = td_sym_ensure_cap(BULK_N);
+    /* Pre-reserve capacity (tests ray_sym_ensure_cap) */
+    bool cap_ok = ray_sym_ensure_cap(BULK_N);
     munit_assert_true(cap_ok);
 
     /* Intern 100K unique symbols */
     char buf[32];
     for (int i = 0; i < BULK_N; i++) {
         int len = snprintf(buf, sizeof(buf), "bulk_%06d", i);
-        int64_t id = td_sym_intern(buf, (size_t)len);
+        int64_t id = ray_sym_intern(buf, (size_t)len);
         munit_assert_int(id, >=, 0);
     }
 
-    munit_assert_uint(td_sym_count(), ==, BULK_N);
+    munit_assert_uint(ray_sym_count(), ==, BULK_N);
 
     /* Verify every symbol is retrievable with correct string */
     for (int i = 0; i < BULK_N; i++) {
         int len = snprintf(buf, sizeof(buf), "bulk_%06d", i);
-        int64_t id = td_sym_find(buf, (size_t)len);
+        int64_t id = ray_sym_find(buf, (size_t)len);
         munit_assert_int(id, >=, 0);
-        td_t* s = td_sym_str(id);
+        ray_t* s = ray_sym_str(id);
         munit_assert_ptr_not_null(s);
-        munit_assert_size(td_str_len(s), ==, (size_t)len);
-        munit_assert_memory_equal((size_t)len, td_str_ptr(s), buf);
+        munit_assert_size(ray_str_len(s), ==, (size_t)len);
+        munit_assert_memory_equal((size_t)len, ray_str_ptr(s), buf);
     }
 
     /* Re-interning must return same IDs (idempotent) */
     for (int i = 0; i < BULK_N; i++) {
         int len = snprintf(buf, sizeof(buf), "bulk_%06d", i);
-        int64_t id1 = td_sym_find(buf, (size_t)len);
-        int64_t id2 = td_sym_intern(buf, (size_t)len);
+        int64_t id1 = ray_sym_find(buf, (size_t)len);
+        int64_t id2 = ray_sym_intern(buf, (size_t)len);
         munit_assert_int(id1, ==, id2);
     }
 
-    munit_assert_uint(td_sym_count(), ==, BULK_N);
+    munit_assert_uint(ray_sym_count(), ==, BULK_N);
 
     #undef BULK_N
     return MUNIT_OK;
@@ -237,43 +237,43 @@ static MunitResult test_sym_save_load_roundtrip(const void* params, void* fixtur
     const char* sym_path = "/tmp/test_sym_roundtrip.sym";
 
     /* Intern some symbols */
-    int64_t id_hello = td_sym_intern("hello", 5);
-    int64_t id_world = td_sym_intern("world", 5);
-    int64_t id_foo   = td_sym_intern("foo", 3);
+    int64_t id_hello = ray_sym_intern("hello", 5);
+    int64_t id_world = ray_sym_intern("world", 5);
+    int64_t id_foo   = ray_sym_intern("foo", 3);
     munit_assert_int(id_hello, >=, 0);
     munit_assert_int(id_world, >=, 0);
     munit_assert_int(id_foo, >=, 0);
-    munit_assert_uint(td_sym_count(), ==, 3);
+    munit_assert_uint(ray_sym_count(), ==, 3);
 
     /* Save */
-    td_err_t err = td_sym_save(sym_path);
-    munit_assert_int(err, ==, TD_OK);
+    ray_err_t err = ray_sym_save(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Destroy and re-init sym table */
-    td_sym_destroy();
-    (void)td_sym_init();
-    munit_assert_uint(td_sym_count(), ==, 0);
+    ray_sym_destroy();
+    (void)ray_sym_init();
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
     /* Load */
-    err = td_sym_load(sym_path);
-    munit_assert_int(err, ==, TD_OK);
-    munit_assert_uint(td_sym_count(), ==, 3);
+    err = ray_sym_load(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
+    munit_assert_uint(ray_sym_count(), ==, 3);
 
     /* Verify all strings match */
-    td_t* s0 = td_sym_str(id_hello);
+    ray_t* s0 = ray_sym_str(id_hello);
     munit_assert_ptr_not_null(s0);
-    munit_assert_size(td_str_len(s0), ==, 5);
-    munit_assert_memory_equal(5, td_str_ptr(s0), "hello");
+    munit_assert_size(ray_str_len(s0), ==, 5);
+    munit_assert_memory_equal(5, ray_str_ptr(s0), "hello");
 
-    td_t* s1 = td_sym_str(id_world);
+    ray_t* s1 = ray_sym_str(id_world);
     munit_assert_ptr_not_null(s1);
-    munit_assert_size(td_str_len(s1), ==, 5);
-    munit_assert_memory_equal(5, td_str_ptr(s1), "world");
+    munit_assert_size(ray_str_len(s1), ==, 5);
+    munit_assert_memory_equal(5, ray_str_ptr(s1), "world");
 
-    td_t* s2 = td_sym_str(id_foo);
+    ray_t* s2 = ray_sym_str(id_foo);
     munit_assert_ptr_not_null(s2);
-    munit_assert_size(td_str_len(s2), ==, 3);
-    munit_assert_memory_equal(3, td_str_ptr(s2), "foo");
+    munit_assert_size(ray_str_len(s2), ==, 3);
+    munit_assert_memory_equal(3, ray_str_ptr(s2), "foo");
 
     /* Cleanup */
     remove(sym_path);
@@ -292,53 +292,53 @@ static MunitResult test_sym_save_append_only(const void* params, void* fixture) 
     const char* sym_path = "/tmp/test_sym_append.sym";
 
     /* Intern initial batch */
-    int64_t id_a = td_sym_intern("alpha", 5);
-    int64_t id_b = td_sym_intern("beta", 4);
+    int64_t id_a = ray_sym_intern("alpha", 5);
+    int64_t id_b = ray_sym_intern("beta", 4);
     munit_assert_int(id_a, >=, 0);
     munit_assert_int(id_b, >=, 0);
 
     /* First save */
-    td_err_t err = td_sym_save(sym_path);
-    munit_assert_int(err, ==, TD_OK);
+    ray_err_t err = ray_sym_save(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Second save with no changes -> should be no-op */
-    err = td_sym_save(sym_path);
-    munit_assert_int(err, ==, TD_OK);
+    err = ray_sym_save(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Intern more symbols */
-    int64_t id_c = td_sym_intern("gamma", 5);
-    int64_t id_d = td_sym_intern("delta", 5);
+    int64_t id_c = ray_sym_intern("gamma", 5);
+    int64_t id_d = ray_sym_intern("delta", 5);
     munit_assert_int(id_c, >=, 0);
     munit_assert_int(id_d, >=, 0);
 
     /* Save again (append-only: new entries added) */
-    err = td_sym_save(sym_path);
-    munit_assert_int(err, ==, TD_OK);
+    err = ray_sym_save(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Destroy and reload */
-    td_sym_destroy();
-    (void)td_sym_init();
-    err = td_sym_load(sym_path);
-    munit_assert_int(err, ==, TD_OK);
-    munit_assert_uint(td_sym_count(), ==, 4);
+    ray_sym_destroy();
+    (void)ray_sym_init();
+    err = ray_sym_load(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
+    munit_assert_uint(ray_sym_count(), ==, 4);
 
     /* Verify old IDs are stable */
-    td_t* sa = td_sym_str(id_a);
+    ray_t* sa = ray_sym_str(id_a);
     munit_assert_ptr_not_null(sa);
-    munit_assert_memory_equal(5, td_str_ptr(sa), "alpha");
+    munit_assert_memory_equal(5, ray_str_ptr(sa), "alpha");
 
-    td_t* sb = td_sym_str(id_b);
+    ray_t* sb = ray_sym_str(id_b);
     munit_assert_ptr_not_null(sb);
-    munit_assert_memory_equal(4, td_str_ptr(sb), "beta");
+    munit_assert_memory_equal(4, ray_str_ptr(sb), "beta");
 
     /* Verify new IDs are present */
-    td_t* sc = td_sym_str(id_c);
+    ray_t* sc = ray_sym_str(id_c);
     munit_assert_ptr_not_null(sc);
-    munit_assert_memory_equal(5, td_str_ptr(sc), "gamma");
+    munit_assert_memory_equal(5, ray_str_ptr(sc), "gamma");
 
-    td_t* sd = td_sym_str(id_d);
+    ray_t* sd = ray_sym_str(id_d);
     munit_assert_ptr_not_null(sd);
-    munit_assert_memory_equal(5, td_str_ptr(sd), "delta");
+    munit_assert_memory_equal(5, ray_str_ptr(sd), "delta");
 
     /* Cleanup */
     remove(sym_path);
@@ -364,11 +364,11 @@ static MunitResult test_sym_load_corrupt(const void* params, void* fixture) {
     fclose(f);
 
     /* Load should fail with corrupt */
-    td_err_t err = td_sym_load(sym_path);
-    munit_assert_int(err, !=, TD_OK);
+    ray_err_t err = ray_sym_load(sym_path);
+    munit_assert_int(err, !=, RAY_OK);
 
     /* Count unchanged */
-    munit_assert_uint(td_sym_count(), ==, 0);
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
     /* Cleanup */
     remove(sym_path);
@@ -387,10 +387,10 @@ static MunitResult test_sym_load_truncated(const void* params, void* fixture) {
     const char* sym_path = "/tmp/test_sym_trunc.sym";
 
     /* Intern and save valid sym file */
-    td_sym_intern("abc", 3);
-    td_sym_intern("def", 3);
-    td_err_t err = td_sym_save(sym_path);
-    munit_assert_int(err, ==, TD_OK);
+    ray_sym_intern("abc", 3);
+    ray_sym_intern("def", 3);
+    ray_err_t err = ray_sym_save(sym_path);
+    munit_assert_int(err, ==, RAY_OK);
 
     /* Truncate the file to 2 bytes */
     FILE* f = fopen(sym_path, "wb");
@@ -399,13 +399,13 @@ static MunitResult test_sym_load_truncated(const void* params, void* fixture) {
     fclose(f);
 
     /* Destroy and re-init */
-    td_sym_destroy();
-    (void)td_sym_init();
+    ray_sym_destroy();
+    (void)ray_sym_init();
 
     /* Load should fail */
-    err = td_sym_load(sym_path);
-    munit_assert_int(err, !=, TD_OK);
-    munit_assert_uint(td_sym_count(), ==, 0);
+    err = ray_sym_load(sym_path);
+    munit_assert_int(err, !=, RAY_OK);
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
     /* Cleanup */
     remove(sym_path);
@@ -421,9 +421,9 @@ static MunitResult test_sym_load_truncated(const void* params, void* fixture) {
 static MunitResult test_sym_load_missing(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_err_t err = td_sym_load("/tmp/nonexistent_sym_file_xyz.sym");
-    munit_assert_int(err, !=, TD_OK);
-    munit_assert_uint(td_sym_count(), ==, 0);
+    ray_err_t err = ray_sym_load("/tmp/nonexistent_sym_file_xyz.sym");
+    munit_assert_int(err, !=, RAY_OK);
+    munit_assert_uint(ray_sym_count(), ==, 0);
 
     return MUNIT_OK;
 }

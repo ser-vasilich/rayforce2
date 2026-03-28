@@ -21,32 +21,32 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_FVEC_H
-#define TD_FVEC_H
+#ifndef RAY_FVEC_H
+#define RAY_FVEC_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-/* Factorization state -- pipeline concept, NOT added to td_t.
+/* Factorization state -- pipeline concept, NOT added to ray_t.
  *
- * Lives in the pipeline context. td_t itself remains unchanged.
+ * Lives in the pipeline context. ray_t itself remains unchanged.
  */
-typedef struct td_fvec {
-    td_t*    vec;            /* underlying td_t vector (I64, SYM, etc.) */
+typedef struct ray_fvec {
+    ray_t*    vec;            /* underlying ray_t vector (I64, SYM, etc.) */
     int64_t  cur_idx;        /* >= 0: flat (single value at index)      */
                              /* -1: unflat (full vector is active)      */
     int64_t  cardinality;    /* for flat: how many rows this represents */
-} td_fvec_t;
+} ray_fvec_t;
 
 /* Factorized Table -- accumulation buffer for ASP-Join */
-typedef struct td_ftable {
-    td_fvec_t*  columns;     /* array of factorized vectors   */
+typedef struct ray_ftable {
+    ray_fvec_t*  columns;     /* array of factorized vectors   */
     uint16_t    n_cols;
     int64_t     n_tuples;    /* factorized tuple count        */
-    td_t*       semijoin;    /* TD_SEL bitmap of qualifying keys */
-} td_ftable_t;
+    ray_t*       semijoin;    /* RAY_SEL bitmap of qualifying keys */
+} ray_ftable_t;
 
-td_ftable_t* td_ftable_new(uint16_t n_cols);
-void         td_ftable_free(td_ftable_t* ft);
-td_t*        td_ftable_materialize(td_ftable_t* ft);
+ray_ftable_t* ray_ftable_new(uint16_t n_cols);
+void         ray_ftable_free(ray_ftable_t* ft);
+ray_t*        ray_ftable_materialize(ray_ftable_t* ft);
 
-#endif /* TD_FVEC_H */
+#endif /* RAY_FVEC_H */

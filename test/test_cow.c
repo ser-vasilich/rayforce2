@@ -22,20 +22,20 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdatomic.h>
 
 /* ---- Setup / Teardown -------------------------------------------------- */
 
 static void* cow_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    td_heap_init();
+    ray_heap_init();
     return NULL;
 }
 
 static void cow_teardown(void* fixture) {
     (void)fixture;
-    td_heap_destroy();
+    ray_heap_destroy();
 }
 
 /* ---- retain/release basic ---------------------------------------------- */
@@ -43,23 +43,23 @@ static void cow_teardown(void* fixture) {
 static MunitResult test_retain_release(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_alloc(0);
+    ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
+    munit_assert_false(RAY_IS_ERR(v));
 
     /* rc starts at 1 */
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
     /* retain -> rc=2 */
-    td_retain(v);
+    ray_retain(v);
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
 
     /* release -> rc=1 */
-    td_release(v);
+    ray_release(v);
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
     /* release -> rc=0, block freed (don't access v after this) */
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -69,17 +69,17 @@ static MunitResult test_retain_release(const void* params, void* fixture) {
 static MunitResult test_cow_sole_owner(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_alloc(0);
+    ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    v->type = TD_ATOM_I64;
+    v->type = RAY_ATOM_I64;
     v->i64 = 42;
 
     /* rc=1, sole owner -> cow returns same pointer */
-    td_t* w = td_cow(v);
+    ray_t* w = ray_cow(v);
     munit_assert_ptr_equal(v, w);
     munit_assert_uint(atomic_load_explicit(&w->rc, memory_order_relaxed), ==, 1);
 
-    td_release(w);
+    ray_release(w);
     return MUNIT_OK;
 }
 
@@ -88,19 +88,19 @@ static MunitResult test_cow_sole_owner(const void* params, void* fixture) {
 static MunitResult test_cow_shared(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_alloc(0);
+    ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    v->type = TD_ATOM_I64;
+    v->type = RAY_ATOM_I64;
     v->i64 = 99;
 
     /* retain to rc=2 (shared) */
-    td_retain(v);
+    ray_retain(v);
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 2);
 
     /* cow on shared object -> returns different pointer */
-    td_t* w = td_cow(v);
+    ray_t* w = ray_cow(v);
     munit_assert_ptr_not_null(w);
-    munit_assert_false(TD_IS_ERR(w));
+    munit_assert_false(RAY_IS_ERR(w));
     munit_assert_true((void*)w != (void*)v);
 
     /* Copy should have rc=1 */
@@ -110,11 +110,11 @@ static MunitResult test_cow_shared(const void* params, void* fixture) {
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
     /* Value should be preserved */
-    munit_assert_int(w->type, ==, TD_ATOM_I64);
+    munit_assert_int(w->type, ==, RAY_ATOM_I64);
     munit_assert_int(w->i64, ==, 99);
 
-    td_release(v);
-    td_release(w);
+    ray_release(v);
+    ray_release(w);
     return MUNIT_OK;
 }
 
@@ -124,17 +124,17 @@ static MunitResult test_null_error_safety(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* These should not crash */
-    td_retain(NULL);
-    td_release(NULL);
-    td_t* r = td_cow(NULL);
+    ray_retain(NULL);
+    ray_release(NULL);
+    ray_t* r = ray_cow(NULL);
     munit_assert_null(r);
 
     /* Error pointers */
-    td_t* err = TD_ERR_PTR(TD_ERR_OOM);
-    td_retain(err);
-    td_release(err);
-    td_t* r2 = td_cow(err);
-    munit_assert_true(TD_IS_ERR(r2));
+    ray_t* err = RAY_ERR_PTR(RAY_ERR_OOM);
+    ray_retain(err);
+    ray_release(err);
+    ray_t* r2 = ray_cow(err);
+    munit_assert_true(RAY_IS_ERR(r2));
 
     return MUNIT_OK;
 }
@@ -146,25 +146,25 @@ static MunitResult test_cow_vector(const void* params, void* fixture) {
 
     /* Create a vector with actual data */
     size_t data_size = 10 * sizeof(int64_t);
-    td_t* v = td_alloc(data_size);
+    ray_t* v = ray_alloc(data_size);
     munit_assert_ptr_not_null(v);
-    v->type = TD_I64;
+    v->type = RAY_I64;
     v->len = 10;
-    int64_t* data = (int64_t*)td_data(v);
+    int64_t* data = (int64_t*)ray_data(v);
     for (int i = 0; i < 10; i++) {
         data[i] = (int64_t)(i * 100);
     }
 
     /* Share and cow */
-    td_retain(v);
-    td_t* w = td_cow(v);
+    ray_retain(v);
+    ray_t* w = ray_cow(v);
     munit_assert_ptr_not_null(w);
     munit_assert_true((void*)w != (void*)v);
-    munit_assert_int(w->type, ==, TD_I64);
+    munit_assert_int(w->type, ==, RAY_I64);
     munit_assert_int(w->len, ==, 10);
 
     /* Verify data was copied */
-    int64_t* wdata = (int64_t*)td_data(w);
+    int64_t* wdata = (int64_t*)ray_data(w);
     for (int i = 0; i < 10; i++) {
         munit_assert_int(wdata[i], ==, (int64_t)(i * 100));
     }
@@ -173,43 +173,43 @@ static MunitResult test_cow_vector(const void* params, void* fixture) {
     wdata[0] = 999;
     munit_assert_int(data[0], ==, 0);
 
-    td_release(v);
-    td_release(w);
+    ray_release(v);
+    ray_release(w);
     return MUNIT_OK;
 }
 
 /* ---- block_copy retains children --------------------------------------- */
 
-extern td_t* td_block_copy(td_t* src);
+extern ray_t* ray_block_copy(ray_t* src);
 
 static MunitResult test_block_copy_retains_children(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    (void)td_sym_init();
+    (void)ray_sym_init();
 
     int64_t vals[] = {1, 2, 3};
-    td_t* vec = td_vec_from_raw(TD_I64, vals, 3);
-    int64_t name = td_sym_intern("x", 1);
-    td_t* tbl = td_table_new(1);
-    tbl = td_table_add_col(tbl, name, vec);
-    td_release(vec);
+    ray_t* vec = ray_vec_from_raw(RAY_I64, vals, 3);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
 
     /* Get column ref count before copy */
-    td_t* col_before = td_table_get_col_idx(tbl, 0);
+    ray_t* col_before = ray_table_get_col_idx(tbl, 0);
     uint32_t rc_before = atomic_load(&col_before->rc);
 
     /* Copy the table block */
-    td_t* copy = td_block_copy(tbl);
+    ray_t* copy = ray_block_copy(tbl);
     munit_assert_ptr_not_null(copy);
-    munit_assert_false(TD_IS_ERR(copy));
+    munit_assert_false(RAY_IS_ERR(copy));
 
     /* Column ref count should have increased by 1 */
     uint32_t rc_after = atomic_load(&col_before->rc);
     munit_assert_uint(rc_after, ==, rc_before + 1);
 
-    td_release(copy);
-    td_release(tbl);
-    td_sym_destroy();
+    ray_release(copy);
+    ray_release(tbl);
+    ray_sym_destroy();
 
     return MUNIT_OK;
 }

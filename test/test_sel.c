@@ -22,102 +22,102 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 
 static MunitResult test_sel_new(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* sel = td_sel_new(100);
+    ray_t* sel = ray_sel_new(100);
     munit_assert_ptr_not_null(sel);
-    munit_assert_false(TD_IS_ERR(sel));
-    munit_assert_int(sel->type, ==, TD_SEL);
+    munit_assert_false(RAY_IS_ERR(sel));
+    munit_assert_int(sel->type, ==, RAY_SEL);
 
-    td_release(sel);
-    td_heap_destroy();
+    ray_release(sel);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_sel_from_pred(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     /* Create bool vector: [true, false, true, false, true] */
     uint8_t bools[] = {1, 0, 1, 0, 1};
-    td_t* bvec = td_vec_from_raw(TD_BOOL, bools, 5);
+    ray_t* bvec = ray_vec_from_raw(RAY_BOOL, bools, 5);
     munit_assert_ptr_not_null(bvec);
 
-    td_t* sel = td_sel_from_pred(bvec);
+    ray_t* sel = ray_sel_from_pred(bvec);
     munit_assert_ptr_not_null(sel);
-    munit_assert_false(TD_IS_ERR(sel));
-    munit_assert_int(sel->type, ==, TD_SEL);
-    munit_assert_int(td_sel_meta(sel)->total_pass, ==, 3);
+    munit_assert_false(RAY_IS_ERR(sel));
+    munit_assert_int(sel->type, ==, RAY_SEL);
+    munit_assert_int(ray_sel_meta(sel)->total_pass, ==, 3);
 
-    td_release(sel);
-    td_release(bvec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(sel);
+    ray_release(bvec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_sel_and(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
     uint8_t a_data[] = {1, 1, 0, 0, 1};
     uint8_t b_data[] = {1, 0, 1, 0, 1};
-    td_t* a_vec = td_vec_from_raw(TD_BOOL, a_data, 5);
-    td_t* b_vec = td_vec_from_raw(TD_BOOL, b_data, 5);
+    ray_t* a_vec = ray_vec_from_raw(RAY_BOOL, a_data, 5);
+    ray_t* b_vec = ray_vec_from_raw(RAY_BOOL, b_data, 5);
 
-    td_t* sel_a = td_sel_from_pred(a_vec);
-    td_t* sel_b = td_sel_from_pred(b_vec);
-    td_t* sel_and = td_sel_and(sel_a, sel_b);
+    ray_t* sel_a = ray_sel_from_pred(a_vec);
+    ray_t* sel_b = ray_sel_from_pred(b_vec);
+    ray_t* sel_and = ray_sel_and(sel_a, sel_b);
 
     munit_assert_ptr_not_null(sel_and);
-    munit_assert_false(TD_IS_ERR(sel_and));
-    munit_assert_int(sel_and->type, ==, TD_SEL);
+    munit_assert_false(RAY_IS_ERR(sel_and));
+    munit_assert_int(sel_and->type, ==, RAY_SEL);
     /* AND of {1,1,0,0,1} and {1,0,1,0,1} = indices {0,4} -> 2 passing */
-    munit_assert_int(td_sel_meta(sel_and)->total_pass, ==, 2);
+    munit_assert_int(ray_sel_meta(sel_and)->total_pass, ==, 2);
 
-    td_release(sel_and);
-    td_release(sel_a);
-    td_release(sel_b);
-    td_release(a_vec);
-    td_release(b_vec);
-    td_heap_destroy();
+    ray_release(sel_and);
+    ray_release(sel_a);
+    ray_release(sel_b);
+    ray_release(a_vec);
+    ray_release(b_vec);
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 static MunitResult test_sel_filter_integration(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     /* Test that selection vectors work end-to-end through executor */
     int64_t vals[] = {10, 20, 30, 40, 50};
-    td_t* vec = td_vec_from_raw(TD_I64, vals, 5);
-    int64_t name = td_sym_intern("x", 1);
-    td_t* tbl = td_table_new(1);
-    tbl = td_table_add_col(tbl, name, vec);
-    td_release(vec);
+    ray_t* vec = ray_vec_from_raw(RAY_I64, vals, 5);
+    int64_t name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, name, vec);
+    ray_release(vec);
 
-    td_graph_t* g = td_graph_new(tbl);
-    td_op_t* x = td_scan(g, "x");
-    td_op_t* c25 = td_const_i64(g, 25);
-    td_op_t* pred = td_gt(g, x, c25);
-    td_op_t* filtered = td_filter(g, x, pred);
-    td_op_t* s = td_sum(g, filtered);
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* x = ray_scan(g, "x");
+    ray_op_t* c25 = ray_const_i64(g, 25);
+    ray_op_t* pred = ray_gt(g, x, c25);
+    ray_op_t* filtered = ray_filter(g, x, pred);
+    ray_op_t* s = ray_sum(g, filtered);
 
-    td_t* result = td_execute(g, s);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_t* result = ray_execute(g, s);
+    munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->i64, ==, 120);  /* 30+40+50 */
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 

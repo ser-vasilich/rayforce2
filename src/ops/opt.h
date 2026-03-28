@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_OPT_H
-#define TD_OPT_H
+#ifndef RAY_OPT_H
+#define RAY_OPT_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_OPT_H */
+#endif /* RAY_OPT_H */

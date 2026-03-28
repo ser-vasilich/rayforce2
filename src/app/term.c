@@ -36,18 +36,18 @@ typedef struct stat hist_stat_t;
 #define HIST_PATH_SEP       '/'
 #endif
 
-/* Recover td_t* block pointer from a td_data() result pointer.
- * td_data() returns bytes immediately after the 32-byte td_t header. */
-#define TD_BLOCK_FROM_DATA(ptr) ((td_t*)((char*)(ptr) - sizeof(td_t)))
+/* Recover ray_t* block pointer from a ray_data() result pointer.
+ * ray_data() returns bytes immediately after the 32-byte ray_t header. */
+#define RAY_BLOCK_FROM_DATA(ptr) ((ray_t*)((char*)(ptr) - sizeof(ray_t)))
 
 /* ===== Signal handling ===== */
 
 static volatile sig_atomic_t g_interrupted = 0;
-static td_term_t* g_active_term = NULL;
+static ray_term_t* g_active_term = NULL;
 
 static void signal_handler(int sig) {
     g_interrupted = 1;
-    td_eval_request_interrupt();
+    ray_eval_request_interrupt();
 #if defined(_WIN32)
     if (sig == SIGTERM) {
 #else
@@ -80,15 +80,15 @@ static void atexit_handler(void) {
     }
 }
 
-int td_term_interrupted(void) {
+int ray_term_interrupted(void) {
     return g_interrupted != 0;
 }
 
-void td_term_clear_interrupt(void) {
+void ray_term_clear_interrupt(void) {
     g_interrupted = 0;
 }
 
-void td_term_install_signals(td_term_t* term) {
+void ray_term_install_signals(ray_term_t* term) {
     static int atexit_registered = 0;
     g_active_term = term;
     if (!atexit_registered) {
@@ -112,7 +112,7 @@ void td_term_install_signals(td_term_t* term) {
 #endif
 }
 
-void td_term_eval_begin(td_term_t* term) {
+void ray_term_eval_begin(ray_term_t* term) {
 #if !defined(_WIN32)
     /* Enable ISIG so Ctrl-C generates SIGINT during evaluation */
     struct termios tio;
@@ -123,7 +123,7 @@ void td_term_eval_begin(td_term_t* term) {
     (void)term;
 }
 
-void td_term_eval_end(td_term_t* term) {
+void ray_term_eval_end(ray_term_t* term) {
 #if !defined(_WIN32)
     /* Restore raw mode (ISIG off) for input handling */
     tcsetattr(STDIN_FILENO, TCSANOW, &term->newattr);
@@ -133,19 +133,19 @@ void td_term_eval_end(td_term_t* term) {
 
 /* ===== Cursor helpers ===== */
 
-void td_cursor_move_start(void) { putchar('\r'); }
-void td_cursor_move_left(int32_t n)  { if (n > 0) printf("\033[%dD", n); }
-void td_cursor_move_right(int32_t n) { if (n > 0) printf("\033[%dC", n); }
-void td_cursor_move_up(int32_t n)    { if (n > 0) printf("\033[%dA", n); }
-void td_cursor_move_down(int32_t n)  { if (n > 0) printf("\033[%dB", n); }
-void td_line_clear(void)       { printf("\r\033[K"); }
-void td_line_clear_below(void) { printf("\033[J"); }
-void td_cursor_hide(void)      { printf("\033[?25l"); }
-void td_cursor_show(void)      { printf("\033[?25h"); }
+void ray_cursor_move_start(void) { putchar('\r'); }
+void ray_cursor_move_left(int32_t n)  { if (n > 0) printf("\033[%dD", n); }
+void ray_cursor_move_right(int32_t n) { if (n > 0) printf("\033[%dC", n); }
+void ray_cursor_move_up(int32_t n)    { if (n > 0) printf("\033[%dA", n); }
+void ray_cursor_move_down(int32_t n)  { if (n > 0) printf("\033[%dB", n); }
+void ray_line_clear(void)       { printf("\r\033[K"); }
+void ray_line_clear_below(void) { printf("\033[J"); }
+void ray_cursor_hide(void)      { printf("\033[?25l"); }
+void ray_cursor_show(void)      { printf("\033[?25h"); }
 
 /* ===== Terminal size ===== */
 
-void td_term_get_size(td_term_t* term) {
+void ray_term_get_size(ray_term_t* term) {
 #if defined(_WIN32)
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(term->h_stdout, &csbi)) {
@@ -169,7 +169,7 @@ void td_term_get_size(td_term_t* term) {
 
 /* ===== Visual width ===== */
 
-int32_t td_term_visual_width(const char* str, int32_t len) {
+int32_t ray_term_visual_width(const char* str, int32_t len) {
     int32_t width = 0;
     int32_t in_escape = 0;
 
@@ -198,26 +198,26 @@ int32_t td_term_visual_width(const char* str, int32_t len) {
 
 /* ===== Cursor positioning ===== */
 
-void td_term_goto_position(td_term_t* term, int32_t from_pos, int32_t to_pos) {
+void ray_term_goto_position(ray_term_t* term, int32_t from_pos, int32_t to_pos) {
     if (term->term_width <= 0)
         return;
 
-    int32_t from_total = term->prompt_len + td_term_visual_width(term->buf, from_pos);
+    int32_t from_total = term->prompt_len + ray_term_visual_width(term->buf, from_pos);
     int32_t from_row = from_total / term->term_width;
     int32_t from_col = from_total % term->term_width;
 
-    int32_t to_total = term->prompt_len + td_term_visual_width(term->buf, to_pos);
+    int32_t to_total = term->prompt_len + ray_term_visual_width(term->buf, to_pos);
     int32_t to_row = to_total / term->term_width;
     int32_t to_col = to_total % term->term_width;
 
     int32_t row_diff = to_row - from_row;
     int32_t col_diff = to_col - from_col;
 
-    if (row_diff < 0) td_cursor_move_up(-row_diff);
-    else if (row_diff > 0) td_cursor_move_down(row_diff);
+    if (row_diff < 0) ray_cursor_move_up(-row_diff);
+    else if (row_diff > 0) ray_cursor_move_down(row_diff);
 
-    if (col_diff < 0) td_cursor_move_left(-col_diff);
-    else if (col_diff > 0) td_cursor_move_right(col_diff);
+    if (col_diff < 0) ray_cursor_move_left(-col_diff);
+    else if (col_diff > 0) ray_cursor_move_right(col_diff);
 
     term->last_cursor_row = to_row;
 }
@@ -226,10 +226,10 @@ void td_term_goto_position(td_term_t* term, int32_t from_pos, int32_t to_pos) {
 
 #if defined(_WIN32)
 
-td_term_t* td_term_create(void) {
-    td_t* block = td_alloc(sizeof(td_term_t));
+ray_term_t* ray_term_create(void) {
+    ray_t* block = ray_alloc(sizeof(ray_term_t));
     if (!block) return NULL;
-    td_term_t* term = (td_term_t*)td_data(block);
+    ray_term_t* term = (ray_term_t*)ray_data(block);
     memset(term, 0, sizeof(*term));
     term->_block = block;
 
@@ -250,24 +250,24 @@ td_term_t* td_term_create(void) {
     term->term_width  = 80;
     term->term_height = 24;
     term->last_total_rows = 1;
-    td_term_get_size(term);
-    td_hist_create(&term->hist);
-    td_hist_load(&term->hist, NULL);
+    ray_term_get_size(term);
+    ray_hist_create(&term->hist);
+    ray_hist_load(&term->hist, NULL);
 
     return term;
 }
 
-void td_term_destroy(td_term_t* term) {
+void ray_term_destroy(ray_term_t* term) {
     if (!term) return;
     if (g_active_term == term) g_active_term = NULL;
-    td_hist_save(&term->hist, NULL);
-    td_hist_destroy(&term->hist);
+    ray_hist_save(&term->hist, NULL);
+    ray_hist_destroy(&term->hist);
     SetConsoleMode(term->h_stdin,  term->old_stdin_mode);
     SetConsoleMode(term->h_stdout, term->old_stdout_mode);
-    td_free(term->_block);
+    ray_free(term->_block);
 }
 
-int64_t td_term_getc(td_term_t* term) {
+int64_t ray_term_getc(ray_term_t* term) {
     char c;
     DWORD n;
     if (!ReadFile(term->h_stdin, &c, 1, &n, NULL))
@@ -278,10 +278,10 @@ int64_t td_term_getc(td_term_t* term) {
 
 #else /* Unix */
 
-td_term_t* td_term_create(void) {
-    td_t* block = td_alloc(sizeof(td_term_t));
+ray_term_t* ray_term_create(void) {
+    ray_t* block = ray_alloc(sizeof(ray_term_t));
     if (!block) return NULL;
-    td_term_t* term = (td_term_t*)td_data(block);
+    ray_term_t* term = (ray_term_t*)ray_data(block);
     memset(term, 0, sizeof(*term));
     term->_block = block;
 
@@ -295,23 +295,23 @@ td_term_t* td_term_create(void) {
     term->term_width  = 80;
     term->term_height = 24;
     term->last_total_rows = 1;
-    td_term_get_size(term);
-    td_hist_create(&term->hist);
-    td_hist_load(&term->hist, NULL);
+    ray_term_get_size(term);
+    ray_hist_create(&term->hist);
+    ray_hist_load(&term->hist, NULL);
 
     return term;
 }
 
-void td_term_destroy(td_term_t* term) {
+void ray_term_destroy(ray_term_t* term) {
     if (!term) return;
     if (g_active_term == term) g_active_term = NULL;
-    td_hist_save(&term->hist, NULL);
-    td_hist_destroy(&term->hist);
+    ray_hist_save(&term->hist, NULL);
+    ray_hist_destroy(&term->hist);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
-    td_free(term->_block);
+    ray_free(term->_block);
 }
 
-int64_t td_term_getc(td_term_t* term) {
+int64_t ray_term_getc(ray_term_t* term) {
     for (;;) {
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
@@ -328,9 +328,9 @@ int64_t td_term_getc(td_term_t* term) {
 /* Read a single byte with a short timeout for escape sequence detection.
  * Returns the byte (0..255) on success, -1 on timeout/failure.
  * Uses VTIME to avoid blocking indefinitely on bare Esc. */
-static int term_read_byte(td_term_t* term) {
+static int term_read_byte(ray_term_t* term) {
 #if defined(_WIN32)
-    if (td_term_getc(term) <= 0) return -1;
+    if (ray_term_getc(term) <= 0) return -1;
     return (unsigned char)term->input[0];
 #else
     /* Temporarily set a short timeout (100ms) for escape sequence reads */
@@ -355,14 +355,14 @@ static int term_read_byte(td_term_t* term) {
 
 /* ===== History ===== */
 
-void td_hist_create(td_hist_t* hist) {
+void ray_hist_create(ray_hist_t* hist) {
     hist->capacity = HIST_DEFAULT_CAP;
-    td_t* block = td_alloc((int64_t)(hist->capacity * (int64_t)sizeof(char*)));
+    ray_t* block = ray_alloc((int64_t)(hist->capacity * (int64_t)sizeof(char*)));
     if (!block) {
         hist->entries = NULL;
         hist->capacity = 0;
     } else {
-        hist->entries = (char**)td_data(block);
+        hist->entries = (char**)ray_data(block);
     }
     hist->count = 0;
     hist->index = 0;
@@ -370,19 +370,19 @@ void td_hist_create(td_hist_t* hist) {
     hist->curr_len = 0;
 }
 
-void td_hist_destroy(td_hist_t* hist) {
+void ray_hist_destroy(ray_hist_t* hist) {
     if (!hist->entries) return;
     for (int32_t i = 0; i < hist->count; i++) {
-        td_t* block = TD_BLOCK_FROM_DATA(hist->entries[i]);
-        td_free(block);
+        ray_t* block = RAY_BLOCK_FROM_DATA(hist->entries[i]);
+        ray_free(block);
     }
-    td_t* block = TD_BLOCK_FROM_DATA(hist->entries);
-    td_free(block);
+    ray_t* block = RAY_BLOCK_FROM_DATA(hist->entries);
+    ray_free(block);
     hist->entries = NULL;
     hist->count = 0;
 }
 
-void td_hist_add(td_hist_t* hist, const char* buf, int32_t len) {
+void ray_hist_add(ray_hist_t* hist, const char* buf, int32_t len) {
     if (len <= 0) return;
     /* Skip if same as last entry */
     if (hist->count > 0) {
@@ -393,19 +393,19 @@ void td_hist_add(td_hist_t* hist, const char* buf, int32_t len) {
     /* Grow if needed */
     if (hist->count >= hist->capacity) {
         int32_t new_cap = hist->capacity * 2;
-        td_t* new_block = td_alloc((int64_t)(new_cap * (int64_t)sizeof(char*)));
+        ray_t* new_block = ray_alloc((int64_t)(new_cap * (int64_t)sizeof(char*)));
         if (!new_block) goto reset;
-        char** new_entries = (char**)td_data(new_block);
+        char** new_entries = (char**)ray_data(new_block);
         memcpy(new_entries, hist->entries, (size_t)(hist->count) * sizeof(char*));
-        td_t* old_block = TD_BLOCK_FROM_DATA(hist->entries);
-        td_free(old_block);
+        ray_t* old_block = RAY_BLOCK_FROM_DATA(hist->entries);
+        ray_free(old_block);
         hist->entries = new_entries;
         hist->capacity = new_cap;
     }
     /* Allocate and copy the entry */
-    td_t* entry_block = td_alloc((int64_t)(len + 1));
+    ray_t* entry_block = ray_alloc((int64_t)(len + 1));
     if (!entry_block) goto reset;
-    char* entry = (char*)td_data(entry_block);
+    char* entry = (char*)ray_data(entry_block);
     memcpy(entry, buf, (size_t)len);
     entry[len] = '\0';
     hist->entries[hist->count++] = entry;
@@ -415,7 +415,7 @@ reset:
     hist->curr_saved = 0;
 }
 
-int32_t td_hist_prev(td_hist_t* hist, char* buf, int32_t buf_len) {
+int32_t ray_hist_prev(ray_hist_t* hist, char* buf, int32_t buf_len) {
     if (hist->count == 0 || hist->index <= 0) return -1;
     /* Save current input on first navigation */
     if (!hist->curr_saved) {
@@ -433,7 +433,7 @@ int32_t td_hist_prev(td_hist_t* hist, char* buf, int32_t buf_len) {
     return len;
 }
 
-int32_t td_hist_next(td_hist_t* hist, char* buf) {
+int32_t ray_hist_next(ray_hist_t* hist, char* buf) {
     if (hist->index >= hist->count) return -1;
     hist->index++;
     if (hist->index >= hist->count) {
@@ -456,7 +456,7 @@ int32_t td_hist_next(td_hist_t* hist, char* buf) {
 
 /* ===== History search ===== */
 
-int32_t td_hist_search(td_hist_t* hist, const char* needle, int32_t needle_len,
+int32_t ray_hist_search(ray_hist_t* hist, const char* needle, int32_t needle_len,
                        int32_t start_idx) {
     if (needle_len <= 0 || hist->count == 0) return -1;
     if (start_idx < 0) return -1;
@@ -486,7 +486,7 @@ static void hist_build_path(char* out, int32_t out_size) {
     snprintf(out, (size_t)out_size, "%s%c%s", home, HIST_PATH_SEP, HIST_DEFAULT_PATH);
 }
 
-void td_hist_load(td_hist_t* hist, const char* path) {
+void ray_hist_load(ray_hist_t* hist, const char* path) {
     char pathbuf[1024];
     if (!path) {
         hist_build_path(pathbuf, (int32_t)sizeof(pathbuf));
@@ -506,9 +506,9 @@ void td_hist_load(td_hist_t* hist, const char* path) {
     /* Read entire file into a temp buffer */
     int64_t fsize = st.st_size;
     if (fsize > TERM_BUF_SIZE * 100) fsize = TERM_BUF_SIZE * 100; /* sanity cap */
-    td_t* fbuf_block = td_alloc(fsize + 1);
+    ray_t* fbuf_block = ray_alloc(fsize + 1);
     if (!fbuf_block) { hist_close(fd); return; }
-    char* fbuf = (char*)td_data(fbuf_block);
+    char* fbuf = (char*)ray_data(fbuf_block);
 
     int64_t total = 0;
     while (total < fsize) {
@@ -527,14 +527,14 @@ void td_hist_load(td_hist_t* hist, const char* path) {
         while (p < end && *p != '\0') p++;
         int32_t len = (int32_t)(p - entry_start);
         if (len > 0)
-            td_hist_add(hist, entry_start, len);
+            ray_hist_add(hist, entry_start, len);
         if (p < end) p++; /* skip null delimiter */
     }
 
-    td_free(fbuf_block);
+    ray_free(fbuf_block);
 }
 
-void td_hist_save(td_hist_t* hist, const char* path) {
+void ray_hist_save(ray_hist_t* hist, const char* path) {
     char pathbuf[1024];
     if (!path) {
         hist_build_path(pathbuf, (int32_t)sizeof(pathbuf));
@@ -643,7 +643,7 @@ static int in_string_at(const char* buf, int32_t pos) {
     return in_str;
 }
 
-int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
+int32_t ray_term_find_matching_paren(const char* buf, int32_t buf_len,
                                     int32_t cursor_pos) {
     if (cursor_pos < 0 || cursor_pos >= buf_len)
         return -1;
@@ -782,7 +782,7 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
                 int32_t wlen = j - i;
 
                 const char* match = NULL;
-                int64_t nmatches = td_env_lookup_prefix(buf + i, wlen,
+                int64_t nmatches = ray_env_lookup_prefix(buf + i, wlen,
                                                          &match, 1);
                 if (nmatches == 1 && (int32_t)strlen(match) == wlen) {
                     HL_LIT(CLR_GREEN);
@@ -835,7 +835,7 @@ static int32_t find_word_start(const char* buf, int32_t pos) {
  * Sets term->ghost, ghost_len, ghost_word_start, ghost_word_len.
  * Ghost text is the REMAINING part of the best match (after the typed prefix).
  * Also populates term->comp_items/comp_count via collect_completions. */
-static void td_term_update_ghost(td_term_t* term) {
+static void ray_term_update_ghost(ray_term_t* term) {
     term->ghost_len = 0;
 
     /* Only show ghost at end of buffer or end of a word */
@@ -855,7 +855,7 @@ static void td_term_update_ghost(td_term_t* term) {
         return;
 
     /* Collect completions from all sources */
-    td_term_collect_completions(term, term->buf + ws, wlen);
+    ray_term_collect_completions(term, term->buf + ws, wlen);
     if (term->comp_count <= 0)
         return;
 
@@ -876,7 +876,7 @@ static void td_term_update_ghost(td_term_t* term) {
 }
 
 /* Accept ghost text into the buffer */
-static void td_term_accept_ghost(td_term_t* term) {
+static void ray_term_accept_ghost(ray_term_t* term) {
     if (term->ghost_len <= 0)
         return;
     if (term->buf_len + term->ghost_len >= TERM_BUF_SIZE)
@@ -890,7 +890,7 @@ static void td_term_accept_ghost(td_term_t* term) {
 
 /* ===== Multi-source completion collection ===== */
 
-/* Max completion candidates stored in td_term_t::comp_items */
+/* Max completion candidates stored in ray_term_t::comp_items */
 #define COMP_MAX 256
 
 static int comp_cmp_str(const void* a, const void* b) {
@@ -907,7 +907,7 @@ static int comp_has(const char** results, int32_t count, const char* name) {
 
 /* Try to extract a table variable name from a `(select {from: NAME ...` pattern
  * in the current buffer.  Returns the env value (a table) or NULL. */
-static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
+static ray_t* comp_find_from_table(const char* buf, int32_t buf_len) {
     /* Scan for "from:" followed by a name */
     for (int32_t i = 0; i + 5 <= buf_len; i++) {
         if (memcmp(buf + i, "from:", 5) != 0) continue;
@@ -919,15 +919,15 @@ static td_t* comp_find_from_table(const char* buf, int32_t buf_len) {
         while (j < buf_len && is_alphanum(buf[j])) j++;
         int32_t nlen = j - start;
         /* Look up the name (read-only) and check env */
-        int64_t sym = td_sym_find(buf + start, (size_t)nlen);
+        int64_t sym = ray_sym_find(buf + start, (size_t)nlen);
         if (sym < 0) continue;
-        td_t* val = td_env_get(sym);
-        if (val && val->type == TD_TABLE) return val;
+        ray_t* val = ray_env_get(sym);
+        if (val && val->type == RAY_TABLE) return val;
     }
     return NULL;
 }
 
-void td_term_collect_completions(td_term_t* term, const char* prefix,
+void ray_term_collect_completions(ray_term_t* term, const char* prefix,
                                  int32_t prefix_len) {
     term->comp_count = 0;
     term->comp_scratch_len = 0;
@@ -940,7 +940,7 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
     /* Source 1: env builtins + user variables (already sorted) */
     {
         const char* env_results[128];
-        int64_t ec = td_env_lookup_prefix(prefix, (int64_t)prefix_len,
+        int64_t ec = ray_env_lookup_prefix(prefix, (int64_t)prefix_len,
                                            env_results, 128);
         for (int64_t i = 0; i < ec && n < cap; i++) {
             out[n++] = env_results[i];
@@ -948,21 +948,21 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
     }
 
     /* Source 2: static keywords (s_keywords[] is in env.c and already scanned
-     * by td_env_lookup_prefix, so nothing extra needed here — they are included
+     * by ray_env_lookup_prefix, so nothing extra needed here — they are included
      * in source 1).  This is a no-op; the plan's "binary search on prefix" is
      * satisfied by env_lookup_prefix which already scans the keyword list. */
 
     /* Source 3: column names from a table referenced in the buffer */
     {
-        td_t* tbl = comp_find_from_table(term->buf, term->buf_len);
+        ray_t* tbl = comp_find_from_table(term->buf, term->buf_len);
         if (tbl) {
-            int64_t ncols = td_table_ncols(tbl);
+            int64_t ncols = ray_table_ncols(tbl);
             for (int64_t ci = 0; ci < ncols && n < cap; ci++) {
-                int64_t sym = td_table_col_name(tbl, ci);
+                int64_t sym = ray_table_col_name(tbl, ci);
                 if (sym < 0) continue;
-                td_t* s = td_sym_str(sym);
+                ray_t* s = ray_sym_str(sym);
                 if (!s) continue;
-                const char* cname = td_str_ptr(s);
+                const char* cname = ray_str_ptr(s);
                 if (!cname) continue;
                 int64_t clen = (int64_t)strlen(cname);
                 if (clen >= prefix_len &&
@@ -978,7 +978,7 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
      * Matching words are copied into comp_scratch for stable null-terminated
      * pointers (reset each completion cycle). */
     {
-        td_hist_t* hist = &term->hist;
+        ray_hist_t* hist = &term->hist;
         for (int32_t hi = hist->count - 1; hi >= 0 && n < cap; hi--) {
             const char* entry = hist->entries[hi];
             int32_t elen = (int32_t)strlen(entry);
@@ -1031,7 +1031,7 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
 /* ===== Inline tab-cycle completion ===== */
 
 /* Replace the word at comp_cycle_start..+comp_cycle_len with comp_items[idx] */
-static void comp_cycle_insert(td_term_t* term, int32_t idx) {
+static void comp_cycle_insert(ray_term_t* term, int32_t idx) {
     const char* item = term->comp_items[idx];
     int32_t ilen = (int32_t)strlen(item);
     int32_t ws = term->comp_cycle_start;
@@ -1048,7 +1048,7 @@ static void comp_cycle_insert(td_term_t* term, int32_t idx) {
 
 /* ===== Multi-line input ===== */
 
-int32_t td_term_count_unmatched(td_term_t* term) {
+int32_t ray_term_count_unmatched(ray_term_t* term) {
     int32_t depth = 0;
     int32_t in_string = 0;
 
@@ -1097,32 +1097,32 @@ int32_t td_term_count_unmatched(td_term_t* term) {
 #define CONT_PROMPT_LEN 13  /* ESC[90m (5) + … (3) + ESC[0m (4) + space (1) = 13 bytes */
 #define CONT_PROMPT_VIS  2  /* visual: … + space */
 
-void td_term_prompt(td_term_t* term) {
+void ray_term_prompt(ray_term_t* term) {
     write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
     term->prompt_len = PROMPT_VIS;
 }
 
-void td_term_continuation_prompt(td_term_t* term) {
+void ray_term_continuation_prompt(ray_term_t* term) {
     write(STDOUT_FILENO, CONT_PROMPT_STR, CONT_PROMPT_LEN);
     term->prompt_len = CONT_PROMPT_VIS;
 }
 
 /* ===== Redraw ===== */
 
-void td_term_redraw(td_term_t* term) {
+void ray_term_redraw(ray_term_t* term) {
     int32_t total_width;
 
     /* Recompute ghost text on every redraw */
-    td_term_update_ghost(term);
+    ray_term_update_ghost(term);
 
-    td_cursor_hide();
-    td_term_get_size(term);
+    ray_cursor_hide();
+    ray_term_get_size(term);
 
     /* Move to start of first line */
     printf("\r");
     if (term->last_total_rows > 1) {
         for (int32_t i = 1; i < term->last_total_rows; i++) {
-            td_cursor_move_up(1);
+            ray_cursor_move_up(1);
             printf("\r");
         }
     }
@@ -1148,11 +1148,11 @@ void td_term_redraw(td_term_t* term) {
             int32_t cursor = term->buf_pos;
             /* Check char at cursor, or char before cursor */
             if (cursor < term->buf_len) {
-                int32_t m = td_term_find_matching_paren(term->buf, term->buf_len, cursor);
+                int32_t m = ray_term_find_matching_paren(term->buf, term->buf_len, cursor);
                 if (m >= 0) { match_pos1 = cursor; match_pos2 = m; }
             }
             if (match_pos1 < 0 && cursor > 0) {
-                int32_t m = td_term_find_matching_paren(term->buf, term->buf_len, cursor - 1);
+                int32_t m = ray_term_find_matching_paren(term->buf, term->buf_len, cursor - 1);
                 if (m >= 0) { match_pos1 = cursor - 1; match_pos2 = m; }
             }
             hlen += term_highlight_into(hlbuf + hlen,
@@ -1181,8 +1181,8 @@ void td_term_redraw(td_term_t* term) {
 
     /* Track rows used — include ghost text width for row calculation */
     int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
-    total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len) + ghost_vis;
+                        ? ray_term_visual_width(term->ghost, term->ghost_len) : 0;
+    total_width = term->prompt_len + ray_term_visual_width(term->buf, term->buf_len) + ghost_vis;
     if (term->term_width > 0) {
         term->last_total_rows = (total_width + term->term_width - 1) / term->term_width;
         if (term->last_total_rows == 0)
@@ -1191,14 +1191,14 @@ void td_term_redraw(td_term_t* term) {
 
     /* Position cursor at buf_pos.
      * After writing hlbuf the physical cursor sits at prompt + buf + ghost.
-     * td_term_goto_position assumes cursor is at prompt + visual_width(buf, from_pos),
+     * ray_term_goto_position assumes cursor is at prompt + visual_width(buf, from_pos),
      * so we must first move back past any ghost text. */
     if (ghost_vis > 0)
-        td_cursor_move_left(ghost_vis);
-    td_term_goto_position(term, term->buf_len, term->buf_pos);
+        ray_cursor_move_left(ghost_vis);
+    ray_term_goto_position(term, term->buf_len, term->buf_pos);
 
 
-    td_cursor_show();
+    ray_cursor_show();
     fflush(stdout);
 }
 
@@ -1209,14 +1209,14 @@ void td_term_redraw(td_term_t* term) {
 #define SEARCH_HIGHLIGHT  "\033[7m"
 #define SEARCH_RESET      "\033[0m"
 
-static void td_term_search_redraw(td_term_t* term) {
-    td_cursor_hide();
+static void ray_term_search_redraw(ray_term_t* term) {
+    ray_cursor_hide();
 
     /* Move to start */
     printf("\r");
     if (term->last_total_rows > 1) {
         for (int32_t i = 1; i < term->last_total_rows; i++) {
-            td_cursor_move_up(1);
+            ray_cursor_move_up(1);
             printf("\r");
         }
     }
@@ -1275,16 +1275,16 @@ static void td_term_search_redraw(td_term_t* term) {
     int32_t cursor_col = SEARCH_PROMPT_LEN + term->search_len;
     int32_t end_col = total_vis;
     int32_t diff = end_col - cursor_col;
-    if (diff > 0) td_cursor_move_left(diff);
+    if (diff > 0) ray_cursor_move_left(diff);
 
-    td_cursor_show();
+    ray_cursor_show();
     fflush(stdout);
 }
 
 /* ===== Line editing ===== */
 
-td_t* td_term_read(td_term_t* term) {
-    td_term_prompt(term);
+ray_t* ray_term_read(ray_term_t* term) {
+    ray_term_prompt(term);
     fflush(stdout);
     term->buf_len = 0;
     term->buf_pos = 0;
@@ -1292,7 +1292,7 @@ td_t* td_term_read(td_term_t* term) {
     term->last_total_rows = 1;
 
     for (;;) {
-        int64_t sz = td_term_getc(term);
+        int64_t sz = ray_term_getc(term);
         if (sz <= 0) {
             if (sz == -2) goto interrupted;
             return NULL;
@@ -1308,7 +1308,7 @@ td_t* td_term_read(td_term_t* term) {
                 /* Bare Esc — cancel tab cycling if active */
                 if (term->comp_cycling) {
                     term->comp_cycling = 0;
-                    td_term_redraw(term);
+                    ray_term_redraw(term);
                 }
                 continue;
             }
@@ -1334,7 +1334,7 @@ td_t* td_term_read(td_term_t* term) {
                                         term->buf + term->buf_pos + bytes,
                                         (size_t)(term->buf_len - term->buf_pos - bytes));
                                 term->buf_len -= bytes;
-                                td_term_redraw(term);
+                                ray_term_redraw(term);
                             }
                           }
                         }
@@ -1363,7 +1363,7 @@ td_t* td_term_read(td_term_t* term) {
             /* Unrecognized escape — cancel tab cycling */
             if (term->comp_cycling) {
                 term->comp_cycling = 0;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1372,13 +1372,13 @@ td_t* td_term_read(td_term_t* term) {
 
     interrupted:
         /* External SIGINT — treat like Ctrl-C: clear line */
-        td_term_clear_interrupt();
+        ray_term_clear_interrupt();
         term->comp_cycling = 0;
         term->buf_len = 0;
         term->buf_pos = 0;
         term->multiline_len = 0;
         write(STDOUT_FILENO, "^C\n", 3);
-        td_term_prompt(term);
+        ray_term_prompt(term);
         fflush(stdout);
         continue;
 
@@ -1389,21 +1389,21 @@ td_t* td_term_read(td_term_t* term) {
 
         /* Arrow keys are encoded as negative to distinguish from printable chars */
         if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
-            int32_t len = td_hist_prev(&term->hist, term->buf, term->buf_len);
+            int32_t len = ray_hist_prev(&term->hist, term->buf, term->buf_len);
             if (len >= 0) {
                 term->buf_len = len;
                 term->buf_pos = len;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
 
         if (key == -KEYCODE_DOWN || key == KEYCODE_CTRL_N) {
-            int32_t len = td_hist_next(&term->hist, term->buf);
+            int32_t len = ray_hist_next(&term->hist, term->buf);
             if (len >= 0) {
                 term->buf_len = len;
                 term->buf_pos = len;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1412,7 +1412,7 @@ td_t* td_term_read(td_term_t* term) {
             if (term->buf_pos > 0) {
                 int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
                 term->buf_pos = prev;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1421,31 +1421,31 @@ td_t* td_term_read(td_term_t* term) {
             if (term->buf_pos < term->buf_len) {
                 int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
                 term->buf_pos = next;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             } else if (term->ghost_len > 0) {
                 /* Accept ghost text at end of line */
-                td_term_accept_ghost(term);
-                td_term_redraw(term);
+                ray_term_accept_ghost(term);
+                ray_term_redraw(term);
             }
             continue;
         }
 
         if (key == -KEYCODE_HOME || key == KEYCODE_CTRL_A) {
             term->buf_pos = 0;
-            td_term_redraw(term);
+            ray_term_redraw(term);
             continue;
         }
 
         if (key == -KEYCODE_END || key == KEYCODE_CTRL_E) {
             term->buf_pos = term->buf_len;
-            td_term_redraw(term);
+            ray_term_redraw(term);
             continue;
         }
 
         switch (key) {
         case KEYCODE_RETURN: {
             term->buf[term->buf_len] = '\0';
-            int32_t unmatched = td_term_count_unmatched(term);
+            int32_t unmatched = ray_term_count_unmatched(term);
             if (unmatched > 0) {
                 term->comp_cycling = 0;
                 /* Append buf + newline to multiline_buf, show continuation */
@@ -1461,7 +1461,7 @@ td_t* td_term_read(td_term_t* term) {
                     term->multiline_len = 0;
                     term->buf_len = 0;
                     term->buf_pos = 0;
-                    td_term_prompt(term);
+                    ray_term_prompt(term);
                     fflush(stdout);
                     continue;
                 }
@@ -1469,7 +1469,7 @@ td_t* td_term_read(td_term_t* term) {
                 term->buf_pos = 0;
                 putchar('\n');
                 fflush(stdout);
-                td_term_continuation_prompt(term);
+                ray_term_continuation_prompt(term);
                 fflush(stdout);
                 continue;
             }
@@ -1478,7 +1478,7 @@ td_t* td_term_read(td_term_t* term) {
             term->comp_cycling = 0;
             {
                 /* Move to start of line, clear, rewrite with no bracket match */
-                td_cursor_hide();
+                ray_cursor_hide();
                 printf("\r\033[J");
                 char hlbuf[TERM_BUF_SIZE * 8];
                 int32_t hlen = 0;
@@ -1495,7 +1495,7 @@ td_t* td_term_read(td_term_t* term) {
                                 term->buf, term->buf_len, -1, -1);
                 fflush(stdout);
                 write(STDOUT_FILENO, hlbuf, (size_t)hlen);
-                td_cursor_show();
+                ray_cursor_show();
                 fflush(stdout);
             }
             putchar('\n');
@@ -1507,18 +1507,18 @@ td_t* td_term_read(td_term_t* term) {
                            term->buf, (size_t)term->buf_len);
                     term->multiline_len += term->buf_len;
                 }
-                td_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
-                td_t* result = td_str(term->multiline_buf, (size_t)term->multiline_len);
+                ray_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
+                ray_t* result = ray_str(term->multiline_buf, (size_t)term->multiline_len);
                 term->multiline_len = 0;
-                return TD_IS_ERR(result) ? NULL : result;
+                return RAY_IS_ERR(result) ? NULL : result;
             }
-            td_hist_add(&term->hist, term->buf, term->buf_len);
+            ray_hist_add(&term->hist, term->buf, term->buf_len);
             if (term->buf_len == 0) {
-                td_t* result = td_str("", 0);
-                return TD_IS_ERR(result) ? NULL : result;
+                ray_t* result = ray_str("", 0);
+                return RAY_IS_ERR(result) ? NULL : result;
             }
-            { td_t* result = td_str(term->buf, (size_t)term->buf_len);
-              return TD_IS_ERR(result) ? NULL : result; }
+            { ray_t* result = ray_str(term->buf, (size_t)term->buf_len);
+              return RAY_IS_ERR(result) ? NULL : result; }
         }
 
         case KEYCODE_CTRL_D: {
@@ -1535,7 +1535,7 @@ td_t* td_term_read(td_term_t* term) {
                         term->buf + term->buf_pos + bytes,
                         (size_t)(term->buf_len - term->buf_pos - bytes));
                 term->buf_len -= bytes;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1546,7 +1546,7 @@ td_t* td_term_read(td_term_t* term) {
             term->buf_pos = 0;
             term->multiline_len = 0;
             write(STDOUT_FILENO, "^C\n", 3);
-            td_term_prompt(term);
+            ray_term_prompt(term);
             fflush(stdout);
             continue;
         }
@@ -1561,21 +1561,21 @@ td_t* td_term_read(td_term_t* term) {
                         (size_t)(term->buf_len - term->buf_pos));
                 term->buf_len -= bytes;
                 term->buf_pos = prev;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
 
         case KEYCODE_CTRL_K: {
             term->buf_len = term->buf_pos;
-            td_term_redraw(term);
+            ray_term_redraw(term);
             continue;
         }
 
         case KEYCODE_CTRL_U: {
             term->buf_len = 0;
             term->buf_pos = 0;
-            td_term_redraw(term);
+            ray_term_redraw(term);
             continue;
         }
 
@@ -1592,7 +1592,7 @@ td_t* td_term_read(td_term_t* term) {
                         term->buf + end,
                         (size_t)(term->buf_len - end));
                 term->buf_len -= (end - term->buf_pos);
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1602,23 +1602,23 @@ td_t* td_term_read(td_term_t* term) {
             term->search_mode = 1;
             term->search_len = 0;
             term->search_match_idx = -1;
-            td_term_search_redraw(term);
+            ray_term_search_redraw(term);
 
             for (;;) {
-                int64_t ssz = td_term_getc(term);
+                int64_t ssz = ray_term_getc(term);
                 if (ssz <= 0) {
                     term->search_mode = 0;
                     if (ssz == -2) {
                         /* External SIGINT in search — clear and interrupt */
-                        td_term_clear_interrupt();
+                        ray_term_clear_interrupt();
                         term->buf_len = 0;
                         term->buf_pos = 0;
                         term->multiline_len = 0;
                         write(STDOUT_FILENO, "^C\n", 3);
-                        td_term_prompt(term);
+                        ray_term_prompt(term);
                         fflush(stdout);
                     } else {
-                        td_term_redraw(term);
+                        ray_term_redraw(term);
                     }
                     break;
                 }
@@ -1649,7 +1649,7 @@ td_t* td_term_read(td_term_t* term) {
                         (void)term_read_byte(term); /* consume sequence char */
                     }
                     term->search_mode = 0;
-                    td_term_redraw(term);
+                    ray_term_redraw(term);
                     break;
                 }
 
@@ -1660,7 +1660,7 @@ td_t* td_term_read(td_term_t* term) {
                     term->buf_pos = 0;
                     term->multiline_len = 0;
                     write(STDOUT_FILENO, "^C\n", 3);
-                    td_term_prompt(term);
+                    ray_term_prompt(term);
                     fflush(stdout);
                     break;
                 }
@@ -1668,14 +1668,14 @@ td_t* td_term_read(td_term_t* term) {
                 if (skey == KEYCODE_CTRL_R) {
                     /* Search further back */
                     if (term->search_match_idx > 0 && term->search_len > 0) {
-                        int32_t idx = td_hist_search(&term->hist,
+                        int32_t idx = ray_hist_search(&term->hist,
                                                      term->search_buf,
                                                      term->search_len,
                                                      term->search_match_idx - 1);
                         if (idx >= 0)
                             term->search_match_idx = idx;
                     }
-                    td_term_search_redraw(term);
+                    ray_term_search_redraw(term);
                     continue;
                 }
 
@@ -1684,14 +1684,14 @@ td_t* td_term_read(td_term_t* term) {
                     if (term->search_len > 0) {
                         term->search_len--;
                         if (term->search_len > 0) {
-                            term->search_match_idx = td_hist_search(
+                            term->search_match_idx = ray_hist_search(
                                 &term->hist, term->search_buf,
                                 term->search_len, term->hist.count - 1);
                         } else {
                             term->search_match_idx = -1;
                         }
                     }
-                    td_term_search_redraw(term);
+                    ray_term_search_redraw(term);
                     continue;
                 }
 
@@ -1702,10 +1702,10 @@ td_t* td_term_read(td_term_t* term) {
                     int32_t start = (term->search_match_idx >= 0)
                                     ? term->search_match_idx
                                     : term->hist.count - 1;
-                    term->search_match_idx = td_hist_search(
+                    term->search_match_idx = ray_hist_search(
                         &term->hist, term->search_buf,
                         term->search_len, start);
-                    td_term_search_redraw(term);
+                    ray_term_search_redraw(term);
                     continue;
                 }
             }
@@ -1718,14 +1718,14 @@ td_t* td_term_read(td_term_t* term) {
                 int32_t next = (term->comp_cycle_idx + 1) % term->comp_count;
                 comp_cycle_insert(term, next);
                 term->ghost_len = 0;
-                td_term_redraw(term);
+                ray_term_redraw(term);
                 continue;
             }
             if (term->ghost_len > 0 && term->comp_count == 1) {
                 /* Single match — accept ghost text directly */
-                td_term_accept_ghost(term);
-                td_term_update_ghost(term);
-                td_term_redraw(term);
+                ray_term_accept_ghost(term);
+                ray_term_update_ghost(term);
+                ray_term_redraw(term);
             } else if (term->comp_count >= 2) {
                 /* Multiple matches — start inline cycling */
                 term->comp_cycling = 1;
@@ -1734,12 +1734,12 @@ td_t* td_term_read(td_term_t* term) {
                 term->comp_cycle_idx = -1;
                 comp_cycle_insert(term, 0);
                 term->ghost_len = 0;
-                td_term_redraw(term);
+                ray_term_redraw(term);
             } else if (term->ghost_len > 0) {
                 /* Accept whatever ghost we have */
-                td_term_accept_ghost(term);
-                td_term_update_ghost(term);
-                td_term_redraw(term);
+                ray_term_accept_ghost(term);
+                ray_term_update_ghost(term);
+                ray_term_redraw(term);
             }
             continue;
         }
@@ -1757,7 +1757,7 @@ td_t* td_term_read(td_term_t* term) {
                 term->buf_len++;
 
                 /* Always do full redraw to show ghost text */
-                td_term_redraw(term);
+                ray_term_redraw(term);
             }
             continue;
         }

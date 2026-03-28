@@ -30,7 +30,7 @@
 #include <errno.h>
 
 /* Forward declaration */
-static void csr_free(td_csr_t* csr);
+static void csr_free(ray_csr_t* csr);
 
 /* --------------------------------------------------------------------------
  * CSR construction helpers
@@ -66,10 +66,10 @@ static int cmp_edge_by_dst(const void* a, const void* b) {
 }
 
 /* Sort targets within each adjacency list (for LFTJ) */
-static void csr_sort_adjacency_lists(td_csr_t* csr) {
-    int64_t* offsets = (int64_t*)td_data(csr->offsets);
-    int64_t* targets = (int64_t*)td_data(csr->targets);
-    int64_t* rowmap = csr->rowmap ? (int64_t*)td_data(csr->rowmap) : NULL;
+static void csr_sort_adjacency_lists(ray_csr_t* csr) {
+    int64_t* offsets = (int64_t*)ray_data(csr->offsets);
+    int64_t* targets = (int64_t*)ray_data(csr->targets);
+    int64_t* rowmap = csr->rowmap ? (int64_t*)ray_data(csr->rowmap) : NULL;
 
     for (int64_t node = 0; node < csr->n_nodes; node++) {
         int64_t start = offsets[node];
@@ -95,9 +95,9 @@ static void csr_sort_adjacency_lists(td_csr_t* csr) {
 
 /* Build CSR from sorted edge pairs.
  * pairs must be sorted by the 'key' field (src for fwd, dst for rev). */
-static td_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
+static ray_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
                                       int64_t n_nodes, bool is_reverse,
-                                      bool sort_targets, td_csr_t* out) {
+                                      bool sort_targets, ray_csr_t* out) {
     out->n_nodes = n_nodes;
     out->props = NULL;
 
@@ -110,30 +110,30 @@ static td_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
     out->n_edges = valid_edges;
 
     /* Allocate offsets (n_nodes + 1) */
-    out->offsets = td_vec_new(TD_I64, n_nodes + 1);
-    if (!out->offsets || TD_IS_ERR(out->offsets)) return TD_ERR_OOM;
+    out->offsets = ray_vec_new(RAY_I64, n_nodes + 1);
+    if (!out->offsets || RAY_IS_ERR(out->offsets)) return RAY_ERR_OOM;
     out->offsets->len = n_nodes + 1;
-    int64_t* off = (int64_t*)td_data(out->offsets);
+    int64_t* off = (int64_t*)ray_data(out->offsets);
     memset(off, 0, (size_t)(n_nodes + 1) * sizeof(int64_t));
 
     /* Allocate targets */
-    out->targets = td_vec_new(TD_I64, valid_edges > 0 ? valid_edges : 1);
-    if (!out->targets || TD_IS_ERR(out->targets)) {
-        td_release(out->offsets); out->offsets = NULL;
-        return TD_ERR_OOM;
+    out->targets = ray_vec_new(RAY_I64, valid_edges > 0 ? valid_edges : 1);
+    if (!out->targets || RAY_IS_ERR(out->targets)) {
+        ray_release(out->offsets); out->offsets = NULL;
+        return RAY_ERR_OOM;
     }
     out->targets->len = valid_edges;
-    int64_t* tgt = (int64_t*)td_data(out->targets);
+    int64_t* tgt = (int64_t*)ray_data(out->targets);
 
     /* Allocate rowmap */
-    out->rowmap = td_vec_new(TD_I64, valid_edges > 0 ? valid_edges : 1);
-    if (!out->rowmap || TD_IS_ERR(out->rowmap)) {
-        td_release(out->offsets); out->offsets = NULL;
-        td_release(out->targets); out->targets = NULL;
-        return TD_ERR_OOM;
+    out->rowmap = ray_vec_new(RAY_I64, valid_edges > 0 ? valid_edges : 1);
+    if (!out->rowmap || RAY_IS_ERR(out->rowmap)) {
+        ray_release(out->offsets); out->offsets = NULL;
+        ray_release(out->targets); out->targets = NULL;
+        return RAY_ERR_OOM;
     }
     out->rowmap->len = valid_edges;
-    int64_t* rmap = (int64_t*)td_data(out->rowmap);
+    int64_t* rmap = (int64_t*)ray_data(out->rowmap);
 
     /* Count degrees */
     for (int64_t i = 0; i < n_edges; i++) {
@@ -146,14 +146,14 @@ static td_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
         off[i] += off[i - 1];
 
     /* Fill targets + rowmap using a position array */
-    td_t* pos_hdr = td_alloc((size_t)(n_nodes > 0 ? n_nodes : 1) * sizeof(int64_t));
+    ray_t* pos_hdr = ray_alloc((size_t)(n_nodes > 0 ? n_nodes : 1) * sizeof(int64_t));
     if (!pos_hdr) {
-        td_release(out->offsets); out->offsets = NULL;
-        td_release(out->targets); out->targets = NULL;
-        td_release(out->rowmap); out->rowmap = NULL;
-        return TD_ERR_OOM;
+        ray_release(out->offsets); out->offsets = NULL;
+        ray_release(out->targets); out->targets = NULL;
+        ray_release(out->rowmap); out->rowmap = NULL;
+        return RAY_ERR_OOM;
     }
-    int64_t* pos = (int64_t*)td_data(pos_hdr);
+    int64_t* pos = (int64_t*)ray_data(pos_hdr);
     if (n_nodes > 0)
         memcpy(pos, off, (size_t)n_nodes * sizeof(int64_t));
 
@@ -166,7 +166,7 @@ static td_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
             rmap[p] = pairs[i].row;
         }
     }
-    td_free(pos_hdr);
+    ray_free(pos_hdr);
 
     /* Sort within adjacency lists if requested */
     if (sort_targets) {
@@ -176,40 +176,40 @@ static td_err_t csr_build_from_pairs(edge_pair_t* pairs, int64_t n_edges,
         out->sorted = false;
     }
 
-    return TD_OK;
+    return RAY_OK;
 }
 
 /* --------------------------------------------------------------------------
- * td_rel_from_edges — build from explicit edge table
+ * ray_rel_from_edges — build from explicit edge table
  * -------------------------------------------------------------------------- */
 
-td_rel_t* td_rel_from_edges(td_t* edge_table,
+ray_rel_t* ray_rel_from_edges(ray_t* edge_table,
                              const char* src_col, const char* dst_col,
                              int64_t n_src_nodes, int64_t n_dst_nodes,
                              bool sort_targets) {
-    if (!edge_table || TD_IS_ERR(edge_table) || edge_table->type != TD_TABLE)
+    if (!edge_table || RAY_IS_ERR(edge_table) || edge_table->type != RAY_TABLE)
         return NULL;
 
-    int64_t src_sym = td_sym_intern(src_col, strlen(src_col));
-    int64_t dst_sym = td_sym_intern(dst_col, strlen(dst_col));
+    int64_t src_sym = ray_sym_intern(src_col, strlen(src_col));
+    int64_t dst_sym = ray_sym_intern(dst_col, strlen(dst_col));
     if (src_sym < 0 || dst_sym < 0) return NULL;  /* sym intern OOM */
 
-    td_t* src_vec = td_table_get_col(edge_table, src_sym);
-    td_t* dst_vec = td_table_get_col(edge_table, dst_sym);
+    ray_t* src_vec = ray_table_get_col(edge_table, src_sym);
+    ray_t* dst_vec = ray_table_get_col(edge_table, dst_sym);
     if (!src_vec || !dst_vec) return NULL;
-    if (src_vec->type != TD_I64 || dst_vec->type != TD_I64) return NULL;
+    if (src_vec->type != RAY_I64 || dst_vec->type != RAY_I64) return NULL;
 
     int64_t n_edges = src_vec->len;
     if (n_edges != dst_vec->len) return NULL;
     if (n_src_nodes < 0 || n_dst_nodes < 0) return NULL;
 
     /* Build edge pairs */
-    td_t* pairs_hdr = td_alloc((size_t)n_edges * sizeof(edge_pair_t));
+    ray_t* pairs_hdr = ray_alloc((size_t)n_edges * sizeof(edge_pair_t));
     if (!pairs_hdr) return NULL;
-    edge_pair_t* pairs = (edge_pair_t*)td_data(pairs_hdr);
+    edge_pair_t* pairs = (edge_pair_t*)ray_data(pairs_hdr);
 
-    int64_t* src_data = (int64_t*)td_data(src_vec);
-    int64_t* dst_data = (int64_t*)td_data(dst_vec);
+    int64_t* src_data = (int64_t*)ray_data(src_vec);
+    int64_t* dst_data = (int64_t*)ray_data(dst_vec);
     for (int64_t i = 0; i < n_edges; i++) {
         pairs[i].src = src_data[i];
         pairs[i].dst = dst_data[i];
@@ -217,19 +217,19 @@ td_rel_t* td_rel_from_edges(td_t* edge_table,
     }
 
     /* Allocate rel */
-    td_rel_t* rel = (td_rel_t*)td_sys_alloc(sizeof(td_rel_t));
-    if (!rel) { td_free(pairs_hdr); return NULL; }
-    memset(rel, 0, sizeof(td_rel_t));
+    ray_rel_t* rel = (ray_rel_t*)ray_sys_alloc(sizeof(ray_rel_t));
+    if (!rel) { ray_free(pairs_hdr); return NULL; }
+    memset(rel, 0, sizeof(ray_rel_t));
     rel->name_sym = -1;
 
     /* Build forward CSR (sorted by src) */
     /* qsort is from libc, not an external dep */
     qsort(pairs, (size_t)n_edges, sizeof(edge_pair_t), cmp_edge_by_src);
-    td_err_t err = csr_build_from_pairs(pairs, n_edges, n_src_nodes, false,
+    ray_err_t err = csr_build_from_pairs(pairs, n_edges, n_src_nodes, false,
                                          sort_targets, &rel->fwd);
-    if (err != TD_OK) {
-        td_free(pairs_hdr);
-        td_sys_free(rel);
+    if (err != RAY_OK) {
+        ray_free(pairs_hdr);
+        ray_sys_free(rel);
         return NULL;
     }
 
@@ -237,58 +237,58 @@ td_rel_t* td_rel_from_edges(td_t* edge_table,
     qsort(pairs, (size_t)n_edges, sizeof(edge_pair_t), cmp_edge_by_dst);
     err = csr_build_from_pairs(pairs, n_edges, n_dst_nodes, true,
                                 sort_targets, &rel->rev);
-    if (err != TD_OK) {
-        td_free(pairs_hdr);
+    if (err != RAY_OK) {
+        ray_free(pairs_hdr);
         csr_free(&rel->fwd);
-        td_sys_free(rel);
+        ray_sys_free(rel);
         return NULL;
     }
 
-    td_free(pairs_hdr);
+    ray_free(pairs_hdr);
     return rel;
 }
 
 /* --------------------------------------------------------------------------
- * td_rel_build — build from FK column in source table
+ * ray_rel_build — build from FK column in source table
  * -------------------------------------------------------------------------- */
 
-td_rel_t* td_rel_build(td_t* from_table, const char* fk_col,
+ray_rel_t* ray_rel_build(ray_t* from_table, const char* fk_col,
                          int64_t n_target_nodes, bool sort_targets) {
-    if (!from_table || TD_IS_ERR(from_table) || from_table->type != TD_TABLE)
+    if (!from_table || RAY_IS_ERR(from_table) || from_table->type != RAY_TABLE)
         return NULL;
 
-    int64_t fk_sym = td_sym_intern(fk_col, strlen(fk_col));
-    td_t* fk_vec = td_table_get_col(from_table, fk_sym);
-    if (!fk_vec || fk_vec->type != TD_I64) return NULL;
+    int64_t fk_sym = ray_sym_intern(fk_col, strlen(fk_col));
+    ray_t* fk_vec = ray_table_get_col(from_table, fk_sym);
+    if (!fk_vec || fk_vec->type != RAY_I64) return NULL;
     if (n_target_nodes < 0) return NULL;
 
     int64_t n_edges = fk_vec->len;
-    int64_t n_src_nodes = td_table_nrows(from_table);
+    int64_t n_src_nodes = ray_table_nrows(from_table);
 
     /* Build edge pairs: src = row index, dst = fk value */
-    td_t* pairs_hdr = td_alloc((size_t)n_edges * sizeof(edge_pair_t));
+    ray_t* pairs_hdr = ray_alloc((size_t)n_edges * sizeof(edge_pair_t));
     if (!pairs_hdr) return NULL;
-    edge_pair_t* pairs = (edge_pair_t*)td_data(pairs_hdr);
+    edge_pair_t* pairs = (edge_pair_t*)ray_data(pairs_hdr);
 
-    int64_t* fk_data = (int64_t*)td_data(fk_vec);
+    int64_t* fk_data = (int64_t*)ray_data(fk_vec);
     for (int64_t i = 0; i < n_edges; i++) {
         pairs[i].src = i;
         pairs[i].dst = fk_data[i];
         pairs[i].row = i;
     }
 
-    td_rel_t* rel = (td_rel_t*)td_sys_alloc(sizeof(td_rel_t));
-    if (!rel) { td_free(pairs_hdr); return NULL; }
-    memset(rel, 0, sizeof(td_rel_t));
+    ray_rel_t* rel = (ray_rel_t*)ray_sys_alloc(sizeof(ray_rel_t));
+    if (!rel) { ray_free(pairs_hdr); return NULL; }
+    memset(rel, 0, sizeof(ray_rel_t));
     rel->name_sym = -1;
 
     /* Build forward CSR */
     qsort(pairs, (size_t)n_edges, sizeof(edge_pair_t), cmp_edge_by_src);
-    td_err_t err = csr_build_from_pairs(pairs, n_edges, n_src_nodes, false,
+    ray_err_t err = csr_build_from_pairs(pairs, n_edges, n_src_nodes, false,
                                          sort_targets, &rel->fwd);
-    if (err != TD_OK) {
-        td_free(pairs_hdr);
-        td_sys_free(rel);
+    if (err != RAY_OK) {
+        ray_free(pairs_hdr);
+        ray_sys_free(rel);
         return NULL;
     }
 
@@ -296,14 +296,14 @@ td_rel_t* td_rel_build(td_t* from_table, const char* fk_col,
     qsort(pairs, (size_t)n_edges, sizeof(edge_pair_t), cmp_edge_by_dst);
     err = csr_build_from_pairs(pairs, n_edges, n_target_nodes, true,
                                 sort_targets, &rel->rev);
-    if (err != TD_OK) {
-        td_free(pairs_hdr);
+    if (err != RAY_OK) {
+        ray_free(pairs_hdr);
         csr_free(&rel->fwd);
-        td_sys_free(rel);
+        ray_sys_free(rel);
         return NULL;
     }
 
-    td_free(pairs_hdr);
+    ray_free(pairs_hdr);
     return rel;
 }
 
@@ -311,48 +311,48 @@ td_rel_t* td_rel_build(td_t* from_table, const char* fk_col,
  * CSR free
  * -------------------------------------------------------------------------- */
 
-static void csr_free(td_csr_t* csr) {
-    if (csr->offsets) td_release(csr->offsets);
-    if (csr->targets) td_release(csr->targets);
-    if (csr->rowmap) td_release(csr->rowmap);
-    if (csr->props) td_release(csr->props);
+static void csr_free(ray_csr_t* csr) {
+    if (csr->offsets) ray_release(csr->offsets);
+    if (csr->targets) ray_release(csr->targets);
+    if (csr->rowmap) ray_release(csr->rowmap);
+    if (csr->props) ray_release(csr->props);
     csr->offsets = NULL;
     csr->targets = NULL;
     csr->rowmap = NULL;
     csr->props = NULL;
 }
 
-void td_rel_set_props(td_rel_t* rel, td_t* props) {
+void ray_rel_set_props(ray_rel_t* rel, ray_t* props) {
     if (!rel || !props) return;
     /* Retain twice: fwd.props and rev.props both alias the same pointer,
      * and csr_free() releases each independently. */
-    td_retain(props);
-    td_retain(props);
-    if (rel->fwd.props) td_release(rel->fwd.props);
-    if (rel->rev.props) td_release(rel->rev.props);
+    ray_retain(props);
+    ray_retain(props);
+    if (rel->fwd.props) ray_release(rel->fwd.props);
+    if (rel->rev.props) ray_release(rel->rev.props);
     rel->fwd.props = props;
     rel->rev.props = props;
 }
 
-void td_rel_free(td_rel_t* rel) {
+void ray_rel_free(ray_rel_t* rel) {
     if (!rel) return;
     csr_free(&rel->fwd);
     csr_free(&rel->rev);
-    td_sys_free(rel);
+    ray_sys_free(rel);
 }
 
 /* --- Public CSR neighbor access ------------------------------------------- */
 
-const int64_t* td_rel_neighbors(td_rel_t* rel, int64_t node,
+const int64_t* ray_rel_neighbors(ray_rel_t* rel, int64_t node,
                                  uint8_t direction, int64_t* out_count) {
     if (!rel) { if (out_count) *out_count = 0; return NULL; }
-    td_csr_t* csr = (direction == 1) ? &rel->rev : &rel->fwd;
-    return td_csr_neighbors(csr, node, out_count);
+    ray_csr_t* csr = (direction == 1) ? &rel->rev : &rel->fwd;
+    return ray_csr_neighbors(csr, node, out_count);
 }
 
-int64_t td_rel_n_nodes(td_rel_t* rel, uint8_t direction) {
+int64_t ray_rel_n_nodes(ray_rel_t* rel, uint8_t direction) {
     if (!rel) return 0;
-    td_csr_t* csr = (direction == 1) ? &rel->rev : &rel->fwd;
+    ray_csr_t* csr = (direction == 1) ? &rel->rev : &rel->fwd;
     return csr->n_nodes;
 }
 
@@ -360,110 +360,110 @@ int64_t td_rel_n_nodes(td_rel_t* rel, uint8_t direction) {
  * CSR persistence — save/load/mmap using existing column file format
  * -------------------------------------------------------------------------- */
 
-static td_err_t csr_save(td_csr_t* csr, const char* dir, const char* prefix) {
+static ray_err_t csr_save(ray_csr_t* csr, const char* dir, const char* prefix) {
     char path[1024];
     int len;
 
     len = snprintf(path, sizeof(path), "%s/%s_offsets.col", dir, prefix);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-    td_err_t err = td_col_save(csr->offsets, path);
-    if (err != TD_OK) return err;
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+    ray_err_t err = ray_col_save(csr->offsets, path);
+    if (err != RAY_OK) return err;
 
     len = snprintf(path, sizeof(path), "%s/%s_targets.col", dir, prefix);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-    err = td_col_save(csr->targets, path);
-    if (err != TD_OK) return err;
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+    err = ray_col_save(csr->targets, path);
+    if (err != RAY_OK) return err;
 
     if (csr->rowmap) {
         len = snprintf(path, sizeof(path), "%s/%s_rowmap.col", dir, prefix);
-        if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-        err = td_col_save(csr->rowmap, path);
-        if (err != TD_OK) return err;
+        if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+        err = ray_col_save(csr->rowmap, path);
+        if (err != RAY_OK) return err;
     }
 
-    return TD_OK;
+    return RAY_OK;
 }
 
-static td_err_t csr_load_impl(td_csr_t* csr, const char* dir, const char* prefix,
+static ray_err_t csr_load_impl(ray_csr_t* csr, const char* dir, const char* prefix,
                                 bool use_mmap) {
     char path[1024];
     int len;
 
     len = snprintf(path, sizeof(path), "%s/%s_offsets.col", dir, prefix);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-    csr->offsets = use_mmap ? td_col_mmap(path) : td_col_load(path);
-    if (!csr->offsets || TD_IS_ERR(csr->offsets)) {
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+    csr->offsets = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
+    if (!csr->offsets || RAY_IS_ERR(csr->offsets)) {
         csr->offsets = NULL;
-        return TD_ERR_IO;
+        return RAY_ERR_IO;
     }
 
     len = snprintf(path, sizeof(path), "%s/%s_targets.col", dir, prefix);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-    csr->targets = use_mmap ? td_col_mmap(path) : td_col_load(path);
-    if (!csr->targets || TD_IS_ERR(csr->targets)) {
-        td_release(csr->offsets); csr->offsets = NULL;
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+    csr->targets = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
+    if (!csr->targets || RAY_IS_ERR(csr->targets)) {
+        ray_release(csr->offsets); csr->offsets = NULL;
         csr->targets = NULL;
-        return TD_ERR_IO;
+        return RAY_ERR_IO;
     }
 
     len = snprintf(path, sizeof(path), "%s/%s_rowmap.col", dir, prefix);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
-    csr->rowmap = use_mmap ? td_col_mmap(path) : td_col_load(path);
-    if (!csr->rowmap || TD_IS_ERR(csr->rowmap)) {
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
+    csr->rowmap = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
+    if (!csr->rowmap || RAY_IS_ERR(csr->rowmap)) {
         /* rowmap is optional — ignore error */
         csr->rowmap = NULL;
     }
 
     if (csr->offsets->len < 1) {
-        td_release(csr->offsets); csr->offsets = NULL;
-        td_release(csr->targets); csr->targets = NULL;
-        if (csr->rowmap) { td_release(csr->rowmap); csr->rowmap = NULL; }
-        return TD_ERR_IO;
+        ray_release(csr->offsets); csr->offsets = NULL;
+        ray_release(csr->targets); csr->targets = NULL;
+        if (csr->rowmap) { ray_release(csr->rowmap); csr->rowmap = NULL; }
+        return RAY_ERR_IO;
     }
     csr->n_nodes = csr->offsets->len - 1;
     csr->n_edges = csr->targets->len;
 
     /* Consistency: offsets[n_nodes] must equal targets->len */
-    int64_t* off_data = (int64_t*)td_data(csr->offsets);
+    int64_t* off_data = (int64_t*)ray_data(csr->offsets);
     if (off_data[csr->n_nodes] != csr->n_edges) {
-        td_release(csr->offsets); csr->offsets = NULL;
-        td_release(csr->targets); csr->targets = NULL;
-        if (csr->rowmap) { td_release(csr->rowmap); csr->rowmap = NULL; }
-        return TD_ERR_IO;
+        ray_release(csr->offsets); csr->offsets = NULL;
+        ray_release(csr->targets); csr->targets = NULL;
+        if (csr->rowmap) { ray_release(csr->rowmap); csr->rowmap = NULL; }
+        return RAY_ERR_IO;
     }
 
     /* Validate offset monotonicity: offsets[i] <= offsets[i+1] */
     for (int64_t i = 0; i < csr->n_nodes; i++) {
         if (off_data[i] < 0 || off_data[i] > off_data[i + 1]) {
-            td_release(csr->offsets); csr->offsets = NULL;
-            td_release(csr->targets); csr->targets = NULL;
-            if (csr->rowmap) { td_release(csr->rowmap); csr->rowmap = NULL; }
-            return TD_ERR_IO;  /* corrupt: non-monotonic offsets */
+            ray_release(csr->offsets); csr->offsets = NULL;
+            ray_release(csr->targets); csr->targets = NULL;
+            if (csr->rowmap) { ray_release(csr->rowmap); csr->rowmap = NULL; }
+            return RAY_ERR_IO;  /* corrupt: non-monotonic offsets */
         }
     }
 
     csr->sorted = false;  /* caller sets if known */
     csr->props = NULL;
 
-    return TD_OK;
+    return RAY_OK;
 }
 
-td_err_t td_rel_save(td_rel_t* rel, const char* dir) {
-    if (!rel || !dir) return TD_ERR_IO;
+ray_err_t ray_rel_save(ray_rel_t* rel, const char* dir) {
+    if (!rel || !dir) return RAY_ERR_IO;
 
     /* Create directory */
-    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return TD_ERR_IO;
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return RAY_ERR_IO;
 
-    td_err_t err = csr_save(&rel->fwd, dir, "fwd");
-    if (err != TD_OK) return err;
+    ray_err_t err = csr_save(&rel->fwd, dir, "fwd");
+    if (err != RAY_OK) return err;
 
     err = csr_save(&rel->rev, dir, "rev");
-    if (err != TD_OK) return err;
+    if (err != RAY_OK) return err;
 
     /* Save metadata (from_table, to_table, name_sym, sorted flags) */
     char path[1024];
     int len = snprintf(path, sizeof(path), "%s/meta.col", dir);
-    if (len < 0 || (size_t)len >= sizeof(path)) return TD_ERR_IO;
+    if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
 
     /* Pack metadata into an I64 vector: [from_table, to_table, name_sym, fwd_sorted, rev_sorted] */
     int64_t meta_data[5];
@@ -472,28 +472,28 @@ td_err_t td_rel_save(td_rel_t* rel, const char* dir) {
     meta_data[2] = rel->name_sym;
     meta_data[3] = rel->fwd.sorted ? 1 : 0;
     meta_data[4] = rel->rev.sorted ? 1 : 0;
-    td_t* meta_vec = td_vec_from_raw(TD_I64, meta_data, 5);
-    if (!meta_vec || TD_IS_ERR(meta_vec)) return TD_ERR_OOM;
-    err = td_col_save(meta_vec, path);
-    td_release(meta_vec);
+    ray_t* meta_vec = ray_vec_from_raw(RAY_I64, meta_data, 5);
+    if (!meta_vec || RAY_IS_ERR(meta_vec)) return RAY_ERR_OOM;
+    err = ray_col_save(meta_vec, path);
+    ray_release(meta_vec);
 
     return err;
 }
 
-static td_rel_t* rel_load_impl(const char* dir, bool use_mmap) {
+static ray_rel_t* rel_load_impl(const char* dir, bool use_mmap) {
     if (!dir) return NULL;
 
-    td_rel_t* rel = (td_rel_t*)td_sys_alloc(sizeof(td_rel_t));
+    ray_rel_t* rel = (ray_rel_t*)ray_sys_alloc(sizeof(ray_rel_t));
     if (!rel) return NULL;
-    memset(rel, 0, sizeof(td_rel_t));
+    memset(rel, 0, sizeof(ray_rel_t));
 
-    td_err_t err = csr_load_impl(&rel->fwd, dir, "fwd", use_mmap);
-    if (err != TD_OK) { td_sys_free(rel); return NULL; }
+    ray_err_t err = csr_load_impl(&rel->fwd, dir, "fwd", use_mmap);
+    if (err != RAY_OK) { ray_sys_free(rel); return NULL; }
 
     err = csr_load_impl(&rel->rev, dir, "rev", use_mmap);
-    if (err != TD_OK) {
+    if (err != RAY_OK) {
         csr_free(&rel->fwd);
-        td_sys_free(rel);
+        ray_sys_free(rel);
         return NULL;
     }
 
@@ -501,27 +501,27 @@ static td_rel_t* rel_load_impl(const char* dir, bool use_mmap) {
     char path[1024];
     int len = snprintf(path, sizeof(path), "%s/meta.col", dir);
     if (len >= 0 && (size_t)len < sizeof(path)) {
-        td_t* meta = use_mmap ? td_col_mmap(path) : td_col_load(path);
-        if (meta && !TD_IS_ERR(meta) && meta->len >= 5) {
-            int64_t* md = (int64_t*)td_data(meta);
+        ray_t* meta = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
+        if (meta && !RAY_IS_ERR(meta) && meta->len >= 5) {
+            int64_t* md = (int64_t*)ray_data(meta);
             rel->from_table = (uint16_t)md[0];
             rel->to_table = (uint16_t)md[1];
             rel->name_sym = md[2];
             rel->fwd.sorted = md[3] != 0;
             rel->rev.sorted = md[4] != 0;
-            td_release(meta);
-        } else if (meta && !TD_IS_ERR(meta)) {
-            td_release(meta);
+            ray_release(meta);
+        } else if (meta && !RAY_IS_ERR(meta)) {
+            ray_release(meta);
         }
     }
 
     return rel;
 }
 
-td_rel_t* td_rel_load(const char* dir) {
+ray_rel_t* ray_rel_load(const char* dir) {
     return rel_load_impl(dir, false);
 }
 
-td_rel_t* td_rel_mmap(const char* dir) {
+ray_rel_t* ray_rel_mmap(const char* dir) {
     return rel_load_impl(dir, true);
 }

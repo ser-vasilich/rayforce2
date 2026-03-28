@@ -26,72 +26,72 @@
 #include <string.h>
 #include <stdio.h>
 
-td_ftable_t* td_ftable_new(uint16_t n_cols) {
-    td_ftable_t* ft = (td_ftable_t*)td_sys_alloc(sizeof(td_ftable_t));
+ray_ftable_t* ray_ftable_new(uint16_t n_cols) {
+    ray_ftable_t* ft = (ray_ftable_t*)ray_sys_alloc(sizeof(ray_ftable_t));
     if (!ft) return NULL;
-    memset(ft, 0, sizeof(td_ftable_t));
+    memset(ft, 0, sizeof(ray_ftable_t));
 
-    ft->columns = (td_fvec_t*)td_sys_alloc((size_t)n_cols * sizeof(td_fvec_t));
+    ft->columns = (ray_fvec_t*)ray_sys_alloc((size_t)n_cols * sizeof(ray_fvec_t));
     if (!ft->columns) {
-        td_sys_free(ft);
+        ray_sys_free(ft);
         return NULL;
     }
-    memset(ft->columns, 0, (size_t)n_cols * sizeof(td_fvec_t));
+    memset(ft->columns, 0, (size_t)n_cols * sizeof(ray_fvec_t));
     ft->n_cols = n_cols;
 
     return ft;
 }
 
-void td_ftable_free(td_ftable_t* ft) {
+void ray_ftable_free(ray_ftable_t* ft) {
     if (!ft) return;
 
     if (ft->columns) {
         for (uint16_t i = 0; i < ft->n_cols; i++) {
-            if (ft->columns[i].vec) td_release(ft->columns[i].vec);
+            if (ft->columns[i].vec) ray_release(ft->columns[i].vec);
         }
-        td_sys_free(ft->columns);
+        ray_sys_free(ft->columns);
     }
-    if (ft->semijoin) td_release(ft->semijoin);
-    td_sys_free(ft);
+    if (ft->semijoin) ray_release(ft->semijoin);
+    ray_sys_free(ft);
 }
 
-td_t* td_ftable_materialize(td_ftable_t* ft) {
-    if (!ft || ft->n_cols == 0) return TD_ERR_PTR(TD_ERR_TYPE);
+ray_t* ray_ftable_materialize(ray_ftable_t* ft) {
+    if (!ft || ft->n_cols == 0) return RAY_ERR_PTR(RAY_ERR_TYPE);
 
-    td_t* tbl = td_table_new(ft->n_cols);
-    if (!tbl || TD_IS_ERR(tbl)) return tbl;
+    ray_t* tbl = ray_table_new(ft->n_cols);
+    if (!tbl || RAY_IS_ERR(tbl)) return tbl;
 
     for (uint16_t c = 0; c < ft->n_cols; c++) {
-        td_fvec_t* fv = &ft->columns[c];
+        ray_fvec_t* fv = &ft->columns[c];
         if (!fv->vec) continue;
 
-        td_t* col;
+        ray_t* col;
         if (fv->cur_idx >= 0) {
             /* Flat: replicate single value */
-            if (fv->cardinality <= 0) { td_release(tbl); return TD_ERR_PTR(TD_ERR_RANGE); }
-            col = td_vec_new(fv->vec->type, fv->cardinality);
-            if (!col || TD_IS_ERR(col)) { td_release(tbl); return col ? col : TD_ERR_PTR(TD_ERR_OOM); }
+            if (fv->cardinality <= 0) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+            col = ray_vec_new(fv->vec->type, fv->cardinality);
+            if (!col || RAY_IS_ERR(col)) { ray_release(tbl); return col ? col : RAY_ERR_PTR(RAY_ERR_OOM); }
             col->len = fv->cardinality;
-            void* val = td_vec_get(fv->vec, fv->cur_idx);
-            if (!val) { td_release(col); td_release(tbl); return TD_ERR_PTR(TD_ERR_RANGE); }
-            uint8_t esz = td_sym_elem_size(fv->vec->type, fv->vec->attrs);
-            char* dst = (char*)td_data(col);
+            void* val = ray_vec_get(fv->vec, fv->cur_idx);
+            if (!val) { ray_release(col); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+            uint8_t esz = ray_sym_elem_size(fv->vec->type, fv->vec->attrs);
+            char* dst = (char*)ray_data(col);
             for (int64_t r = 0; r < fv->cardinality; r++)
                 memcpy(dst + r * esz, val, esz);
         } else {
             /* Unflat: use as-is */
             col = fv->vec;
-            td_retain(col);
+            ray_retain(col);
         }
 
         char name_buf[12];
         int n = snprintf(name_buf, sizeof(name_buf), "_c%d", c);
-        int64_t name_id = td_sym_intern(name_buf, (size_t)n);
-        td_t* new_tbl = td_table_add_col(tbl, name_id, col);
-        td_release(col);
-        if (!new_tbl || TD_IS_ERR(new_tbl)) {
-            if (new_tbl != tbl) td_release(tbl);
-            return new_tbl ? new_tbl : TD_ERR_PTR(TD_ERR_OOM);
+        int64_t name_id = ray_sym_intern(name_buf, (size_t)n);
+        ray_t* new_tbl = ray_table_add_col(tbl, name_id, col);
+        ray_release(col);
+        if (!new_tbl || RAY_IS_ERR(new_tbl)) {
+            if (new_tbl != tbl) ray_release(tbl);
+            return new_tbl ? new_tbl : RAY_ERR_PTR(RAY_ERR_OOM);
         }
         tbl = new_tbl;
     }

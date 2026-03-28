@@ -24,46 +24,46 @@
 #include "block.h"
 #include "../mem/heap.h"
 
-/* Weak stub for td_alloc — replaced by buddy allocator at link time.
- * Uses td_vm_alloc (mmap) — page-aligned and zero-filled. */
+/* Weak stub for ray_alloc — replaced by buddy allocator at link time.
+ * Uses ray_vm_alloc (mmap) — page-aligned and zero-filled. */
 __attribute__((weak))
-td_t* td_alloc(size_t size) {
+ray_t* ray_alloc(size_t size) {
     if (size < 32) size = 32;
     size = (size + 4095) & ~(size_t)4095;
-    void* p = td_vm_alloc(size);
-    if (!p) return TD_ERR_PTR(TD_ERR_OOM);
-    return (td_t*)p;
+    void* p = ray_vm_alloc(size);
+    if (!p) return RAY_ERR_PTR(RAY_ERR_OOM);
+    return (ray_t*)p;
 }
 
-size_t td_block_size(td_t* v) {
-    if (td_is_atom(v)) return 32;
+size_t ray_block_size(ray_t* v) {
+    if (ray_is_atom(v)) return 32;
     /* LIST (type=0) stores child pointers */
-    if (v->type == TD_LIST) return 32 + (size_t)td_len(v) * sizeof(td_t*);
+    if (v->type == RAY_LIST) return 32 + (size_t)ray_len(v) * sizeof(ray_t*);
     /* TABLE stores schema slot + ncols column pointers */
-    if (v->type == TD_TABLE) return 32 + (size_t)(td_len(v) + 1) * sizeof(td_t*);
-    /* TD_SEL: variable layout — meta + seg_flags + seg_popcnt + bits */
-    if (v->type == TD_SEL) {
-        int64_t nrows = td_len(v);
+    if (v->type == RAY_TABLE) return 32 + (size_t)(ray_len(v) + 1) * sizeof(ray_t*);
+    /* RAY_SEL: variable layout — meta + seg_flags + seg_popcnt + bits */
+    if (v->type == RAY_SEL) {
+        int64_t nrows = ray_len(v);
         if (nrows < 0) return 32;
-        uint32_t n_segs = (uint32_t)((nrows + TD_MORSEL_ELEMS - 1) / TD_MORSEL_ELEMS);
+        uint32_t n_segs = (uint32_t)((nrows + RAY_MORSEL_ELEMS - 1) / RAY_MORSEL_ELEMS);
         uint32_t n_words = (uint32_t)((nrows + 63) / 64);
-        size_t dsz = sizeof(td_sel_meta_t);
+        size_t dsz = sizeof(ray_sel_meta_t);
         dsz += (n_segs + 7u) & ~(size_t)7;           /* seg_flags, 8-aligned */
         dsz += ((size_t)n_segs * 2 + 7u) & ~(size_t)7; /* seg_popcnt, 8-aligned */
         dsz += (size_t)n_words * 8;                   /* bits */
         return 32 + dsz;
     }
     /* Vectors: header (32 bytes) + len * elem_size.
-     * Use td_sym_elem_size for SYM columns to respect narrow widths. */
-    int8_t t = td_type(v);
-    if (t <= 0 || t >= TD_TYPE_COUNT) return 32;
-    return 32 + (size_t)td_len(v) * td_sym_elem_size(t, v->attrs);
+     * Use ray_sym_elem_size for SYM columns to respect narrow widths. */
+    int8_t t = ray_type(v);
+    if (t <= 0 || t >= RAY_TYPE_COUNT) return 32;
+    return 32 + (size_t)ray_len(v) * ray_sym_elem_size(t, v->attrs);
 }
 
-td_t* td_block_copy(td_t* src) {
-    size_t sz = td_block_size(src);
-    td_t* dst = td_alloc(sz);
-    if (!dst) return TD_ERR_PTR(TD_ERR_OOM);
+ray_t* ray_block_copy(ray_t* src) {
+    size_t sz = ray_block_size(src);
+    ray_t* dst = ray_alloc(sz);
+    if (!dst) return RAY_ERR_PTR(RAY_ERR_OOM);
     /* Save allocator metadata before memcpy overwrites the header */
     uint8_t new_mmod = dst->mmod;
     uint8_t new_order = dst->order;
@@ -71,6 +71,6 @@ td_t* td_block_copy(td_t* src) {
     dst->mmod = new_mmod;
     dst->order = new_order;
     atomic_store_explicit(&dst->rc, 1, memory_order_relaxed);
-    td_retain_owned_refs(dst);
+    ray_retain_owned_refs(dst);
     return dst;
 }

@@ -31,58 +31,58 @@
  * negative tag, store value in header union field.
  * -------------------------------------------------------------------------- */
 
-td_t* td_bool(bool val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_BOOL;
+ray_t* ray_bool(bool val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_BOOL;
     v->b8 = val ? 1 : 0;
     return v;
 }
 
-td_t* td_u8(uint8_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_U8;
+ray_t* ray_u8(uint8_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_U8;
     v->u8 = val;
     return v;
 }
 
-td_t* td_char(char val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_CHAR;
+ray_t* ray_char(char val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_CHAR;
     v->c8 = val;
     return v;
 }
 
-td_t* td_i16(int16_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_I16;
+ray_t* ray_i16(int16_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_I16;
     v->i16 = val;
     return v;
 }
 
-td_t* td_i32(int32_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_I32;
+ray_t* ray_i32(int32_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_I32;
     v->i32 = val;
     return v;
 }
 
-td_t* td_i64(int64_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_I64;
+ray_t* ray_i64(int64_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_I64;
     v->i64 = val;
     return v;
 }
 
-td_t* td_f64(double val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_F64;
+ray_t* ray_f64(double val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_F64;
     v->f64 = val;
     return v;
 }
@@ -91,14 +91,14 @@ td_t* td_f64(double val) {
  * String atom: SSO for <= 7 bytes, long string via CHAR vector for > 7
  * -------------------------------------------------------------------------- */
 
-td_t* td_str(const char* s, size_t len) {
+ray_t* ray_str(const char* s, size_t len) {
     if (len < 7) {
         /* SSO path: store inline in header (< 7 leaves room for NUL).
          * Exactly 7 bytes would fill all of sdata[7] with no NUL terminator,
          * so 7-byte strings fall through to the long-string path. */
-        td_t* v = td_alloc(0);
-        if (TD_IS_ERR(v)) return v;
-        v->type = TD_ATOM_STR;
+        ray_t* v = ray_alloc(0);
+        if (RAY_IS_ERR(v)) return v;
+        v->type = RAY_ATOM_STR;
         v->slen = (uint8_t)len;
         if (len > 0) memcpy(v->sdata, s, len);
         v->sdata[len] = '\0';
@@ -108,19 +108,19 @@ td_t* td_str(const char* s, size_t len) {
      * Allocate len+1 and null-terminate for C string compatibility — callers
      * (including ctypes c_char_p) may read until '\0'. */
     size_t data_size = len + 1;
-    td_t* chars = td_alloc(data_size);
-    if (!chars || TD_IS_ERR(chars)) return chars;
-    chars->type = TD_CHAR;
+    ray_t* chars = ray_alloc(data_size);
+    if (!chars || RAY_IS_ERR(chars)) return chars;
+    chars->type = RAY_CHAR;
     chars->len = (int64_t)len;
-    memcpy(td_data(chars), s, len);
-    ((char*)td_data(chars))[len] = '\0';
+    memcpy(ray_data(chars), s, len);
+    ((char*)ray_data(chars))[len] = '\0';
 
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) {
-        td_free(chars);
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) {
+        ray_free(chars);
         return v;
     }
-    v->type = TD_ATOM_STR;
+    v->type = RAY_ATOM_STR;
     v->obj = chars;
     return v;
 }
@@ -129,10 +129,10 @@ td_t* td_str(const char* s, size_t len) {
  * Symbol atom: intern ID stored as i64
  * -------------------------------------------------------------------------- */
 
-td_t* td_sym(int64_t id) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = TD_ATOM_SYM;
+ray_t* ray_sym(int64_t id) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = RAY_ATOM_SYM;
     v->i64 = id;
     return v;
 }
@@ -147,26 +147,26 @@ td_t* td_sym(int64_t id) {
  * narrowed to the correct element width.
  * -------------------------------------------------------------------------- */
 
-td_t* td_date(int64_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = -TD_DATE;
+ray_t* ray_date(int64_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = -RAY_DATE;
     v->i64 = val;
     return v;
 }
 
-td_t* td_time(int64_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = -TD_TIME;
+ray_t* ray_time(int64_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = -RAY_TIME;
     v->i64 = val;
     return v;
 }
 
-td_t* td_timestamp(int64_t val) {
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) return v;
-    v->type = -TD_TIMESTAMP;
+ray_t* ray_timestamp(int64_t val) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = -RAY_TIMESTAMP;
     v->i64 = val;
     return v;
 }
@@ -175,20 +175,20 @@ td_t* td_timestamp(int64_t val) {
  * GUID atom: 16 bytes stored in a U8 vector, pointer in obj field
  * -------------------------------------------------------------------------- */
 
-td_t* td_guid(const uint8_t* bytes) {
+ray_t* ray_guid(const uint8_t* bytes) {
     /* Allocate U8 vector of length 16 */
-    td_t* vec = td_alloc(16);
-    if (!vec || TD_IS_ERR(vec)) return vec;
-    vec->type = TD_U8;
+    ray_t* vec = ray_alloc(16);
+    if (!vec || RAY_IS_ERR(vec)) return vec;
+    vec->type = RAY_U8;
     vec->len = 16;
-    memcpy(td_data(vec), bytes, 16);
+    memcpy(ray_data(vec), bytes, 16);
 
-    td_t* v = td_alloc(0);
-    if (TD_IS_ERR(v)) {
-        td_free(vec);
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) {
+        ray_free(vec);
         return v;
     }
-    v->type = -TD_GUID;
+    v->type = -RAY_GUID;
     v->obj = vec;
     return v;
 }

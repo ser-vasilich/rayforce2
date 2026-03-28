@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_PIPE_H
-#define TD_PIPE_H
+#ifndef RAY_PIPE_H
+#define RAY_PIPE_H
 
 /*
  * pipe.h -- Pipeline infrastructure.
@@ -32,12 +32,12 @@
  * and upstream input pipe references.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* Allocate and initialize a new pipe (all fields zeroed, spill_fd = -1). */
-td_pipe_t* td_pipe_new(void);
+ray_pipe_t* ray_pipe_new(void);
 
 /* Free a pipe. Closes spill_fd if open. Does NOT free upstream pipes. */
-void td_pipe_free(td_pipe_t* pipe);
+void ray_pipe_free(ray_pipe_t* pipe);
 
-#endif /* TD_PIPE_H */
+#endif /* RAY_PIPE_H */

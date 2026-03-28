@@ -25,44 +25,44 @@
 #include <stdatomic.h>
 
 /* --------------------------------------------------------------------------
- * td_retain
+ * ray_retain
  * -------------------------------------------------------------------------- */
 
-void td_retain(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
-    if (v->attrs & TD_ATTR_ARENA) return;  /* arena-owned, no-op */
+void ray_retain(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
+    if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, no-op */
     /* conc-L3: Relaxed ordering is sufficient for retain — the caller already
      * holds a valid reference, so no inter-thread synchronization is needed
-     * for the increment itself. Release synchronizes via td_release's acq_rel. */
+     * for the increment itself. Release synchronizes via ray_release's acq_rel. */
     atomic_fetch_add_explicit(&v->rc, 1, memory_order_relaxed);
 }
 
 /* --------------------------------------------------------------------------
- * td_release
+ * ray_release
  * -------------------------------------------------------------------------- */
 
-void td_release(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return;
-    if (v->attrs & TD_ATTR_ARENA) return;  /* arena-owned, no-op */
+void ray_release(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return;
+    if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, no-op */
     uint32_t prev = atomic_fetch_sub_explicit(&v->rc, 1, memory_order_acq_rel);
-    if (prev == 1) td_free(v);
+    if (prev == 1) ray_free(v);
 }
 
 /* --------------------------------------------------------------------------
- * td_cow
+ * ray_cow
  * -------------------------------------------------------------------------- */
 
-td_t* td_cow(td_t* v) {
-    if (!v || TD_IS_ERR(v)) return v;
-    if (v->attrs & TD_ATTR_ARENA) return v;  /* arena-owned, no-op */
+ray_t* ray_cow(ray_t* v) {
+    if (!v || RAY_IS_ERR(v)) return v;
+    if (v->attrs & RAY_ATTR_ARENA) return v;  /* arena-owned, no-op */
     /* Caller must hold exclusive logical ownership — no concurrent
-       td_retain/td_release allowed. The acquire load ensures visibility
+       ray_retain/ray_release allowed. The acquire load ensures visibility
        of prior writes by threads that have released their reference. */
     uint32_t rc = atomic_load_explicit(&v->rc, memory_order_acquire);
     if (rc == 1) return v;  /* sole owner -- mutate in place */
-    td_t* copy = td_alloc_copy(v);
-    if (!copy || TD_IS_ERR(copy)) return copy;
-    /* L3: td_alloc_copy() already sets copy->rc = 1, so no redundant store needed. */
-    td_release(v);
+    ray_t* copy = ray_alloc_copy(v);
+    if (!copy || RAY_IS_ERR(copy)) return copy;
+    /* L3: ray_alloc_copy() already sets copy->rc = 1, so no redundant store needed. */
+    ray_release(v);
     return copy;
 }

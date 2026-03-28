@@ -1,32 +1,32 @@
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 
 /* Helper: create a test table with columns id1(I64), v1(I64), v3(F64) */
-static td_t* make_test_table(void) {
-    (void)td_sym_init();
+static ray_t* make_test_table(void) {
+    (void)ray_sym_init();
 
     int64_t n = 10;
     int64_t id1_data[] = {1, 1, 2, 2, 3, 3, 1, 2, 3, 1};
     int64_t v1_data[]  = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
     double  v3_data[]  = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5};
 
-    td_t* id1_vec = td_vec_from_raw(TD_I64, id1_data, n);
-    td_t* v1_vec  = td_vec_from_raw(TD_I64, v1_data, n);
-    td_t* v3_vec  = td_vec_from_raw(TD_F64, v3_data, n);
+    ray_t* id1_vec = ray_vec_from_raw(RAY_I64, id1_data, n);
+    ray_t* v1_vec  = ray_vec_from_raw(RAY_I64, v1_data, n);
+    ray_t* v3_vec  = ray_vec_from_raw(RAY_F64, v3_data, n);
 
-    int64_t name_id1 = td_sym_intern("id1", 3);
-    int64_t name_v1  = td_sym_intern("v1", 2);
-    int64_t name_v3  = td_sym_intern("v3", 2);
+    int64_t name_id1 = ray_sym_intern("id1", 3);
+    int64_t name_v1  = ray_sym_intern("v1", 2);
+    int64_t name_v3  = ray_sym_intern("v3", 2);
 
-    td_t* tbl = td_table_new(3);
-    tbl = td_table_add_col(tbl, name_id1, id1_vec);
-    tbl = td_table_add_col(tbl, name_v1, v1_vec);
-    tbl = td_table_add_col(tbl, name_v3, v3_vec);
+    ray_t* tbl = ray_table_new(3);
+    tbl = ray_table_add_col(tbl, name_id1, id1_vec);
+    tbl = ray_table_add_col(tbl, name_v1, v1_vec);
+    tbl = ray_table_add_col(tbl, name_v3, v3_vec);
 
-    td_release(id1_vec);
-    td_release(v1_vec);
-    td_release(v3_vec);
+    ray_release(id1_vec);
+    ray_release(v1_vec);
+    ray_release(v3_vec);
 
     return tbl;
 }
@@ -43,38 +43,38 @@ static td_t* make_test_table(void) {
  */
 static MunitResult test_filter_reorder_by_type(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* tbl = make_test_table();
-    td_graph_t* g = td_graph_new(tbl);
+    ray_t* tbl = make_test_table();
+    ray_graph_t* g = ray_graph_new(tbl);
 
-    td_op_t* v1    = td_scan(g, "v1");
-    td_op_t* id1   = td_scan(g, "id1");
-    td_op_t* v3    = td_scan(g, "v3");
-    td_op_t* c1    = td_const_i64(g, 1);
-    td_op_t* c5    = td_const_f64(g, 5.0);
+    ray_op_t* v1    = ray_scan(g, "v1");
+    ray_op_t* id1   = ray_scan(g, "id1");
+    ray_op_t* v3    = ray_scan(g, "v3");
+    ray_op_t* c1    = ray_const_i64(g, 1);
+    ray_op_t* c5    = ray_const_f64(g, 5.0);
 
-    td_op_t* id1_eq = td_eq(g, id1, c1);    /* cheap: const cmp + eq */
-    td_op_t* v3_gt  = td_gt(g, v3, c5);     /* more expensive: range */
+    ray_op_t* id1_eq = ray_eq(g, id1, c1);    /* cheap: const cmp + eq */
+    ray_op_t* v3_gt  = ray_gt(g, v3, c5);     /* more expensive: range */
 
     /* AND with "wrong" order: cheap pred first, expensive second */
-    td_op_t* combined = td_and(g, id1_eq, v3_gt);
-    td_op_t* filt = td_filter(g, v1, combined);
-    td_op_t* cnt = td_count(g, filt);
+    ray_op_t* combined = ray_and(g, id1_eq, v3_gt);
+    ray_op_t* filt = ray_filter(g, v1, combined);
+    ray_op_t* cnt = ray_count(g, filt);
 
     /* Execute and verify correctness: id1=1 AND v3>5.0
      * Rows: id1={1,1,2,2,3,3,1,2,3,1}, v3={1.5,2.5,...,10.5}
      * id1=1 rows: indices 0,1,6,9 → v3={1.5,2.5,7.5,10.5}
      * v3>5.0 from those: indices 6,9 → count=2 */
-    td_t* result = td_execute(g, cnt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_t* result = ray_execute(g, cnt);
+    munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->i64, ==, 2);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -88,33 +88,33 @@ static MunitResult test_filter_reorder_by_type(const void* params, void* data) {
  */
 static MunitResult test_filter_and_split(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* tbl = make_test_table();
-    td_graph_t* g = td_graph_new(tbl);
+    ray_t* tbl = make_test_table();
+    ray_graph_t* g = ray_graph_new(tbl);
 
-    td_op_t* v1    = td_scan(g, "v1");
-    td_op_t* id1   = td_scan(g, "id1");
-    td_op_t* v3    = td_scan(g, "v3");
-    td_op_t* c1    = td_const_i64(g, 1);
-    td_op_t* c5    = td_const_f64(g, 5.0);
+    ray_op_t* v1    = ray_scan(g, "v1");
+    ray_op_t* id1   = ray_scan(g, "id1");
+    ray_op_t* v3    = ray_scan(g, "v3");
+    ray_op_t* c1    = ray_const_i64(g, 1);
+    ray_op_t* c5    = ray_const_f64(g, 5.0);
 
-    td_op_t* id1_eq = td_eq(g, id1, c1);
-    td_op_t* v3_gt  = td_gt(g, v3, c5);
-    td_op_t* combined = td_and(g, v3_gt, id1_eq);
+    ray_op_t* id1_eq = ray_eq(g, id1, c1);
+    ray_op_t* v3_gt  = ray_gt(g, v3, c5);
+    ray_op_t* combined = ray_and(g, v3_gt, id1_eq);
 
-    td_op_t* filt = td_filter(g, v1, combined);
-    td_op_t* cnt = td_count(g, filt);
+    ray_op_t* filt = ray_filter(g, v1, combined);
+    ray_op_t* cnt = ray_count(g, filt);
 
-    td_t* result = td_execute(g, cnt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_t* result = ray_execute(g, cnt);
+    munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->i64, ==, 2);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -132,28 +132,28 @@ static MunitResult test_filter_and_split(const void* params, void* data) {
  */
 static MunitResult test_filter_reorder_dag(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* tbl = make_test_table();
-    td_graph_t* g = td_graph_new(tbl);
+    ray_t* tbl = make_test_table();
+    ray_graph_t* g = ray_graph_new(tbl);
 
-    td_op_t* v1     = td_scan(g, "v1");
-    td_op_t* id1    = td_scan(g, "id1");
-    td_op_t* v3     = td_scan(g, "v3");
-    td_op_t* c1     = td_const_i64(g, 1);
-    td_op_t* c5     = td_const_f64(g, 5.0);
+    ray_op_t* v1     = ray_scan(g, "v1");
+    ray_op_t* id1    = ray_scan(g, "id1");
+    ray_op_t* v3     = ray_scan(g, "v3");
+    ray_op_t* c1     = ray_const_i64(g, 1);
+    ray_op_t* c5     = ray_const_f64(g, 5.0);
 
-    td_op_t* eq_pred = td_eq(g, id1, c1);     /* cost=3: const+i64+eq */
-    td_op_t* gt_pred = td_gt(g, v3, c5);      /* cost=5: const+f64+gt */
+    ray_op_t* eq_pred = ray_eq(g, id1, c1);     /* cost=3: const+i64+eq */
+    ray_op_t* gt_pred = ray_gt(g, v3, c5);      /* cost=5: const+f64+gt */
 
     /* Build in WRONG order: cheap eq is outer, expensive gt is inner */
-    td_op_t* filt_inner = td_filter(g, v1, gt_pred);
-    td_op_t* filt_outer = td_filter(g, filt_inner, eq_pred);
+    ray_op_t* filt_inner = ray_filter(g, v1, gt_pred);
+    ray_op_t* filt_outer = ray_filter(g, filt_inner, eq_pred);
 
     uint32_t eq_pred_id = eq_pred->id;
     uint32_t gt_pred_id = gt_pred->id;
 
-    td_op_t* opt = td_optimize(g, filt_outer);
+    ray_op_t* opt = ray_optimize(g, filt_outer);
     munit_assert_ptr_not_null(opt);
 
     /* After reorder: outer should have gt (expensive), inner should have eq (cheap).
@@ -161,17 +161,17 @@ static MunitResult test_filter_reorder_dag(const void* params, void* data) {
      *   chain[0] (outer) gets the higher cost pred
      *   chain[1] (inner) gets the lower cost pred */
     munit_assert_int(opt->opcode, ==, OP_FILTER);
-    td_op_t* inner = opt->inputs[0];
+    ray_op_t* inner = opt->inputs[0];
     munit_assert_int(inner->opcode, ==, OP_FILTER);
 
     /* Inner pred should be eq (cheaper), outer pred should be gt (more expensive) */
     munit_assert_int(inner->inputs[1]->id, ==, eq_pred_id);
     munit_assert_int(opt->inputs[1]->id, ==, gt_pred_id);
 
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -186,27 +186,27 @@ static MunitResult test_filter_reorder_dag(const void* params, void* data) {
  */
 static MunitResult test_pushdown_past_select(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* tbl = make_test_table();
-    td_graph_t* g = td_graph_new(tbl);
+    ray_t* tbl = make_test_table();
+    ray_graph_t* g = ray_graph_new(tbl);
 
     /* Build: FILTER(pred, SELECT([id1, v1], SCAN)) */
-    td_op_t* v1   = td_scan(g, "v1");
-    td_op_t* id1  = td_scan(g, "id1");
-    td_op_t* c1   = td_const_i64(g, 1);
-    td_op_t* pred = td_eq(g, id1, c1);
+    ray_op_t* v1   = ray_scan(g, "v1");
+    ray_op_t* id1  = ray_scan(g, "id1");
+    ray_op_t* c1   = ray_const_i64(g, 1);
+    ray_op_t* pred = ray_eq(g, id1, c1);
 
-    td_op_t* sel_cols[] = { id1, v1 };
-    td_op_t* sel = td_select(g, v1, sel_cols, 2);
+    ray_op_t* sel_cols[] = { id1, v1 };
+    ray_op_t* sel = ray_select(g, v1, sel_cols, 2);
     uint32_t sel_id = sel->id;
-    td_op_t* filt = td_filter(g, sel, pred);
+    ray_op_t* filt = ray_filter(g, sel, pred);
 
     /* Optimize and capture the new root (pushdown moves filter below select) */
-    td_op_t* opt_root = td_optimize(g, filt);
+    ray_op_t* opt_root = ray_optimize(g, filt);
 
     /* Verify DAG structure: filter should have been pushed below select */
-    td_op_t* sel_after = &g->nodes[sel_id];
+    ray_op_t* sel_after = &g->nodes[sel_id];
     munit_assert_int(sel_after->opcode, ==, OP_SELECT);
     munit_assert_int(sel_after->inputs[0]->opcode, ==, OP_FILTER);
 
@@ -215,16 +215,16 @@ static MunitResult test_pushdown_past_select(const void* params, void* data) {
 
     /* Execute COUNT from the pushed-down filter to validate correctness.
      * The filter (now below select) should still produce the right row count. */
-    td_op_t* cnt = td_count(g, sel_after->inputs[0]);
-    td_t* result = td_execute(g, cnt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_op_t* cnt = ray_count(g, sel_after->inputs[0]);
+    ray_t* result = ray_execute(g, cnt);
+    munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->i64, ==, 4);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -239,41 +239,41 @@ static MunitResult test_pushdown_past_select(const void* params, void* data) {
  */
 static MunitResult test_pushdown_past_group(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
+    ray_heap_init();
 
-    td_t* tbl = make_test_table();
-    td_graph_t* g = td_graph_new(tbl);
+    ray_t* tbl = make_test_table();
+    ray_graph_t* g = ray_graph_new(tbl);
 
-    td_op_t* key = td_scan(g, "id1");
-    td_op_t* val = td_scan(g, "v1");
-    td_op_t* keys[] = { key };
+    ray_op_t* key = ray_scan(g, "id1");
+    ray_op_t* val = ray_scan(g, "v1");
+    ray_op_t* keys[] = { key };
     uint16_t agg_ops[] = { OP_SUM };
-    td_op_t* agg_ins[] = { val };
-    td_op_t* grp = td_group(g, keys, 1, agg_ops, agg_ins, 1);
+    ray_op_t* agg_ins[] = { val };
+    ray_op_t* grp = ray_group(g, keys, 1, agg_ops, agg_ins, 1);
 
     /* Filter on the group key column (id1 = 1).
      * GROUP pushdown is disabled (executor key/agg scans bypass filter),
      * so this tests FILTER-above-GROUP correctness only. */
-    td_op_t* id1_scan = td_scan(g, "id1");
-    td_op_t* c1 = td_const_i64(g, 1);
-    td_op_t* pred = td_eq(g, id1_scan, c1);
-    td_op_t* filt = td_filter(g, grp, pred);
+    ray_op_t* id1_scan = ray_scan(g, "id1");
+    ray_op_t* c1 = ray_const_i64(g, 1);
+    ray_op_t* pred = ray_eq(g, id1_scan, c1);
+    ray_op_t* filt = ray_filter(g, grp, pred);
 
     /* Verify correctness */
-    td_t* result = td_execute(g, filt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_t* result = ray_execute(g, filt);
+    munit_assert_false(RAY_IS_ERR(result));
 
-    munit_assert_int(result->type, ==, TD_TABLE);
-    munit_assert_int(td_table_nrows(result), ==, 1);
-    td_t* sum_col = td_table_get_col_idx(result, 1);
+    munit_assert_int(result->type, ==, RAY_TABLE);
+    munit_assert_int(ray_table_nrows(result), ==, 1);
+    ray_t* sum_col = ray_table_get_col_idx(result, 1);
     munit_assert_ptr_not_null(sum_col);
-    munit_assert_int(((int64_t*)td_data(sum_col))[0], ==, 200);
+    munit_assert_int(((int64_t*)ray_data(sum_col))[0], ==, 200);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -287,24 +287,24 @@ static MunitResult test_pushdown_past_group(const void* params, void* data) {
  */
 static MunitResult test_projection_pushdown(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    td_t *tbl = make_test_table();
-    td_graph_t *g = td_graph_new(tbl);
+    ray_heap_init();
+    ray_t *tbl = make_test_table();
+    ray_graph_t *g = ray_graph_new(tbl);
 
     /* Only reference v1 — id1 and v3 should not affect result */
-    td_op_t *v1 = td_scan(g, "v1");
-    td_op_t *s = td_sum(g, v1);
-    td_op_t *opt = td_optimize(g, s);
+    ray_op_t *v1 = ray_scan(g, "v1");
+    ray_op_t *s = ray_sum(g, v1);
+    ray_op_t *opt = ray_optimize(g, s);
 
-    td_t *result = td_execute(g, opt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_t *result = ray_execute(g, opt);
+    munit_assert_false(RAY_IS_ERR(result));
     munit_assert_int(result->i64, ==, 550);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -314,34 +314,34 @@ static MunitResult test_projection_pushdown(const void* params, void* data) {
  * Build: SUM(FILTER(EQ(SCAN(id1), CONST(1)), SCAN(v1)))
  * Verify correctness: id1=1 rows: indices 0,1,6,9 → v1={10,20,70,100} → sum=200
  *
- * The partition pruning pass only activates for TD_MAPCOMMON columns,
+ * The partition pruning pass only activates for RAY_MAPCOMMON columns,
  * so with regular I64 columns this verifies the pass is a safe no-op.
  */
 static MunitResult test_partition_pruning_smoke(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    td_t *tbl = make_test_table();
-    td_graph_t *g = td_graph_new(tbl);
+    ray_heap_init();
+    ray_t *tbl = make_test_table();
+    ray_graph_t *g = ray_graph_new(tbl);
 
-    td_op_t *id1 = td_scan(g, "id1");
-    td_op_t *v1 = td_scan(g, "v1");
-    td_op_t *c1 = td_const_i64(g, 1);
-    td_op_t *pred = td_eq(g, id1, c1);
-    td_op_t *flt = td_filter(g, v1, pred);
-    td_op_t *s = td_sum(g, flt);
+    ray_op_t *id1 = ray_scan(g, "id1");
+    ray_op_t *v1 = ray_scan(g, "v1");
+    ray_op_t *c1 = ray_const_i64(g, 1);
+    ray_op_t *pred = ray_eq(g, id1, c1);
+    ray_op_t *flt = ray_filter(g, v1, pred);
+    ray_op_t *s = ray_sum(g, flt);
 
-    td_op_t *opt = td_optimize(g, s);
-    td_t *result = td_execute(g, opt);
-    munit_assert_false(TD_IS_ERR(result));
+    ray_op_t *opt = ray_optimize(g, s);
+    ray_t *result = ray_execute(g, opt);
+    munit_assert_false(RAY_IS_ERR(result));
 
     /* id1=1 rows: v1={10,20,70,100} -> sum=200 */
     munit_assert_int(result->i64, ==, 200);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 

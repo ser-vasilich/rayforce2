@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,27 +22,27 @@ int main(int argc, char** argv) {
     if (argc > 1) n_rows = atoll(argv[1]);
     if (argc > 2) n_unique = atoll(argv[2]);
 
-    const char* csv_path = "/tmp/teide_profile.csv";
+    const char* csv_path = "/tmp/rayforce_profile.csv";
     generate_csv(csv_path, n_rows, n_unique);
 
     /* Pre-fault the file into page cache */
     {
-        td_heap_init();
-        { td_err_t _e = td_sym_init(); (void)_e; };
-        td_t* warmup = td_read_csv(csv_path);
-        if (warmup && !TD_IS_ERR(warmup)) td_release(warmup);
-        td_sym_destroy();
-        td_heap_destroy();
+        ray_heap_init();
+        { ray_err_t _e = ray_sym_init(); (void)_e; };
+        ray_t* warmup = ray_read_csv(csv_path);
+        if (warmup && !RAY_IS_ERR(warmup)) ray_release(warmup);
+        ray_sym_destroy();
+        ray_heap_destroy();
     }
 
-    td_heap_init();
-    { td_err_t _e = td_sym_init(); (void)_e; };
+    ray_heap_init();
+    { ray_err_t _e = ray_sym_init(); (void)_e; };
 
-    td_t* t = td_read_csv(csv_path);
-    if (t && !TD_IS_ERR(t)) td_release(t);
+    ray_t* t = ray_read_csv(csv_path);
+    if (t && !RAY_IS_ERR(t)) ray_release(t);
 
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_sym_destroy();
+    ray_heap_destroy();
     unlink(csv_path);
     return 0;
 }

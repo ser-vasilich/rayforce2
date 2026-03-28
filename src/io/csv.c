@@ -29,7 +29,7 @@
  *   2. memchr-based newline scan for row offset discovery
  *   3. Single-pass: sample-based type inference, then parallel value parsing
  *   4. Inline integer/float parsers (bypass strtoll/strtod overhead)
- *   5. Parallel row parsing via td_pool_dispatch
+ *   5. Parallel row parsing via ray_pool_dispatch
  *   6. Per-worker local sym tables, merged post-parse on main thread
  * ============================================================================ */
 
@@ -72,34 +72,34 @@
 
 /* --------------------------------------------------------------------------
  * Scratch memory helpers (same pattern as exec.c).
- * Uses td_alloc/td_free (buddy allocator) instead of malloc/free.
+ * Uses ray_alloc/ray_free (buddy allocator) instead of malloc/free.
  * -------------------------------------------------------------------------- */
 
-static inline void* scratch_alloc(td_t** hdr_out, size_t nbytes) {
-    td_t* h = td_alloc(nbytes);
+static inline void* scratch_alloc(ray_t** hdr_out, size_t nbytes) {
+    ray_t* h = ray_alloc(nbytes);
     if (!h) { *hdr_out = NULL; return NULL; }
     *hdr_out = h;
-    return td_data(h);
+    return ray_data(h);
 }
 
-static inline void* scratch_realloc(td_t** hdr_out, size_t old_bytes, size_t new_bytes) {
-    td_t* old_h = *hdr_out;
-    td_t* new_h = td_alloc(new_bytes);
+static inline void* scratch_realloc(ray_t** hdr_out, size_t old_bytes, size_t new_bytes) {
+    ray_t* old_h = *hdr_out;
+    ray_t* new_h = ray_alloc(new_bytes);
     if (!new_h) return NULL;
-    void* new_p = td_data(new_h);
+    void* new_p = ray_data(new_h);
     if (old_h) {
-        memcpy(new_p, td_data(old_h), old_bytes < new_bytes ? old_bytes : new_bytes);
-        td_free(old_h);
+        memcpy(new_p, ray_data(old_h), old_bytes < new_bytes ? old_bytes : new_bytes);
+        ray_free(old_h);
     }
     *hdr_out = new_h;
     return new_p;
 }
 
-static inline void scratch_free(td_t* hdr) {
-    if (hdr) td_free(hdr);
+static inline void scratch_free(ray_t* hdr) {
+    if (hdr) ray_free(hdr);
 }
 
-/* Hash uses wyhash from ops/hash.h (td_hash_bytes) — much faster than FNV-1a
+/* Hash uses wyhash from ops/hash.h (ray_hash_bytes) — much faster than FNV-1a
  * for short strings typical in CSV columns. */
 
 /* String reference — raw pointer into mmap'd buffer + length.
@@ -262,9 +262,9 @@ static const char* scan_field_quoted(const char* p, const char* buf_end,
     if (has_escape) {
         /* raw_len >= output length (quotes are collapsed); no overflow. */
         char* dest = esc_buf;
-        if (TD_UNLIKELY(raw_len > 8192)) {
+        if (RAY_UNLIKELY(raw_len > 8192)) {
             /* Field too large for stack buffer — dynamically allocate */
-            dest = (char*)td_sys_alloc(raw_len);
+            dest = (char*)ray_sys_alloc(raw_len);
             if (!dest) {
                 /* OOM: fall back to raw (quotes remain) */
                 *out = fld_start;
@@ -296,17 +296,17 @@ advance:
     return p;
 }
 
-TD_INLINE const char* scan_field(const char* p, const char* buf_end,
+RAY_INLINE const char* scan_field(const char* p, const char* buf_end,
                                   char delim,
                                   const char** out, size_t* out_len,
                                   char* esc_buf, char** dyn_esc) {
-    if (TD_UNLIKELY(p >= buf_end)) {
+    if (RAY_UNLIKELY(p >= buf_end)) {
         *out = p;
         *out_len = 0;
         return p;
     }
 
-    if (TD_LIKELY(*p != '"')) {
+    if (RAY_LIKELY(*p != '"')) {
         /* Unquoted field — fast path */
         const char* s = p;
         while (p < buf_end && *p != delim && *p != '\n' && *p != '\r') p++;
@@ -323,8 +323,8 @@ TD_INLINE const char* scan_field(const char* p, const char* buf_end,
  * Fast inline integer parser (replaces strtoll)
  * -------------------------------------------------------------------------- */
 
-TD_INLINE int64_t fast_i64(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len == 0)) { *is_null = true; return 0; }
+RAY_INLINE int64_t fast_i64(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len == 0)) { *is_null = true; return 0; }
     *is_null = false;
 
     const char* end = p + len;
@@ -337,7 +337,7 @@ TD_INLINE int64_t fast_i64(const char* p, size_t len, bool* is_null) {
     size_t digit_len = 0;
     for (const char* q = p; q < end && (unsigned char)(*q - '0') <= 9; q++)
         digit_len++;
-    if (TD_UNLIKELY(digit_len > 18)) {
+    if (RAY_UNLIKELY(digit_len > 18)) {
         /* max int64 = 20 chars; 31-byte limit safe for valid integers. */
         char tmp[32];
         size_t slen = (size_t)(end - start);
@@ -362,7 +362,7 @@ TD_INLINE int64_t fast_i64(const char* p, size_t len, bool* is_null) {
     if (p != end) { *is_null = true; return 0; }
 
     /* 18-digit values may exceed int64 range; fall back to strtoll for safety */
-    if (TD_UNLIKELY(digit_len == 18)) {
+    if (RAY_UNLIKELY(digit_len == 18)) {
         uint64_t limit = neg ? (uint64_t)INT64_MAX + 1u : (uint64_t)INT64_MAX;
         if (val > limit) {
             char tmp[32];
@@ -393,12 +393,12 @@ static const double g_pow10[] = {
     1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
 };
 
-TD_INLINE double fast_f64(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len == 0)) { *is_null = true; return 0.0; }
+RAY_INLINE double fast_f64(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len == 0)) { *is_null = true; return 0.0; }
     *is_null = false;
 
     /* NaN/Inf string literals — check before numeric parse (valid, not null) */
-    if (TD_UNLIKELY(len <= 4)) {
+    if (RAY_UNLIKELY(len <= 4)) {
         if (len == 3 &&
             (p[0]=='n'||p[0]=='N') && (p[1]=='a'||p[1]=='A') && (p[2]=='n'||p[2]=='N'))
             return __builtin_nan("");
@@ -430,7 +430,7 @@ TD_INLINE double fast_f64(const char* p, size_t len, bool* is_null) {
     }
     /* 18-digit integer parts risk uint64 overflow in subsequent mul;
      * fall back to strtod for exact conversion. */
-    if (TD_UNLIKELY(idigits == 18 && int_part > (uint64_t)999999999999999999ULL))
+    if (RAY_UNLIKELY(idigits == 18 && int_part > (uint64_t)999999999999999999ULL))
         goto strtod_fallback;
     double val = (double)int_part;
 
@@ -522,7 +522,7 @@ strtod_fallback:
  * date→days conversion — O(1), no tables, no branches.
  * -------------------------------------------------------------------------- */
 
-TD_INLINE int32_t civil_to_days(int y, int m, int d) {
+RAY_INLINE int32_t civil_to_days(int y, int m, int d) {
     /* Shift Jan/Feb to months 10/11 of the previous year */
     if (m <= 2) { y--; m += 9; } else { m -= 3; }
     int era = (y >= 0 ? y : y - 399) / 400;
@@ -532,24 +532,24 @@ TD_INLINE int32_t civil_to_days(int y, int m, int d) {
     return (int32_t)(era * 146097 + doe - 719468 - 10957);
 }
 
-TD_INLINE int32_t fast_date(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len < 10)) { *is_null = true; return 0; }
+RAY_INLINE int32_t fast_date(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len < 10)) { *is_null = true; return 0; }
     *is_null = false;
     int y = (p[0]-'0')*1000 + (p[1]-'0')*100 + (p[2]-'0')*10 + (p[3]-'0');
     int m = (p[5]-'0')*10 + (p[6]-'0');
     int d = (p[8]-'0')*10 + (p[9]-'0');
-    if (TD_UNLIKELY(m < 1 || m > 12 || d < 1 || d > 31)) { *is_null = true; return 0; }
+    if (RAY_UNLIKELY(m < 1 || m > 12 || d < 1 || d > 31)) { *is_null = true; return 0; }
     return civil_to_days(y, m, d);
 }
 
 /* TIME → int32_t milliseconds since midnight (kdb+ convention) */
-TD_INLINE int32_t fast_time(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len < 8)) { *is_null = true; return 0; }
+RAY_INLINE int32_t fast_time(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len < 8)) { *is_null = true; return 0; }
     *is_null = false;
     int h  = (p[0]-'0')*10 + (p[1]-'0');
     int mi = (p[3]-'0')*10 + (p[4]-'0');
     int s  = (p[6]-'0')*10 + (p[7]-'0');
-    if (TD_UNLIKELY(h > 23 || mi > 59 || s > 59)) { *is_null = true; return 0; }
+    if (RAY_UNLIKELY(h > 23 || mi > 59 || s > 59)) { *is_null = true; return 0; }
     int32_t ms = h * 3600000 + mi * 60000 + s * 1000;
     /* Fractional seconds → milliseconds */
     if (len > 8 && p[8] == '.') {
@@ -566,13 +566,13 @@ TD_INLINE int32_t fast_time(const char* p, size_t len, bool* is_null) {
 }
 
 /* Timestamp time component → int64_t microseconds (higher precision) */
-TD_INLINE int64_t fast_time_us(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len < 8)) { *is_null = true; return 0; }
+RAY_INLINE int64_t fast_time_us(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len < 8)) { *is_null = true; return 0; }
     *is_null = false;
     int h  = (p[0]-'0')*10 + (p[1]-'0');
     int mi = (p[3]-'0')*10 + (p[4]-'0');
     int s  = (p[6]-'0')*10 + (p[7]-'0');
-    if (TD_UNLIKELY(h > 23 || mi > 59 || s > 59)) { *is_null = true; return 0; }
+    if (RAY_UNLIKELY(h > 23 || mi > 59 || s > 59)) { *is_null = true; return 0; }
     int64_t us = (int64_t)h * 3600000000LL + (int64_t)mi * 60000000LL +
                  (int64_t)s * 1000000LL;
     if (len > 8 && p[8] == '.') {
@@ -588,8 +588,8 @@ TD_INLINE int64_t fast_time_us(const char* p, size_t len, bool* is_null) {
     return us;
 }
 
-TD_INLINE int64_t fast_timestamp(const char* p, size_t len, bool* is_null) {
-    if (TD_UNLIKELY(len < 19)) { *is_null = true; return 0; }
+RAY_INLINE int64_t fast_timestamp(const char* p, size_t len, bool* is_null) {
+    if (RAY_UNLIKELY(len < 19)) { *is_null = true; return 0; }
     *is_null = false;
     int32_t days = fast_date(p, 10, is_null);
     if (*is_null) return 0;
@@ -603,7 +603,7 @@ TD_INLINE int64_t fast_timestamp(const char* p, size_t len, bool* is_null) {
  * Null-aware boolean parser
  * -------------------------------------------------------------------------- */
 
-TD_INLINE uint8_t fast_bool(const char* s, size_t len, bool* is_null) {
+RAY_INLINE uint8_t fast_bool(const char* s, size_t len, bool* is_null) {
     if (len == 0) { *is_null = true; return 0; }
     *is_null = false;
     if ((len == 4 && (memcmp(s, "true", 4) == 0 || memcmp(s, "TRUE", 4) == 0)) ||
@@ -628,7 +628,7 @@ TD_INLINE uint8_t fast_bool(const char* s, size_t len, bool* is_null) {
 
 static int64_t build_row_offsets(const char* buf, size_t buf_size,
                                   size_t data_offset,
-                                  int64_t** offsets_out, td_t** hdr_out) {
+                                  int64_t** offsets_out, ray_t** hdr_out) {
     const char* p = buf + data_offset;
     const char* end = buf + buf_size;
 
@@ -641,7 +641,7 @@ static int64_t build_row_offsets(const char* buf, size_t buf_size,
      * underestimates. */
     size_t remaining = (size_t)(end - p);
     int64_t est = (int64_t)(remaining / 40) + 16;
-    td_t* hdr = NULL;
+    ray_t* hdr = NULL;
     int64_t* offs = (int64_t*)scratch_alloc(&hdr, (size_t)est * sizeof(int64_t));
     if (!offs) { *offsets_out = NULL; *hdr_out = NULL; return 0; }
 
@@ -651,7 +651,7 @@ static int64_t build_row_offsets(const char* buf, size_t buf_size,
     /* Check if file has any quotes — determines fast vs slow path */
     bool has_quotes = (memchr(p, '"', remaining) != NULL);
 
-    if (TD_LIKELY(!has_quotes)) {
+    if (RAY_LIKELY(!has_quotes)) {
         /* Fast path: no quotes, use memchr for newlines.
          * Only scans for \n; pure \r line endings (old Mac) treated as single row.
          * Empty lines are preserved as rows (for NULL handling). */
@@ -725,8 +725,8 @@ static bool csv_intern_strings(csv_strref_t** str_refs, int n_cols,
         int64_t max_id = 0;
 
         /* Pre-grow: upper bound is n_rows unique strings */
-        uint32_t current = td_sym_count();
-        if (!td_sym_ensure_cap(current + (uint32_t)(n_rows < UINT32_MAX ? n_rows : UINT32_MAX)))
+        uint32_t current = ray_sym_count();
+        if (!ray_sym_ensure_cap(current + (uint32_t)(n_rows < UINT32_MAX ? n_rows : UINT32_MAX)))
             return false;  /* OOM: cannot grow sym table */
 
         for (int64_t r = 0; r < n_rows; r++) {
@@ -734,8 +734,8 @@ static bool csv_intern_strings(csv_strref_t** str_refs, int n_cols,
                 ids[r] = 0;
                 continue;
             }
-            uint32_t hash = (uint32_t)td_hash_bytes(refs[r].ptr, refs[r].len);
-            int64_t id = td_sym_intern_prehashed(hash, refs[r].ptr, refs[r].len);
+            uint32_t hash = (uint32_t)ray_hash_bytes(refs[r].ptr, refs[r].len);
+            int64_t id = ray_sym_intern_prehashed(hash, refs[r].ptr, refs[r].len);
             if (id < 0) { ok = false; id = 0; }
             ids[r] = (uint32_t)id;
             if (id > max_id) max_id = id;
@@ -885,7 +885,7 @@ static void csv_parse_fn(void* arg, uint32_t worker_id,
                 default:
                     break;
             }
-            if (TD_UNLIKELY(dyn_esc != NULL)) td_sys_free(dyn_esc);
+            if (RAY_UNLIKELY(dyn_esc != NULL)) ray_sys_free(dyn_esc);
         }
     }
 }
@@ -1018,39 +1018,39 @@ static void csv_parse_serial(const char* buf, size_t buf_size,
                 default:
                     break;
             }
-            if (TD_UNLIKELY(dyn_esc != NULL)) td_sys_free(dyn_esc);
+            if (RAY_UNLIKELY(dyn_esc != NULL)) ray_sys_free(dyn_esc);
         }
     }
 }
 
 /* --------------------------------------------------------------------------
- * td_read_csv_opts — main CSV parser
+ * ray_read_csv_opts — main CSV parser
  * -------------------------------------------------------------------------- */
 
-td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
+ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
                         const int8_t* col_types_in, int32_t n_types) {
     /* ---- 1. Open file and get size ---- */
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return TD_ERR_PTR(TD_ERR_IO);
+    if (fd < 0) return RAY_ERR_PTR(RAY_ERR_IO);
 
     struct stat st;
     if (fstat(fd, &st) != 0 || st.st_size <= 0) {
         close(fd);
-        return TD_ERR_PTR(TD_ERR_IO);
+        return RAY_ERR_PTR(RAY_ERR_IO);
     }
     size_t file_size = (size_t)st.st_size;
 
     /* ---- 2. mmap the file ---- */
     char* buf = (char*)mmap(NULL, file_size, PROT_READ, MMAP_FLAGS, fd, 0);
     close(fd);
-    if (buf == MAP_FAILED) return TD_ERR_PTR(TD_ERR_IO);
+    if (buf == MAP_FAILED) return RAY_ERR_PTR(RAY_ERR_IO);
 
 #ifdef __APPLE__
     madvise(buf, file_size, MADV_SEQUENTIAL);
 #endif
 
     const char* buf_end = buf + file_size;
-    td_t* result = NULL;
+    ray_t* result = NULL;
 
     /* ---- 3. Detect delimiter ---- */
     /* Delimiter auto-detected from header row only. Files where the header
@@ -1080,7 +1080,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     if (ncols > CSV_MAX_COLS) {
         munmap(buf, file_size);
         /* fd already closed after mmap (line 1044) — do not close again */
-        return TD_ERR_PTR(TD_ERR_RANGE);  /* too many columns */
+        return RAY_ERR_PTR(RAY_ERR_RANGE);  /* too many columns */
     }
 
     /* ---- 5. Parse header row ---- */
@@ -1094,35 +1094,35 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
             size_t flen;
             char* dyn_esc = NULL;
             p = scan_field(p, buf_end, delimiter, &fld, &flen, esc_buf, &dyn_esc);
-            col_name_ids[c] = td_sym_intern(fld, flen);
-            if (dyn_esc) td_sys_free(dyn_esc);
+            col_name_ids[c] = ray_sym_intern(fld, flen);
+            if (dyn_esc) ray_sys_free(dyn_esc);
         }
         while (p < buf_end && (*p == '\r' || *p == '\n')) p++;
     } else {
         for (int c = 0; c < ncols; c++) {
             char name[32];
             snprintf(name, sizeof(name), "V%d", c + 1);
-            col_name_ids[c] = td_sym_intern(name, strlen(name));
+            col_name_ids[c] = ray_sym_intern(name, strlen(name));
         }
     }
 
     size_t data_offset = (size_t)(p - buf);
 
     /* ---- 6. Build row offsets (memchr-accelerated) ---- */
-    td_t* row_offsets_hdr = NULL;
+    ray_t* row_offsets_hdr = NULL;
     int64_t* row_offsets = NULL;
     int64_t n_rows = build_row_offsets(buf, file_size, data_offset,
                                         &row_offsets, &row_offsets_hdr);
 
     if (n_rows == 0) {
         /* Empty file → empty table */
-        td_t* tbl = td_table_new(ncols);
-        if (!tbl || TD_IS_ERR(tbl)) goto fail_unmap;
+        ray_t* tbl = ray_table_new(ncols);
+        if (!tbl || RAY_IS_ERR(tbl)) goto fail_unmap;
         for (int c = 0; c < ncols; c++) {
-            td_t* empty_vec = td_vec_new(TD_F64, 0);
-            if (empty_vec && !TD_IS_ERR(empty_vec)) {
-                tbl = td_table_add_col(tbl, col_name_ids[c], empty_vec);
-                td_release(empty_vec);
+            ray_t* empty_vec = ray_vec_new(RAY_F64, 0);
+            if (empty_vec && !RAY_IS_ERR(empty_vec)) {
+                tbl = ray_table_add_col(tbl, col_name_ids[c], empty_vec);
+                ray_release(empty_vec);
             }
         }
         munmap(buf, file_size);
@@ -1135,7 +1135,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
         /* Explicit types provided by caller — validate against known types */
         for (int c = 0; c < ncols; c++) {
             int8_t t = col_types_in[c];
-            if (t < TD_BOOL || t >= TD_TYPE_COUNT || t == TD_TABLE) {
+            if (t < RAY_BOOL || t >= RAY_TYPE_COUNT || t == RAY_TABLE) {
                 /* Invalid type constant — fall through to error */
                 goto fail_offsets;
             }
@@ -1157,19 +1157,19 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
                 char* dyn_esc = NULL;
                 rp = scan_field(rp, buf_end, delimiter, &fld, &flen, esc_buf, &dyn_esc);
                 csv_type_t t = detect_type(fld, flen);
-                if (dyn_esc) td_sys_free(dyn_esc);
+                if (dyn_esc) ray_sys_free(dyn_esc);
                 col_types[c] = promote_csv_type(col_types[c], t);
             }
         }
         for (int c = 0; c < ncols; c++) {
             switch (col_types[c]) {
-                case CSV_TYPE_BOOL:      resolved_types[c] = TD_BOOL;      break;
-                case CSV_TYPE_I64:       resolved_types[c] = TD_I64;       break;
-                case CSV_TYPE_F64:       resolved_types[c] = TD_F64;       break;
-                case CSV_TYPE_DATE:      resolved_types[c] = TD_DATE;      break;
-                case CSV_TYPE_TIME:      resolved_types[c] = TD_TIME;      break;
-                case CSV_TYPE_TIMESTAMP: resolved_types[c] = TD_TIMESTAMP; break;
-                default:                 resolved_types[c] = TD_SYM;       break;
+                case CSV_TYPE_BOOL:      resolved_types[c] = RAY_BOOL;      break;
+                case CSV_TYPE_I64:       resolved_types[c] = RAY_I64;       break;
+                case CSV_TYPE_F64:       resolved_types[c] = RAY_F64;       break;
+                case CSV_TYPE_DATE:      resolved_types[c] = RAY_DATE;      break;
+                case CSV_TYPE_TIME:      resolved_types[c] = RAY_TIME;      break;
+                case CSV_TYPE_TIMESTAMP: resolved_types[c] = RAY_TIMESTAMP; break;
+                default:                 resolved_types[c] = RAY_SYM;       break;
             }
         }
     } else {
@@ -1178,23 +1178,23 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     }
 
     /* ---- 8. Allocate column vectors ---- */
-    td_t* col_vecs[CSV_MAX_COLS];
+    ray_t* col_vecs[CSV_MAX_COLS];
     void* col_data[CSV_MAX_COLS];
 
     for (int c = 0; c < ncols; c++) {
         int8_t type = resolved_types[c];
-        /* String columns: allocate TD_SYM at W32 (4B/elem) for sym IDs.
+        /* String columns: allocate RAY_SYM at W32 (4B/elem) for sym IDs.
          * After intern, narrow to W8/W16 if max sym ID permits. */
-        col_vecs[c] = (type == TD_SYM) ? td_sym_vec_new(TD_SYM_W32, n_rows)
-                                        : td_vec_new(type, n_rows);
-        if (!col_vecs[c] || TD_IS_ERR(col_vecs[c])) {
-            for (int j = 0; j < c; j++) td_release(col_vecs[j]);
+        col_vecs[c] = (type == RAY_SYM) ? ray_sym_vec_new(RAY_SYM_W32, n_rows)
+                                        : ray_vec_new(type, n_rows);
+        if (!col_vecs[c] || RAY_IS_ERR(col_vecs[c])) {
+            for (int j = 0; j < c; j++) ray_release(col_vecs[j]);
             goto fail_offsets;
         }
         /* len set early so parallel workers can write to full extent;
          * parse errors return before table is used. */
         col_vecs[c]->len = n_rows;
-        col_data[c] = td_data(col_vecs[c]);
+        col_data[c] = ray_data(col_vecs[c]);
     }
 
     /* ---- 8b. Pre-allocate nullmaps for all columns ---- */
@@ -1203,23 +1203,23 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     memset(col_had_null, 0, (size_t)ncols * sizeof(bool));
 
     for (int c = 0; c < ncols; c++) {
-        td_t* vec = col_vecs[c];
+        ray_t* vec = col_vecs[c];
         if (n_rows <= 128) {
-            vec->attrs |= TD_ATTR_HAS_NULLS;
+            vec->attrs |= RAY_ATTR_HAS_NULLS;
             memset(vec->nullmap, 0, 16);
             col_nullmaps[c] = vec->nullmap;
         } else {
             size_t bmp_bytes = ((size_t)n_rows + 7) / 8;
-            td_t* ext = td_vec_new(TD_U8, (int64_t)bmp_bytes);
-            if (!ext || TD_IS_ERR(ext)) {
-                for (int j = 0; j <= c; j++) td_release(col_vecs[j]);
+            ray_t* ext = ray_vec_new(RAY_U8, (int64_t)bmp_bytes);
+            if (!ext || RAY_IS_ERR(ext)) {
+                for (int j = 0; j <= c; j++) ray_release(col_vecs[j]);
                 goto fail_offsets;
             }
             ext->len = (int64_t)bmp_bytes;
-            memset(td_data(ext), 0, bmp_bytes);
+            memset(ray_data(ext), 0, bmp_bytes);
             vec->ext_nullmap = ext;
-            vec->attrs |= TD_ATTR_HAS_NULLS | TD_ATTR_NULLMAP_EXT;
-            col_nullmaps[c] = (uint8_t*)td_data(ext);
+            vec->attrs |= RAY_ATTR_HAS_NULLS | RAY_ATTR_NULLMAP_EXT;
+            col_nullmaps[c] = (uint8_t*)ray_data(ext);
         }
     }
 
@@ -1227,12 +1227,12 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     csv_type_t parse_types[CSV_MAX_COLS];
     for (int c = 0; c < ncols; c++) {
         switch (resolved_types[c]) {
-            case TD_BOOL:      parse_types[c] = CSV_TYPE_BOOL;      break;
-            case TD_I64:       parse_types[c] = CSV_TYPE_I64;       break;
-            case TD_F64:       parse_types[c] = CSV_TYPE_F64;       break;
-            case TD_DATE:      parse_types[c] = CSV_TYPE_DATE;      break;
-            case TD_TIME:      parse_types[c] = CSV_TYPE_TIME;      break;
-            case TD_TIMESTAMP: parse_types[c] = CSV_TYPE_TIMESTAMP; break;
+            case RAY_BOOL:      parse_types[c] = CSV_TYPE_BOOL;      break;
+            case RAY_I64:       parse_types[c] = CSV_TYPE_I64;       break;
+            case RAY_F64:       parse_types[c] = CSV_TYPE_F64;       break;
+            case RAY_DATE:      parse_types[c] = CSV_TYPE_DATE;      break;
+            case RAY_TIME:      parse_types[c] = CSV_TYPE_TIME;      break;
+            case RAY_TIMESTAMP: parse_types[c] = CSV_TYPE_TIMESTAMP; break;
             default:           parse_types[c] = CSV_TYPE_STR;       break;
         }
     }
@@ -1249,7 +1249,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
 
     /* Allocate strref arrays for string columns (temporary, freed after intern) */
     csv_strref_t* str_ref_bufs[CSV_MAX_COLS];
-    td_t* str_ref_hdrs[CSV_MAX_COLS];
+    ray_t* str_ref_hdrs[CSV_MAX_COLS];
     memset(str_ref_bufs, 0, sizeof(str_ref_bufs));
     memset(str_ref_hdrs, 0, sizeof(str_ref_hdrs));
     for (int c = 0; c < ncols; c++) {
@@ -1257,7 +1257,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
             size_t sz = (size_t)n_rows * sizeof(csv_strref_t);
             str_ref_bufs[c] = (csv_strref_t*)scratch_alloc(&str_ref_hdrs[c], sz);
             if (!str_ref_bufs[c]) {
-                for (int j = 0; j < ncols; j++) td_release(col_vecs[j]);
+                for (int j = 0; j < ncols; j++) ray_release(col_vecs[j]);
                 for (int j = 0; j < c; j++) scratch_free(str_ref_hdrs[j]);
                 goto fail_offsets;
             }
@@ -1265,13 +1265,13 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     }
 
     {
-        td_pool_t* pool = td_pool_get();
+        ray_pool_t* pool = ray_pool_get();
         bool use_parallel = pool && n_rows > 8192;
 
         if (use_parallel) {
-            uint32_t n_workers = td_pool_total_workers(pool);
+            uint32_t n_workers = ray_pool_total_workers(pool);
             size_t whn_sz = (size_t)n_workers * (size_t)ncols * sizeof(bool);
-            bool* worker_had_null_buf = (bool*)td_sys_alloc(whn_sz);
+            bool* worker_had_null_buf = (bool*)ray_sys_alloc(whn_sz);
             if (!worker_had_null_buf) {
                 use_parallel = false;
             } else {
@@ -1291,7 +1291,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
                     .worker_had_null  = worker_had_null_buf,
                 };
 
-                td_pool_dispatch(pool, csv_parse_fn, &ctx, n_rows);
+                ray_pool_dispatch(pool, csv_parse_fn, &ctx, n_rows);
 
                 /* OR worker null flags into col_had_null */
                 for (uint32_t w = 0; w < n_workers; w++) {
@@ -1300,7 +1300,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
                             col_had_null[c] = true;
                     }
                 }
-                td_sys_free(worker_had_null_buf);
+                ray_sys_free(worker_had_null_buf);
             }
         }
 
@@ -1317,7 +1317,7 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
                            col_data, n_rows, sym_max_ids, col_nullmaps);
         if (!intern_ok) {
             for (int c = 0; c < ncols; c++) scratch_free(str_ref_hdrs[c]);
-            for (int c = 0; c < ncols; c++) td_release(col_vecs[c]);
+            for (int c = 0; c < ncols; c++) ray_release(col_vecs[c]);
             goto fail_offsets;
         }
     }
@@ -1328,58 +1328,58 @@ td_t* td_read_csv_opts(const char* path, char delimiter, bool header,
     /* ---- 9c. Strip nullmaps from all-valid columns ---- */
     for (int c = 0; c < ncols; c++) {
         if (col_had_null[c]) continue;
-        td_t* vec = col_vecs[c];
-        if (vec->attrs & TD_ATTR_NULLMAP_EXT) {
-            td_release(vec->ext_nullmap);
+        ray_t* vec = col_vecs[c];
+        if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
+            ray_release(vec->ext_nullmap);
             vec->ext_nullmap = NULL;
         }
-        vec->attrs &= (uint8_t)~(TD_ATTR_HAS_NULLS | TD_ATTR_NULLMAP_EXT);
+        vec->attrs &= (uint8_t)~(RAY_ATTR_HAS_NULLS | RAY_ATTR_NULLMAP_EXT);
         memset(vec->nullmap, 0, 16);
     }
 
     /* ---- 10. Narrow sym columns to optimal width ---- */
     for (int c = 0; c < ncols; c++) {
-        if (resolved_types[c] != TD_SYM) continue;
-        uint8_t new_w = td_sym_dict_width(sym_max_ids[c]);
-        if (new_w >= TD_SYM_W32) continue; /* already at W32, no savings */
-        td_t* narrow = td_sym_vec_new(new_w, n_rows);
-        if (!narrow || TD_IS_ERR(narrow)) continue;
+        if (resolved_types[c] != RAY_SYM) continue;
+        uint8_t new_w = ray_sym_dict_width(sym_max_ids[c]);
+        if (new_w >= RAY_SYM_W32) continue; /* already at W32, no savings */
+        ray_t* narrow = ray_sym_vec_new(new_w, n_rows);
+        if (!narrow || RAY_IS_ERR(narrow)) continue;
         narrow->len = n_rows;
         const uint32_t* src = (const uint32_t*)col_data[c];
-        void* dst = td_data(narrow);
-        if (new_w == TD_SYM_W8) {
+        void* dst = ray_data(narrow);
+        if (new_w == RAY_SYM_W8) {
             uint8_t* d = (uint8_t*)dst;
             for (int64_t r = 0; r < n_rows; r++) d[r] = (uint8_t)src[r];
-        } else { /* TD_SYM_W16 */
+        } else { /* RAY_SYM_W16 */
             uint16_t* d = (uint16_t*)dst;
             for (int64_t r = 0; r < n_rows; r++) d[r] = (uint16_t)src[r];
         }
         /* Transfer nullmap to narrowed vector */
-        if (col_vecs[c]->attrs & TD_ATTR_HAS_NULLS) {
-            narrow->attrs |= (col_vecs[c]->attrs & (TD_ATTR_HAS_NULLS | TD_ATTR_NULLMAP_EXT));
-            if (col_vecs[c]->attrs & TD_ATTR_NULLMAP_EXT) {
+        if (col_vecs[c]->attrs & RAY_ATTR_HAS_NULLS) {
+            narrow->attrs |= (col_vecs[c]->attrs & (RAY_ATTR_HAS_NULLS | RAY_ATTR_NULLMAP_EXT));
+            if (col_vecs[c]->attrs & RAY_ATTR_NULLMAP_EXT) {
                 narrow->ext_nullmap = col_vecs[c]->ext_nullmap;
-                td_retain(narrow->ext_nullmap);
+                ray_retain(narrow->ext_nullmap);
             } else {
                 memcpy(narrow->nullmap, col_vecs[c]->nullmap, 16);
             }
         }
-        td_release(col_vecs[c]);
+        ray_release(col_vecs[c]);
         col_vecs[c] = narrow;
         col_data[c] = dst;
     }
 
     /* ---- 11. Build table ---- */
     {
-        td_t* tbl = td_table_new(ncols);
-        if (!tbl || TD_IS_ERR(tbl)) {
-            for (int c = 0; c < ncols; c++) td_release(col_vecs[c]);
+        ray_t* tbl = ray_table_new(ncols);
+        if (!tbl || RAY_IS_ERR(tbl)) {
+            for (int c = 0; c < ncols; c++) ray_release(col_vecs[c]);
             goto fail_offsets;
         }
 
         for (int c = 0; c < ncols; c++) {
-            tbl = td_table_add_col(tbl, col_name_ids[c], col_vecs[c]);
-            td_release(col_vecs[c]);
+            tbl = ray_table_add_col(tbl, col_name_ids[c], col_vecs[c]);
+            ray_release(col_vecs[c]);
         }
 
         result = tbl;
@@ -1395,23 +1395,23 @@ fail_offsets:
     scratch_free(row_offsets_hdr);
 fail_unmap:
     munmap(buf, file_size);
-    return TD_ERR_PTR(TD_ERR_OOM);
+    return RAY_ERR_PTR(RAY_ERR_OOM);
 }
 
 /* --------------------------------------------------------------------------
- * td_read_csv — convenience wrapper with default options
+ * ray_read_csv — convenience wrapper with default options
  * -------------------------------------------------------------------------- */
 
-td_t* td_read_csv(const char* path) {
-    return td_read_csv_opts(path, 0, true, NULL, 0);
+ray_t* ray_read_csv(const char* path) {
+    return ray_read_csv_opts(path, 0, true, NULL, 0);
 }
 
 /* ============================================================================
- * td_write_csv — Write a table to a CSV file (RFC 4180)
+ * ray_write_csv — Write a table to a CSV file (RFC 4180)
  *
  * Writes header row with column names, then data rows.
  * Strings containing commas, quotes, or newlines are quoted.
- * Returns TD_OK on success, error code on failure.
+ * Returns RAY_OK on success, error code on failure.
  * ============================================================================ */
 
 /* Write a string value, quoting if it contains special chars */
@@ -1435,24 +1435,24 @@ static void csv_write_str(FILE* fp, const char* s, size_t len) {
     }
 }
 
-td_err_t td_write_csv(td_t* table, const char* path) {
-    if (!table || !path) return TD_ERR_TYPE;
+ray_err_t ray_write_csv(ray_t* table, const char* path) {
+    if (!table || !path) return RAY_ERR_TYPE;
 
-    int64_t ncols = td_table_ncols(table);
-    int64_t nrows = td_table_nrows(table);
-    if (ncols <= 0) return TD_ERR_TYPE;
+    int64_t ncols = ray_table_ncols(table);
+    int64_t nrows = ray_table_nrows(table);
+    if (ncols <= 0) return RAY_ERR_TYPE;
 
     FILE* fp = fopen(path, "w");
-    if (!fp) return TD_ERR_IO;
+    if (!fp) return RAY_ERR_IO;
 
     /* Header row: column names */
     for (int64_t c = 0; c < ncols; c++) {
         if (c > 0) fputc(',', fp);
-        int64_t name_id = td_table_col_name(table, c);
-        td_t* name_atom = td_sym_str(name_id);
+        int64_t name_id = ray_table_col_name(table, c);
+        ray_t* name_atom = ray_sym_str(name_id);
         if (name_atom) {
-            const char* s = td_str_ptr(name_atom);
-            size_t slen = td_str_len(name_atom);
+            const char* s = ray_str_ptr(name_atom);
+            size_t slen = ray_str_len(name_atom);
             csv_write_str(fp, s, slen);
         }
     }
@@ -1462,33 +1462,33 @@ td_err_t td_write_csv(td_t* table, const char* path) {
     for (int64_t r = 0; r < nrows; r++) {
         for (int64_t c = 0; c < ncols; c++) {
             if (c > 0) fputc(',', fp);
-            td_t* col = td_table_get_col_idx(table, c);
+            ray_t* col = ray_table_get_col_idx(table, c);
             if (!col) continue;
             int8_t t = col->type;
             switch (t) {
-            case TD_I64: {
-                int64_t v = ((const int64_t*)td_data(col))[r];
+            case RAY_I64: {
+                int64_t v = ((const int64_t*)ray_data(col))[r];
                 fprintf(fp, "%ld", (long)v);
                 break;
             }
-            case TD_I32: {
-                int32_t v = ((const int32_t*)td_data(col))[r];
+            case RAY_I32: {
+                int32_t v = ((const int32_t*)ray_data(col))[r];
                 fprintf(fp, "%d", v);
                 break;
             }
-            case TD_F64: {
-                double v = ((const double*)td_data(col))[r];
+            case RAY_F64: {
+                double v = ((const double*)ray_data(col))[r];
                 fprintf(fp, "%.17g", v);
                 break;
             }
-            case TD_BOOL: case TD_U8: {
-                uint8_t v = ((const uint8_t*)td_data(col))[r];
-                if (t == TD_BOOL) fputs(v ? "true" : "false", fp);
+            case RAY_BOOL: case RAY_U8: {
+                uint8_t v = ((const uint8_t*)ray_data(col))[r];
+                if (t == RAY_BOOL) fputs(v ? "true" : "false", fp);
                 else fprintf(fp, "%u", (unsigned)v);
                 break;
             }
-            case TD_DATE: {
-                int32_t v = ((const int32_t*)td_data(col))[r];
+            case RAY_DATE: {
+                int32_t v = ((const int32_t*)ray_data(col))[r];
                 /* days since 2000-01-01 → YYYY-MM-DD */
                 int32_t y, m, d;
                 { /* civil_from_days: algorithm from Howard Hinnant */
@@ -1506,8 +1506,8 @@ td_err_t td_write_csv(td_t* table, const char* path) {
                 fprintf(fp, "%04d-%02d-%02d", y, m, d);
                 break;
             }
-            case TD_TIME: {
-                int32_t ms = ((const int32_t*)td_data(col))[r];
+            case RAY_TIME: {
+                int32_t ms = ((const int32_t*)ray_data(col))[r];
                 uint32_t ums = (uint32_t)ms;
                 uint32_t h = ums / 3600000;
                 uint32_t mi = (ums % 3600000) / 60000;
@@ -1517,8 +1517,8 @@ td_err_t td_write_csv(td_t* table, const char* path) {
                 else      fprintf(fp, "%02u:%02u:%02u", h, mi, s);
                 break;
             }
-            case TD_TIMESTAMP: {
-                int64_t us = ((const int64_t*)td_data(col))[r];
+            case RAY_TIMESTAMP: {
+                int64_t us = ((const int64_t*)ray_data(col))[r];
                 int32_t days = (int32_t)(us / 86400000000LL);
                 int64_t time_us = us % 86400000000LL;
                 if (time_us < 0) { days--; time_us += 86400000000LL; }
@@ -1545,15 +1545,15 @@ td_err_t td_write_csv(td_t* table, const char* path) {
                 else      fprintf(fp, "%04d-%02d-%02dT%02u:%02u:%02u", y, mo, d, h, mi, s);
                 break;
             }
-            case TD_I16: {
-                int16_t v = ((const int16_t*)td_data(col))[r];
+            case RAY_I16: {
+                int16_t v = ((const int16_t*)ray_data(col))[r];
                 fprintf(fp, "%d", (int)v);
                 break;
             }
-            case TD_SYM: {
-                int64_t sym = td_read_sym(td_data(col), r, col->type, col->attrs);
-                td_t* s = td_sym_str(sym);
-                if (s) csv_write_str(fp, td_str_ptr(s), td_str_len(s));
+            case RAY_SYM: {
+                int64_t sym = ray_read_sym(ray_data(col), r, col->type, col->attrs);
+                ray_t* s = ray_sym_str(sym);
+                if (s) csv_write_str(fp, ray_str_ptr(s), ray_str_len(s));
                 break;
             }
             default:
@@ -1564,5 +1564,5 @@ td_err_t td_write_csv(td_t* table, const char* path) {
     }
 
     fclose(fp);
-    return TD_OK;
+    return RAY_OK;
 }

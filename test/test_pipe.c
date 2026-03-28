@@ -29,7 +29,7 @@
 static MunitResult test_pipe_new_defaults(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_pipe_t* p = td_pipe_new();
+    ray_pipe_t* p = ray_pipe_new();
     munit_assert_ptr_not_null(p);
 
     /* All fields should be zero-initialized */
@@ -41,7 +41,7 @@ static MunitResult test_pipe_new_defaults(const void* params, void* fixture) {
     /* spill_fd should be -1 (no spill file) */
     munit_assert_int(p->spill_fd, ==, -1);
 
-    td_pipe_free(p);
+    ray_pipe_free(p);
     return MUNIT_OK;
 }
 
@@ -51,7 +51,7 @@ static MunitResult test_pipe_free_null_safe(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     /* Freeing NULL should not crash */
-    td_pipe_free(NULL);
+    ray_pipe_free(NULL);
 
     return MUNIT_OK;
 }
@@ -62,9 +62,9 @@ static MunitResult test_pipe_multiple_alloc_free(const void* params, void* fixtu
     (void)params; (void)fixture;
 
     /* Allocate several pipes, verify independence, free them */
-    td_pipe_t* p1 = td_pipe_new();
-    td_pipe_t* p2 = td_pipe_new();
-    td_pipe_t* p3 = td_pipe_new();
+    ray_pipe_t* p1 = ray_pipe_new();
+    ray_pipe_t* p2 = ray_pipe_new();
+    ray_pipe_t* p3 = ray_pipe_new();
 
     munit_assert_ptr_not_null(p1);
     munit_assert_ptr_not_null(p2);
@@ -79,10 +79,10 @@ static MunitResult test_pipe_multiple_alloc_free(const void* params, void* fixtu
     p2->inputs[0] = p1;
     munit_assert_true(p2->inputs[0] == p1);
 
-    /* Free in reverse; td_pipe_free does NOT recurse into inputs */
-    td_pipe_free(p3);
-    td_pipe_free(p2);
-    td_pipe_free(p1);
+    /* Free in reverse; ray_pipe_free does NOT recurse into inputs */
+    ray_pipe_free(p3);
+    ray_pipe_free(p2);
+    ray_pipe_free(p1);
 
     return MUNIT_OK;
 }

@@ -21,13 +21,13 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_FILEIO_H
-#define TD_FILEIO_H
+#ifndef RAY_FILEIO_H
+#define RAY_FILEIO_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-/* td_fd_t, TD_FD_INVALID, TD_OPEN_*, and td_file_* function declarations
- * are provided by <teide/td.h>.  This header exists only for internal
+/* ray_fd_t, RAY_FD_INVALID, RAY_OPEN_*, and ray_file_* function declarations
+ * are provided by <rayforce.h>.  This header exists only for internal
  * source files that need the Windows-specific includes for the
  * implementation (fileio.c). */
 
@@ -35,4 +35,4 @@
   #include <windows.h>
 #endif
 
-#endif /* TD_FILEIO_H */
+#endif /* RAY_FILEIO_H */

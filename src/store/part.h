@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_PART_H
-#define TD_PART_H
+#ifndef RAY_PART_H
+#define RAY_PART_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_PART_H */
+#endif /* RAY_PART_H */

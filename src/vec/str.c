@@ -27,7 +27,7 @@
 /* --------------------------------------------------------------------------
  * SSO vs long-string detection
  *
- * The slen/sdata and obj fields share the same 8-byte union in td_t.
+ * The slen/sdata and obj fields share the same 8-byte union in ray_t.
  * SSO: slen is 0..7, sdata contains the string bytes.
  * Long: obj is a non-NULL pointer to a CHAR vector.
  *
@@ -39,45 +39,45 @@
  *   - slen > 7 → long string (pointer's low byte is 32, 64, ... or higher)
  * -------------------------------------------------------------------------- */
 
-static bool is_sso(td_t* s) {
+static bool is_sso(ray_t* s) {
     if (s->slen >= 1 && s->slen <= 7) return true;
     if (s->slen == 0 && s->obj == NULL) return true;
     return false;
 }
 
 /* --------------------------------------------------------------------------
- * td_str_ptr
+ * ray_str_ptr
  * -------------------------------------------------------------------------- */
 
-const char* td_str_ptr(td_t* s) {
-    if (!s || TD_IS_ERR(s)) return NULL;
+const char* ray_str_ptr(ray_t* s) {
+    if (!s || RAY_IS_ERR(s)) return NULL;
     if (is_sso(s)) return (const char*)s->sdata;
-    return (const char*)td_data(s->obj);
+    return (const char*)ray_data(s->obj);
 }
 
 /* --------------------------------------------------------------------------
- * td_str_len
+ * ray_str_len
  * -------------------------------------------------------------------------- */
 
-size_t td_str_len(td_t* s) {
-    if (!s || TD_IS_ERR(s)) return 0;
+size_t ray_str_len(ray_t* s) {
+    if (!s || RAY_IS_ERR(s)) return 0;
     if (is_sso(s)) return (size_t)s->slen;
     return (size_t)s->obj->len;
 }
 
 /* --------------------------------------------------------------------------
- * td_str_cmp -- Compare two string atoms.
+ * ray_str_cmp -- Compare two string atoms.
  *
  * Compare by memcmp of the min length, then by length difference.
  * -------------------------------------------------------------------------- */
 
-int td_str_cmp(td_t* a, td_t* b) {
-    if (!a || TD_IS_ERR(a) || !b || TD_IS_ERR(b)) return 0;
+int ray_str_cmp(ray_t* a, ray_t* b) {
+    if (!a || RAY_IS_ERR(a) || !b || RAY_IS_ERR(b)) return 0;
 
-    const char* ap = td_str_ptr(a);
-    const char* bp = td_str_ptr(b);
-    size_t alen = td_str_len(a);
-    size_t blen = td_str_len(b);
+    const char* ap = ray_str_ptr(a);
+    const char* bp = ray_str_ptr(b);
+    size_t alen = ray_str_len(a);
+    size_t blen = ray_str_len(b);
 
     size_t minlen = alen < blen ? alen : blen;
     int cmp = 0;

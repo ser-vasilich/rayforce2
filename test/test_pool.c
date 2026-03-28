@@ -22,52 +22,52 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 #include <math.h>
 
 /* --------------------------------------------------------------------------
- * Test: parallel sum via executor (td_sum on large vector)
+ * Test: parallel sum via executor (ray_sum on large vector)
  *
- * 100k elements above TD_PARALLEL_THRESHOLD (65536) triggers the parallel
+ * 100k elements above RAY_PARALLEL_THRESHOLD (65536) triggers the parallel
  * reduction path in exec.c.
  * -------------------------------------------------------------------------- */
 
 static MunitResult test_parallel_sum(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     int64_t n = 100000;
-    td_t* vec = td_vec_new(TD_I64, n);
+    ray_t* vec = ray_vec_new(RAY_I64, n);
     munit_assert_ptr_not_null(vec);
-    munit_assert_false(TD_IS_ERR(vec));
+    munit_assert_false(RAY_IS_ERR(vec));
     vec->len = n;
 
-    int64_t* vals = (int64_t*)td_data(vec);
+    int64_t* vals = (int64_t*)ray_data(vec);
     for (int64_t i = 0; i < n; i++) vals[i] = i + 1;  /* 1..n */
 
     int64_t expected = n * (n + 1) / 2;
 
-    int64_t col_name = td_sym_intern("val", 3);
-    td_t* tbl = td_table_new(1);
-    tbl = td_table_add_col(tbl, col_name, vec);
+    int64_t col_name = ray_sym_intern("val", 3);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, col_name, vec);
 
-    td_graph_t* g = td_graph_new(tbl);
-    td_op_t* scan = td_scan(g, "val");
-    td_op_t* sum_op = td_sum(g, scan);
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* scan = ray_scan(g, "val");
+    ray_op_t* sum_op = ray_sum(g, scan);
 
-    td_t* result = td_execute(g, sum_op);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    ray_t* result = ray_execute(g, sum_op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
     munit_assert_int(result->i64, ==, expected);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_release(vec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_release(vec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -77,50 +77,50 @@ static MunitResult test_parallel_sum(const void* params, void* data) {
 
 static MunitResult test_parallel_add(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     int64_t n = 100000;
-    td_t* a_vec = td_vec_new(TD_I64, n);
-    td_t* b_vec = td_vec_new(TD_I64, n);
-    munit_assert_false(TD_IS_ERR(a_vec));
-    munit_assert_false(TD_IS_ERR(b_vec));
+    ray_t* a_vec = ray_vec_new(RAY_I64, n);
+    ray_t* b_vec = ray_vec_new(RAY_I64, n);
+    munit_assert_false(RAY_IS_ERR(a_vec));
+    munit_assert_false(RAY_IS_ERR(b_vec));
     a_vec->len = n;
     b_vec->len = n;
 
-    int64_t* a = (int64_t*)td_data(a_vec);
-    int64_t* b = (int64_t*)td_data(b_vec);
+    int64_t* a = (int64_t*)ray_data(a_vec);
+    int64_t* b = (int64_t*)ray_data(b_vec);
     for (int64_t i = 0; i < n; i++) { a[i] = i; b[i] = n - i; }
 
-    int64_t name_a = td_sym_intern("a", 1);
-    int64_t name_b = td_sym_intern("b", 1);
-    td_t* tbl = td_table_new(2);
-    tbl = td_table_add_col(tbl, name_a, a_vec);
-    tbl = td_table_add_col(tbl, name_b, b_vec);
+    int64_t name_a = ray_sym_intern("a", 1);
+    int64_t name_b = ray_sym_intern("b", 1);
+    ray_t* tbl = ray_table_new(2);
+    tbl = ray_table_add_col(tbl, name_a, a_vec);
+    tbl = ray_table_add_col(tbl, name_b, b_vec);
 
-    td_graph_t* g = td_graph_new(tbl);
-    td_op_t* sa = td_scan(g, "a");
-    td_op_t* sb = td_scan(g, "b");
-    td_op_t* add = td_add(g, sa, sb);
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* sa = ray_scan(g, "a");
+    ray_op_t* sb = ray_scan(g, "b");
+    ray_op_t* add = ray_add(g, sa, sb);
 
-    td_t* result = td_execute(g, add);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(result->type, ==, TD_I64);
-    munit_assert_int(td_len(result), ==, n);
+    ray_t* result = ray_execute(g, add);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_I64);
+    munit_assert_int(ray_len(result), ==, n);
 
     /* Every element should be n (i + (n - i)) */
-    int64_t* rdata = (int64_t*)td_data(result);
+    int64_t* rdata = (int64_t*)ray_data(result);
     for (int64_t i = 0; i < n; i++) {
         munit_assert_int(rdata[i], ==, n);
     }
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_release(a_vec);
-    td_release(b_vec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_release(a_vec);
+    ray_release(b_vec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -130,19 +130,19 @@ static MunitResult test_parallel_add(const void* params, void* data) {
 
 static MunitResult test_parallel_group_sum(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     int64_t n = 100000;
-    td_t* id_vec = td_vec_new(TD_I64, n);
-    td_t* v_vec  = td_vec_new(TD_I64, n);
-    munit_assert_false(TD_IS_ERR(id_vec));
-    munit_assert_false(TD_IS_ERR(v_vec));
+    ray_t* id_vec = ray_vec_new(RAY_I64, n);
+    ray_t* v_vec  = ray_vec_new(RAY_I64, n);
+    munit_assert_false(RAY_IS_ERR(id_vec));
+    munit_assert_false(RAY_IS_ERR(v_vec));
     id_vec->len = n;
     v_vec->len = n;
 
-    int64_t* ids = (int64_t*)td_data(id_vec);
-    int64_t* vs  = (int64_t*)td_data(v_vec);
+    int64_t* ids = (int64_t*)ray_data(id_vec);
+    int64_t* vs  = (int64_t*)ray_data(v_vec);
 
     /* 4 groups: ids 0,1,2,3 cycling. v = group_id + 1 */
     for (int64_t i = 0; i < n; i++) {
@@ -157,41 +157,41 @@ static MunitResult test_parallel_group_sum(const void* params, void* data) {
      * group 3: 25000 * 4 = 100000
      */
 
-    int64_t name_id = td_sym_intern("id", 2);
-    int64_t name_v  = td_sym_intern("v", 1);
-    td_t* tbl = td_table_new(2);
-    tbl = td_table_add_col(tbl, name_id, id_vec);
-    tbl = td_table_add_col(tbl, name_v, v_vec);
+    int64_t name_id = ray_sym_intern("id", 2);
+    int64_t name_v  = ray_sym_intern("v", 1);
+    ray_t* tbl = ray_table_new(2);
+    tbl = ray_table_add_col(tbl, name_id, id_vec);
+    tbl = ray_table_add_col(tbl, name_v, v_vec);
 
-    td_graph_t* g = td_graph_new(tbl);
+    ray_graph_t* g = ray_graph_new(tbl);
 
     /* Build group-by using the same API as test_graph.c */
-    td_op_t* key = td_scan(g, "id");
-    td_op_t* val = td_scan(g, "v");
+    ray_op_t* key = ray_scan(g, "id");
+    ray_op_t* val = ray_scan(g, "v");
 
-    td_op_t* key_arr[] = { key };
-    td_op_t* agg_ins[] = { val };
+    ray_op_t* key_arr[] = { key };
+    ray_op_t* agg_ins[] = { val };
     uint16_t agg_ops[] = { OP_SUM };
 
-    td_op_t* grp = td_group(g, key_arr, 1, agg_ops, agg_ins, 1);
+    ray_op_t* grp = ray_group(g, key_arr, 1, agg_ops, agg_ins, 1);
     munit_assert_ptr_not_null(grp);
 
-    td_t* result = td_execute(g, grp);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(result->type, ==, TD_TABLE);
+    ray_t* result = ray_execute(g, grp);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_TABLE);
 
     /* Result should have 4 groups */
-    int64_t nrows = td_table_nrows(result);
+    int64_t nrows = ray_table_nrows(result);
     munit_assert_int(nrows, ==, 4);
 
     /* Extract key and sum columns by index (0=key, 1=agg) */
-    td_t* res_ids = td_table_get_col_idx(result, 0);
-    td_t* res_sums = td_table_get_col_idx(result, 1);
+    ray_t* res_ids = ray_table_get_col_idx(result, 0);
+    ray_t* res_sums = ray_table_get_col_idx(result, 1);
     munit_assert_ptr_not_null(res_ids);
     munit_assert_ptr_not_null(res_sums);
 
-    int64_t* rids = (int64_t*)td_data(res_ids);
-    int64_t* rsums = (int64_t*)td_data(res_sums);
+    int64_t* rids = (int64_t*)ray_data(res_ids);
+    int64_t* rsums = (int64_t*)ray_data(res_sums);
 
     /* Verify sums (order may vary, so match by group id) */
     int64_t expected_sums[] = {25000, 50000, 75000, 100000};
@@ -201,13 +201,13 @@ static MunitResult test_parallel_group_sum(const void* params, void* data) {
         munit_assert_int(rsums[i], ==, expected_sums[gid]);
     }
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_release(id_vec);
-    td_release(v_vec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_release(id_vec);
+    ray_release(v_vec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
@@ -217,103 +217,103 @@ static MunitResult test_parallel_group_sum(const void* params, void* data) {
 
 static MunitResult test_parallel_min_max(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     int64_t n = 100000;
-    td_t* vec = td_vec_new(TD_F64, n);
-    munit_assert_false(TD_IS_ERR(vec));
+    ray_t* vec = ray_vec_new(RAY_F64, n);
+    munit_assert_false(RAY_IS_ERR(vec));
     vec->len = n;
 
-    double* vals = (double*)td_data(vec);
+    double* vals = (double*)ray_data(vec);
     for (int64_t i = 0; i < n; i++) vals[i] = (double)(i - 50000);
     /* Range: -50000.0 to 49999.0 */
 
-    int64_t col_name = td_sym_intern("x", 1);
-    td_t* tbl = td_table_new(1);
-    tbl = td_table_add_col(tbl, col_name, vec);
+    int64_t col_name = ray_sym_intern("x", 1);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, col_name, vec);
 
     /* Test min */
-    td_graph_t* g = td_graph_new(tbl);
-    td_op_t* scan = td_scan(g, "x");
-    td_op_t* min_op = td_min_op(g, scan);
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* scan = ray_scan(g, "x");
+    ray_op_t* min_op = ray_min_op(g, scan);
 
-    td_t* min_result = td_execute(g, min_op);
-    munit_assert_false(TD_IS_ERR(min_result));
-    munit_assert_int(min_result->type, ==, TD_ATOM_F64);
+    ray_t* min_result = ray_execute(g, min_op);
+    munit_assert_false(RAY_IS_ERR(min_result));
+    munit_assert_int(min_result->type, ==, RAY_ATOM_F64);
     munit_assert_double_equal(min_result->f64, -50000.0, 6);
 
-    td_release(min_result);
-    td_graph_free(g);
+    ray_release(min_result);
+    ray_graph_free(g);
 
     /* Test max (new graph, since execute consumes the graph) */
-    g = td_graph_new(tbl);
-    scan = td_scan(g, "x");
-    td_op_t* max_op = td_max_op(g, scan);
+    g = ray_graph_new(tbl);
+    scan = ray_scan(g, "x");
+    ray_op_t* max_op = ray_max_op(g, scan);
 
-    td_t* max_result = td_execute(g, max_op);
-    munit_assert_false(TD_IS_ERR(max_result));
-    munit_assert_int(max_result->type, ==, TD_ATOM_F64);
+    ray_t* max_result = ray_execute(g, max_op);
+    munit_assert_false(RAY_IS_ERR(max_result));
+    munit_assert_int(max_result->type, ==, RAY_ATOM_F64);
     munit_assert_double_equal(max_result->f64, 49999.0, 6);
 
-    td_release(max_result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_release(vec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(max_result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_release(vec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 
 /* --------------------------------------------------------------------------
- * Test: td_cancel() causes td_execute() to return TD_ERR_CANCEL
+ * Test: ray_cancel() causes ray_execute() to return RAY_ERR_CANCEL
  * -------------------------------------------------------------------------- */
 
 static MunitResult test_cancel(const void* params, void* data) {
     (void)params; (void)data;
-    td_heap_init();
-    (void)td_sym_init();
+    ray_heap_init();
+    (void)ray_sym_init();
 
     int64_t n = 100000;
-    td_t* vec = td_vec_new(TD_I64, n);
-    munit_assert_false(TD_IS_ERR(vec));
+    ray_t* vec = ray_vec_new(RAY_I64, n);
+    munit_assert_false(RAY_IS_ERR(vec));
     vec->len = n;
-    int64_t* vals = (int64_t*)td_data(vec);
+    int64_t* vals = (int64_t*)ray_data(vec);
     for (int64_t i = 0; i < n; i++) vals[i] = i + 1;
 
-    int64_t col_name = td_sym_intern("val", 3);
-    td_t* tbl = td_table_new(1);
-    tbl = td_table_add_col(tbl, col_name, vec);
+    int64_t col_name = ray_sym_intern("val", 3);
+    ray_t* tbl = ray_table_new(1);
+    tbl = ray_table_add_col(tbl, col_name, vec);
 
-    /* Set cancel before execute — query should return TD_ERR_CANCEL */
-    td_cancel();
+    /* Set cancel before execute — query should return RAY_ERR_CANCEL */
+    ray_cancel();
 
-    td_graph_t* g = td_graph_new(tbl);
-    td_op_t* scan = td_scan(g, "val");
-    td_op_t* sum_op = td_sum(g, scan);
-    td_t* result = td_execute(g, sum_op);
-    /* td_execute() resets cancel flag at start — first query may succeed */
-    if (!TD_IS_ERR(result)) td_release(result);
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* scan = ray_scan(g, "val");
+    ray_op_t* sum_op = ray_sum(g, scan);
+    ray_t* result = ray_execute(g, sum_op);
+    /* ray_execute() resets cancel flag at start — first query may succeed */
+    if (!RAY_IS_ERR(result)) ray_release(result);
 
-    /* td_execute() resets the flag, so this tests that the next query works */
-    td_graph_free(g);
+    /* ray_execute() resets the flag, so this tests that the next query works */
+    ray_graph_free(g);
 
     /* Now verify normal execution works after cancel was consumed */
-    g = td_graph_new(tbl);
-    scan = td_scan(g, "val");
-    sum_op = td_sum(g, scan);
-    result = td_execute(g, sum_op);
-    munit_assert_false(TD_IS_ERR(result));
-    munit_assert_int(result->type, ==, TD_ATOM_I64);
+    g = ray_graph_new(tbl);
+    scan = ray_scan(g, "val");
+    sum_op = ray_sum(g, scan);
+    result = ray_execute(g, sum_op);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_ATOM_I64);
     int64_t expected = n * (n + 1) / 2;
     munit_assert_int(result->i64, ==, expected);
 
-    td_release(result);
-    td_graph_free(g);
-    td_release(tbl);
-    td_release(vec);
-    td_sym_destroy();
-    td_heap_destroy();
+    ray_release(result);
+    ray_graph_free(g);
+    ray_release(tbl);
+    ray_release(vec);
+    ray_sym_destroy();
+    ray_heap_destroy();
     return MUNIT_OK;
 }
 

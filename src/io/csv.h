@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_CSV_H
-#define TD_CSV_H
+#ifndef RAY_CSV_H
+#define RAY_CSV_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_CSV_H */
+#endif /* RAY_CSV_H */

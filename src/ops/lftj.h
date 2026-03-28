@@ -21,36 +21,36 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_LFTJ_H
-#define TD_LFTJ_H
+#ifndef RAY_LFTJ_H
+#define RAY_LFTJ_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 #include "store/csr.h"
 
 /* Trie iterator over sorted CSR adjacency list */
-typedef struct td_lftj_iter {
+typedef struct ray_lftj_iter {
     int64_t* targets;        /* pointer into CSR targets data */
     int64_t  start;          /* current range start */
     int64_t  end;            /* current range end */
     int64_t  pos;            /* current position in [start, end) */
-} td_lftj_iter_t;
+} ray_lftj_iter_t;
 
 /* O(1) */
-static inline int64_t lftj_key(td_lftj_iter_t* it) {
+static inline int64_t lftj_key(ray_lftj_iter_t* it) {
     if (!it->targets || it->pos >= it->end) return INT64_MAX;
     return it->targets[it->pos];
 }
 
-static inline bool lftj_at_end(td_lftj_iter_t* it) {
+static inline bool lftj_at_end(ray_lftj_iter_t* it) {
     return !it->targets || it->pos >= it->end;
 }
 
-static inline void lftj_next(td_lftj_iter_t* it) {
+static inline void lftj_next(ray_lftj_iter_t* it) {
     if (it->pos < it->end) it->pos++;
 }
 
 /* O(log degree) - binary search within [pos, end) */
-static inline void lftj_seek(td_lftj_iter_t* it, int64_t v) {
+static inline void lftj_seek(ray_lftj_iter_t* it, int64_t v) {
     if (!it->targets) { it->pos = it->end; return; }
     int64_t lo = it->pos, hi = it->end;
     while (lo < hi) {
@@ -62,21 +62,21 @@ static inline void lftj_seek(td_lftj_iter_t* it, int64_t v) {
 }
 
 /* Open trie level: set iterator to a node's adjacency list */
-static inline void lftj_open(td_lftj_iter_t* it, td_csr_t* csr, int64_t parent) {
+static inline void lftj_open(ray_lftj_iter_t* it, ray_csr_t* csr, int64_t parent) {
     if (!csr || !csr->offsets || !csr->targets
         || parent < 0 || parent >= csr->n_nodes) {
         it->targets = NULL; it->start = 0; it->end = 0; it->pos = 0;
         return;
     }
-    int64_t* o = (int64_t*)td_data(csr->offsets);
-    it->targets = (int64_t*)td_data(csr->targets);
+    int64_t* o = (int64_t*)ray_data(csr->offsets);
+    it->targets = (int64_t*)ray_data(csr->targets);
     it->start = o[parent];
     it->end   = o[parent + 1];
     it->pos   = it->start;
 }
 
 /* Leapfrog search: intersect k sorted iterators */
-bool leapfrog_search(td_lftj_iter_t** iters, int k, int64_t* out);
+bool leapfrog_search(ray_lftj_iter_t** iters, int k, int64_t* out);
 
 /* --------------------------------------------------------------------------
  * General LFTJ enumeration
@@ -88,7 +88,7 @@ bool leapfrog_search(td_lftj_iter_t** iters, int k, int64_t* out);
 /* Binding entry: one iterator constraint on a variable.
  * "Open CSR `csr` at the node bound to `bound_var`" */
 typedef struct lftj_binding {
-    td_csr_t* csr;           /* CSR to open (fwd or rev of some rel) */
+    ray_csr_t* csr;           /* CSR to open (fwd or rev of some rel) */
     uint8_t   bound_var;     /* index of already-bound variable providing the parent node */
 } lftj_binding_t;
 
@@ -108,7 +108,7 @@ typedef struct lftj_enum_ctx {
     int64_t**       col_data;    /* [n_vars] arrays of output values */
     int64_t         out_count;
     int64_t         out_cap;
-    td_t*           buf_hdrs[LFTJ_MAX_VARS]; /* scratch headers for realloc */
+    ray_t*           buf_hdrs[LFTJ_MAX_VARS]; /* scratch headers for realloc */
     bool            oom;         /* set on allocation failure */
 } lftj_enum_ctx_t;
 
@@ -118,7 +118,7 @@ typedef struct lftj_enum_ctx {
  * The caller encodes this mapping as (src_var, dst_var) pairs.
  * Returns true on success. */
 bool lftj_build_plan(lftj_enum_ctx_t* ctx,
-                     td_rel_t** rels, uint8_t n_rels, uint8_t n_vars,
+                     ray_rel_t** rels, uint8_t n_rels, uint8_t n_vars,
                      const uint8_t* rel_src_var, const uint8_t* rel_dst_var);
 
 /* Build default binding plan for simple patterns.
@@ -126,11 +126,11 @@ bool lftj_build_plan(lftj_enum_ctx_t* ctx,
  * 2-var (n_vars=2): all rels connect var 0→var 1
  * Returns true on success, false if pattern not recognized. */
 bool lftj_build_default_plan(lftj_enum_ctx_t* ctx,
-                             td_rel_t** rels, uint8_t n_rels, uint8_t n_vars);
+                             ray_rel_t** rels, uint8_t n_rels, uint8_t n_vars);
 
 /* Recursive backtracking enumeration.
  * Caller must initialize ctx->col_data, out_cap, out_count=0, buf_hdrs.
  * Populates ctx->col_data with matching tuples. */
 void lftj_enumerate(lftj_enum_ctx_t* ctx, uint8_t depth);
 
-#endif /* TD_LFTJ_H */
+#endif /* RAY_LFTJ_H */

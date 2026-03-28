@@ -21,11 +21,11 @@
  *   SOFTWARE.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdio.h>
 
 /* Duplicate of find_ext() from opt.c — kept local for self-containment. */
-static td_op_ext_t* find_ext(td_graph_t* g, uint32_t node_id) {
+static ray_op_ext_t* find_ext(ray_graph_t* g, uint32_t node_id) {
     for (uint32_t i = 0; i < g->ext_count; i++) {
         if (g->ext_nodes[i] && g->ext_nodes[i]->base.id == node_id)
             return g->ext_nodes[i];
@@ -123,24 +123,24 @@ static const char* opcode_name(uint16_t op) {
 
 static const char* type_name(int8_t t) {
     switch (t) {
-        case TD_LIST:      return "LIST";
-        case TD_BOOL:      return "BOOL";
-        case TD_U8:        return "U8";
-        case TD_I16:       return "I16";
-        case TD_I32:       return "I32";
-        case TD_I64:       return "I64";
-        case TD_F64:       return "F64";
-        case TD_DATE:      return "DATE";
-        case TD_TIME:      return "TIME";
-        case TD_TIMESTAMP: return "TIMESTAMP";
-        case TD_TABLE:     return "TABLE";
-        case TD_SEL:       return "SEL";
-        case TD_SYM:       return "SYM";
+        case RAY_LIST:      return "LIST";
+        case RAY_BOOL:      return "BOOL";
+        case RAY_U8:        return "U8";
+        case RAY_I16:       return "I16";
+        case RAY_I32:       return "I32";
+        case RAY_I64:       return "I64";
+        case RAY_F64:       return "F64";
+        case RAY_DATE:      return "DATE";
+        case RAY_TIME:      return "TIME";
+        case RAY_TIMESTAMP: return "TIMESTAMP";
+        case RAY_TABLE:     return "TABLE";
+        case RAY_SEL:       return "SEL";
+        case RAY_SYM:       return "SYM";
         default:           return "?";
     }
 }
 
-static void dump_node(FILE* f, td_graph_t* g, td_op_t* node, int depth) {
+static void dump_node(FILE* f, ray_graph_t* g, ray_op_t* node, int depth) {
     if (!node) return;
 
     /* Indentation */
@@ -151,25 +151,25 @@ static void dump_node(FILE* f, td_graph_t* g, td_op_t* node, int depth) {
     fprintf(f, "%s", opcode_name(node->opcode));
 
     /* Find extended node for annotations */
-    td_op_ext_t* ext = find_ext(g, node->id);
+    ray_op_ext_t* ext = find_ext(g, node->id);
 
     /* Annotations by opcode */
     switch (node->opcode) {
         case OP_SCAN:
             if (ext) {
-                td_t* s = td_sym_str(ext->sym);
+                ray_t* s = ray_sym_str(ext->sym);
                 if (s)
-                    fprintf(f, "(%.*s)", (int)s->len, (char*)td_data(s));
+                    fprintf(f, "(%.*s)", (int)s->len, (char*)ray_data(s));
             }
             break;
         case OP_CONST:
             if (ext && ext->literal) {
-                td_t* lit = ext->literal;
+                ray_t* lit = ext->literal;
                 switch (lit->type) {
-                    case TD_I64:  fprintf(f, "(%lld)", (long long)lit->i64); break;
-                    case TD_F64:  fprintf(f, "(%.6g)", lit->f64); break;
-                    case TD_BOOL: fprintf(f, "(%s)", lit->i64 ? "true" : "false"); break;
-                    case TD_TABLE:fprintf(f, "(table)"); break;
+                    case RAY_I64:  fprintf(f, "(%lld)", (long long)lit->i64); break;
+                    case RAY_F64:  fprintf(f, "(%.6g)", lit->f64); break;
+                    case RAY_BOOL: fprintf(f, "(%s)", lit->i64 ? "true" : "false"); break;
+                    case RAY_TABLE:fprintf(f, "(table)"); break;
                     default:      fprintf(f, "(?)"); break;
                 }
             }
@@ -242,7 +242,7 @@ static void dump_node(FILE* f, td_graph_t* g, td_op_t* node, int depth) {
     }
 }
 
-void td_graph_dump(td_graph_t* g, td_op_t* root, void* out) {
+void ray_graph_dump(ray_graph_t* g, ray_op_t* root, void* out) {
     FILE* f = out ? (FILE*)out : stderr;
     fprintf(f, "=== Query Plan ===\n");
     dump_node(f, g, root, 0);

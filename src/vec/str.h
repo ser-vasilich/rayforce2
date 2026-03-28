@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_STR_H
-#define TD_STR_H
+#ifndef RAY_STR_H
+#define RAY_STR_H
 
 /*
  * str.h -- String helper functions.
@@ -31,6 +31,6 @@
  * Long strings store data in a CHAR vector pointed to by obj.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_STR_H */
+#endif /* RAY_STR_H */

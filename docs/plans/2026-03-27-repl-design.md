@@ -5,7 +5,7 @@
 
 ## Overview
 
-Port Rayforce's `app/term.c`/`repl.c` terminal layer to Teide, adapting types and allocator. Extend beyond Rayforce with popup suggestion menus and context-aware column name completion.
+Port Rayforce's `app/term.c`/`repl.c` terminal layer to Rayforce, adapting types and allocator. Extend beyond Rayforce with popup suggestion menus and context-aware column name completion.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ All rendering is ANSI escape codes written to fd 1 via `write()`. All input is r
 ### Structures
 
 ```c
-typedef struct td_hist {
+typedef struct ray_hist {
     int64_t  fd;                    // history file fd
     char    *entries;               // mmap'd history data
     int64_t  size;                  // total size
@@ -36,15 +36,15 @@ typedef struct td_hist {
     int64_t  line_count;            // total lines for error traces
     int64_t *line_offsets;          // byte offset of each line start
     int64_t  line_offsets_cap;
-} td_hist_t;
+} ray_hist_t;
 
 typedef struct {
     int64_t entry;                  // completion source index
     int64_t index;                  // position within source
     int64_t sbidx;                  // sub-index for history scan
-} td_autocp_idx_t;
+} ray_autocp_idx_t;
 
-typedef struct td_term {
+typedef struct ray_term {
 #if defined(_WIN32)
     HANDLE   h_stdin, h_stdout;
     DWORD    old_stdin_mode, old_stdout_mode;
@@ -58,11 +58,11 @@ typedef struct td_term {
     char     buf[4096];             // current line buffer
     int32_t  multiline_len;
     char     multiline_buf[4096];   // accumulated multi-line input
-    td_autocp_idx_t autocp_idx;
+    ray_autocp_idx_t autocp_idx;
     int32_t  autocp_buf_len;
     int32_t  autocp_buf_pos;
     char     autocp_buf[4096];      // saved buffer for cycling completions
-    td_hist_t *hist;
+    ray_hist_t *hist;
     int32_t  term_width;
     int32_t  term_height;
     int32_t  prompt_len;
@@ -75,7 +75,7 @@ typedef struct td_term {
     int32_t  popup_count;           // number of candidates
     int32_t  popup_scroll;          // scroll offset for long lists
     char   **popup_items;           // candidate strings (borrowed pointers)
-} td_term_t;
+} ray_term_t;
 ```
 
 ### Key Codes
@@ -84,10 +84,10 @@ Same defines as Rayforce: `KEYCODE_RETURN`, `KEYCODE_BACKSPACE`, `KEYCODE_TAB`, 
 
 ### Terminal Operations
 
-- `td_term_create()` — save termios, enable raw mode, load history file
-- `td_term_destroy()` — restore termios, save history, free resources
-- `td_term_getc()` — `read(0, &c, 1)`, decode escape sequences (arrows, home/end, function keys)
-- `td_term_get_size()` — `ioctl(TIOCGWINSZ)` / `GetConsoleScreenBufferInfo`
+- `ray_term_create()` — save termios, enable raw mode, load history file
+- `ray_term_destroy()` — restore termios, save history, free resources
+- `ray_term_getc()` — `read(0, &c, 1)`, decode escape sequences (arrows, home/end, function keys)
+- `ray_term_get_size()` — `ioctl(TIOCGWINSZ)` / `GetConsoleScreenBufferInfo`
 - Cursor helpers: `cursor_move_start/left/right/up/down`, `line_clear/clear_below`, `cursor_hide/show`
 - `term_visual_width()` — count visible characters, skip ANSI escapes, handle UTF-8 multi-byte
 
@@ -106,7 +106,7 @@ Same defines as Rayforce: `KEYCODE_RETURN`, `KEYCODE_BACKSPACE`, `KEYCODE_TAB`, 
 | Comments `; ...` | Dark gray | `\033[90m` |
 | Numbers | Default | (no code) |
 
-Keyword/builtin detection uses `td_env_lookup_prefix()` — a new function in `env.c` that prefix-matches against all registered function names. This is the same approach as Rayforce's `env_get_internal_function_name()`.
+Keyword/builtin detection uses `ray_env_lookup_prefix()` — a new function in `env.c` that prefix-matches against all registered function names. This is the same approach as Rayforce's `env_get_internal_function_name()`.
 
 **Bracket matching:** When cursor is on a paren/bracket, scan for the matching pair (stack-based) and render both with bold/underline highlight.
 
@@ -114,7 +114,7 @@ Keyword/builtin detection uses `td_env_lookup_prefix()` — a new function in `e
 
 ### Completion Sources (checked in order)
 
-1. **Environment** — all builtins + user variables from `td_env`. `td_env_lookup_prefix(prefix, len, results, max)` returns matching names.
+1. **Environment** — all builtins + user variables from `ray_env`. `ray_env_lookup_prefix(prefix, len, results, max)` returns matching names.
 2. **Keywords** — `fn`, `do`, `if`, `let`, `set`, `true`, `false`, `from`, `where`, `by`. Static sorted array.
 3. **Column names** — when cursor is inside `(select {from: <table> ...})`, extract the table variable name, resolve it from env, get column names. Lightweight buffer scan to detect context.
 4. **History** — scan history entries for words starting with prefix. Deduplicate against sources 1-3.
@@ -158,9 +158,9 @@ The continuation prompt is shorter than the main prompt, matching Rayforce's pat
 
 ## History
 
-- **Storage:** `~/.teide_history`, mmap'd for fast access, append-only during session
+- **Storage:** `~/.rayforce_history`, mmap'd for fast access, append-only during session
 - **Navigation:** Up/Down arrows. Current input saved before entering history, restored on Down past newest.
-- **Persistence:** Save on `td_term_destroy()`, load on `td_term_create()`
+- **Persistence:** Save on `ray_term_destroy()`, load on `ray_term_create()`
 - **Search:** Ctrl-R enters reverse incremental search mode — type to filter, show matching history entry with highlight
 - **Multi-line entries:** Stored as single entries with embedded newlines
 
@@ -190,39 +190,39 @@ The continuation prompt is shorter than the main prompt, matching Rayforce's pat
 
 ```
 src/app/
-├── term.h       # td_term_t, td_hist_t, key codes, cursor helpers
+├── term.h       # ray_term_t, ray_hist_t, key codes, cursor helpers
 ├── term.c       # Raw terminal, input, highlighting, autocomplete, popup
-├── repl.h       # td_repl_t lifecycle
+├── repl.h       # ray_repl_t lifecycle
 ├── repl.c       # Read-eval-print loop, result formatting
 
 src/lang/
-├── repl.c       # main() binary — creates td_repl_t, runs it (updated)
+├── repl.c       # main() binary — creates ray_repl_t, runs it (updated)
 ```
 
 **Changes to existing files:**
-- `src/lang/env.c` — add `td_env_lookup_prefix()` for completion matching
-- `src/lang/env.h` — declare `td_env_lookup_prefix()`
-- `CMakeLists.txt` — add `src/app/*.c` to libteide sources
+- `src/lang/env.c` — add `ray_env_lookup_prefix()` for completion matching
+- `src/lang/env.h` — declare `ray_env_lookup_prefix()`
+- `CMakeLists.txt` — add `src/app/*.c` to librayforce sources
 
 ## API
 
 ```c
 // term.h — terminal layer
-td_term_t* td_term_create(void);
-void       td_term_destroy(td_term_t* term);
-int64_t    td_term_getc(td_term_t* term);
-td_t*      td_term_read(td_term_t* term);    // full line editing, returns string or NULL
-void       td_term_prompt(td_term_t* term);
-void       td_term_redraw(td_term_t* term);
+ray_term_t* ray_term_create(void);
+void       ray_term_destroy(ray_term_t* term);
+int64_t    ray_term_getc(ray_term_t* term);
+ray_t*      ray_term_read(ray_term_t* term);    // full line editing, returns string or NULL
+void       ray_term_prompt(ray_term_t* term);
+void       ray_term_redraw(ray_term_t* term);
 
 // repl.h — REPL lifecycle
-td_repl_t* td_repl_create(void);
-void       td_repl_destroy(td_repl_t* repl);
-int        td_repl_run(td_repl_t* repl);
-int        td_repl_run_file(td_repl_t* repl, const char* path);
+ray_repl_t* ray_repl_create(void);
+void       ray_repl_destroy(ray_repl_t* repl);
+int        ray_repl_run(ray_repl_t* repl);
+int        ray_repl_run_file(ray_repl_t* repl, const char* path);
 
 // env.h — new completion API
-int64_t    td_env_lookup_prefix(const char* prefix, int64_t len,
+int64_t    ray_env_lookup_prefix(const char* prefix, int64_t len,
                                  const char** results, int64_t max_results);
 ```
 

@@ -28,26 +28,26 @@
  * Capacity helpers (same pattern as vec.c)
  * -------------------------------------------------------------------------- */
 
-static int64_t list_capacity(td_t* list) {
+static int64_t list_capacity(ray_t* list) {
     size_t block_size = (size_t)1 << list->order;
-    size_t data_space = block_size - 32;  /* 32B td_t header */
-    return (int64_t)(data_space / sizeof(td_t*));
+    size_t data_space = block_size - 32;  /* 32B ray_t header */
+    return (int64_t)(data_space / sizeof(ray_t*));
 }
 
 /* --------------------------------------------------------------------------
- * td_list_new
+ * ray_list_new
  * -------------------------------------------------------------------------- */
 
-td_t* td_list_new(int64_t capacity) {
-    if (capacity < 0) return TD_ERR_PTR(TD_ERR_RANGE);
-    if ((uint64_t)capacity > SIZE_MAX / sizeof(td_t*))
-        return TD_ERR_PTR(TD_ERR_OOM);
-    size_t data_size = (size_t)capacity * sizeof(td_t*);
+ray_t* ray_list_new(int64_t capacity) {
+    if (capacity < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if ((uint64_t)capacity > SIZE_MAX / sizeof(ray_t*))
+        return RAY_ERR_PTR(RAY_ERR_OOM);
+    size_t data_size = (size_t)capacity * sizeof(ray_t*);
 
-    td_t* list = td_alloc(data_size);
-    if (!list || TD_IS_ERR(list)) return list;
+    ray_t* list = ray_alloc(data_size);
+    if (!list || RAY_IS_ERR(list)) return list;
 
-    list->type = TD_LIST;
+    list->type = RAY_LIST;
     list->len = 0;
     list->attrs = 0;
     memset(list->nullmap, 0, 16);
@@ -56,78 +56,78 @@ td_t* td_list_new(int64_t capacity) {
 }
 
 /* --------------------------------------------------------------------------
- * td_list_append
+ * ray_list_append
  * -------------------------------------------------------------------------- */
 
-td_t* td_list_append(td_t* list, td_t* item) {
-    if (!list || TD_IS_ERR(list)) return list;
+ray_t* ray_list_append(ray_t* list, ray_t* item) {
+    if (!list || RAY_IS_ERR(list)) return list;
 
     /* COW if shared */
-    list = td_cow(list);
-    if (!list || TD_IS_ERR(list)) return list;
+    list = ray_cow(list);
+    if (!list || RAY_IS_ERR(list)) return list;
 
     int64_t cap = list_capacity(list);
 
     /* Grow if needed */
     if (list->len >= cap) {
-        size_t new_data_size = (size_t)(list->len + 1) * sizeof(td_t*);
+        size_t new_data_size = (size_t)(list->len + 1) * sizeof(ray_t*);
         if (new_data_size < 32) new_data_size = 32;
         else {
             size_t s = 32;
             while (s < new_data_size) {
-                if (s > SIZE_MAX / 2) return TD_ERR_PTR(TD_ERR_OOM);
+                if (s > SIZE_MAX / 2) return RAY_ERR_PTR(RAY_ERR_OOM);
                 s *= 2;
             }
             new_data_size = s;
         }
-        td_t* new_list = td_scratch_realloc(list, new_data_size);
-        if (!new_list || TD_IS_ERR(new_list)) return new_list;
+        ray_t* new_list = ray_scratch_realloc(list, new_data_size);
+        if (!new_list || RAY_IS_ERR(new_list)) return new_list;
         list = new_list;
     }
 
     /* Store item pointer and retain it */
-    td_t** slots = (td_t**)td_data(list);
+    ray_t** slots = (ray_t**)ray_data(list);
     slots[list->len] = item;
-    if (item) td_retain(item);
+    if (item) ray_retain(item);
     list->len++;
 
     return list;
 }
 
 /* --------------------------------------------------------------------------
- * td_list_get
+ * ray_list_get
  * -------------------------------------------------------------------------- */
 
-td_t* td_list_get(td_t* list, int64_t idx) {
-    if (!list || TD_IS_ERR(list)) return NULL;
+ray_t* ray_list_get(ray_t* list, int64_t idx) {
+    if (!list || RAY_IS_ERR(list)) return NULL;
     if (idx < 0 || idx >= list->len) return NULL;
 
-    td_t** slots = (td_t**)td_data(list);
+    ray_t** slots = (ray_t**)ray_data(list);
     return slots[idx];
 }
 
 /* --------------------------------------------------------------------------
- * td_list_set
+ * ray_list_set
  * -------------------------------------------------------------------------- */
 
-td_t* td_list_set(td_t* list, int64_t idx, td_t* item) {
-    if (!list || TD_IS_ERR(list)) return list;
+ray_t* ray_list_set(ray_t* list, int64_t idx, ray_t* item) {
+    if (!list || RAY_IS_ERR(list)) return list;
     if (idx < 0 || idx >= list->len)
-        return TD_ERR_PTR(TD_ERR_RANGE);
+        return RAY_ERR_PTR(RAY_ERR_RANGE);
 
     /* COW if shared */
-    list = td_cow(list);
-    if (!list || TD_IS_ERR(list)) return list;
+    list = ray_cow(list);
+    if (!list || RAY_IS_ERR(list)) return list;
 
-    td_t** slots = (td_t**)td_data(list);
+    ray_t** slots = (ray_t**)ray_data(list);
 
     /* Release old item */
-    td_t* old = slots[idx];
-    if (old) td_release(old);
+    ray_t* old = slots[idx];
+    if (old) ray_release(old);
 
     /* Store new item and retain it */
     slots[idx] = item;
-    if (item) td_retain(item);
+    if (item) ray_retain(item);
 
     return list;
 }

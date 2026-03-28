@@ -1,7 +1,7 @@
-#ifndef TD_EVAL_H
-#define TD_EVAL_H
+#ifndef RAY_EVAL_H
+#define RAY_EVAL_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdio.h>
 
 /* ===== VM Bytecode Opcodes ===== */
@@ -20,7 +20,7 @@ enum {
     OP_CALLN,         /* call variadic: operand = argc, pop fn + N args */
     OP_CALLF,         /* call compiled lambda: push frame, jump to callee */
     OP_CALLS,         /* tail call: reuse frame */
-    OP_CALLD,         /* dynamic dispatch: fallback to td_eval() */
+    OP_CALLD,         /* dynamic dispatch: fallback to ray_eval() */
     OP_DUP,           /* duplicate top of stack */
     OP_LOADCONST_W,   /* push constant pool[operand] (2-byte index) */
     OP_RESOLVE_W,     /* resolve global name: 2-byte constant pool index */
@@ -31,32 +31,32 @@ enum {
 
 /* ===== Compiled Lambda Layout =====
  *
- * A TD_ATOM_LAMBDA object with attrs & TD_FN_COMPILED stores compiled
+ * A RAY_ATOM_LAMBDA object with attrs & RAY_FN_COMPILED stores compiled
  * bytecode in its data area:
  *
- *   data[0] = td_t* params_list   (same as interpreted)
- *   data[1] = td_t* body          (parsed body, same as interpreted)
- *   data[2] = td_t* bytecode      (TD_U8 vector of opcodes)
- *   data[3] = td_t* constants     (TD_LIST of constant pool entries)
+ *   data[0] = ray_t* params_list   (same as interpreted)
+ *   data[1] = ray_t* body          (parsed body, same as interpreted)
+ *   data[2] = ray_t* bytecode      (RAY_U8 vector of opcodes)
+ *   data[3] = ray_t* constants     (RAY_LIST of constant pool entries)
  *   data[4] = int32_t n_locals    (number of local slots needed)
  */
 
-#define TD_FN_COMPILED  0x40   /* lambda has been compiled to bytecode */
+#define RAY_FN_COMPILED  0x40   /* lambda has been compiled to bytecode */
 
-#define LAMBDA_PARAMS(lam)    (((td_t**)td_data(lam))[0])
-#define LAMBDA_BODY(lam)      (((td_t**)td_data(lam))[1])
-#define LAMBDA_BC(lam)        (((td_t**)td_data(lam))[2])
-#define LAMBDA_CONSTS(lam)    (((td_t**)td_data(lam))[3])
-#define LAMBDA_NLOCALS(lam)   (*((int32_t*)&((td_t**)td_data(lam))[4]))
+#define LAMBDA_PARAMS(lam)    (((ray_t**)ray_data(lam))[0])
+#define LAMBDA_BODY(lam)      (((ray_t**)ray_data(lam))[1])
+#define LAMBDA_BC(lam)        (((ray_t**)ray_data(lam))[2])
+#define LAMBDA_CONSTS(lam)    (((ray_t**)ray_data(lam))[3])
+#define LAMBDA_NLOCALS(lam)   (*((int32_t*)&((ray_t**)ray_data(lam))[4]))
 
-#define LAMBDA_IS_COMPILED(lam) ((lam)->attrs & TD_FN_COMPILED)
+#define LAMBDA_IS_COMPILED(lam) ((lam)->attrs & RAY_FN_COMPILED)
 
 /* ===== VM Types ===== */
 
 #define VM_STACK_SIZE 1024
 
 typedef struct {
-    td_t   *fn;     /* lambda being executed */
+    ray_t   *fn;     /* lambda being executed */
     int32_t fp;     /* frame pointer */
     int32_t ip;     /* instruction pointer */
 } vm_ctx_t;
@@ -65,7 +65,7 @@ typedef struct {
     int32_t  rp;        /* return stack depth at trap point */
     int32_t  sp;        /* stack depth at trap point */
     int32_t  handler_ip;/* IP of handler code */
-    td_t    *fn;        /* function containing handler code */
+    ray_t    *fn;        /* function containing handler code */
     int32_t  fp;        /* frame pointer at trap point */
     int32_t  n_locals;  /* n_locals at trap point */
 } vm_trap_t;
@@ -77,40 +77,40 @@ typedef struct {
     int32_t  fp;                    /* frame pointer */
     int32_t  rp;                    /* return stack pointer */
     int32_t  id;                    /* VM identifier */
-    td_t    *fn;                    /* current lambda */
+    ray_t    *fn;                    /* current lambda */
     void    *heap;                  /* heap pointer (future use) */
     int32_t  tp;                    /* trap stack pointer */
-    td_t    *ps[VM_STACK_SIZE];     /* program stack */
+    ray_t    *ps[VM_STACK_SIZE];     /* program stack */
     vm_ctx_t rs[VM_STACK_SIZE];     /* return stack */
     vm_trap_t ts[VM_TRAP_SIZE];     /* trap frames */
-} td_vm_t;
+} ray_vm_t;
 
 /* ===== Public API ===== */
 
 /* Initialize the Rayfall runtime: symbols, environment, builtins. */
-td_err_t td_lang_init(void);
-void     td_lang_destroy(void);
+ray_err_t ray_lang_init(void);
+void     ray_lang_destroy(void);
 
-/* Evaluate a parsed td_t object tree. */
-td_t* td_eval(td_t* obj);
+/* Evaluate a parsed ray_t object tree. */
+ray_t* ray_eval(ray_t* obj);
 
 /* Parse + eval convenience. */
-td_t* td_eval_str(const char* source);
+ray_t* ray_eval_str(const char* source);
 
 /* Compile a lambda's body to bytecode. Called lazily on first invocation. */
-void td_compile(td_t* lambda);
+void ray_compile(ray_t* lambda);
 
-/* Reset compiler cached state (call from td_lang_destroy). */
-void td_compile_reset(void);
+/* Reset compiler cached state (call from ray_lang_destroy). */
+void ray_compile_reset(void);
 
-/* Print a td_t value to a FILE stream. */
-void td_lang_print(FILE* fp, td_t* val);
+/* Print a ray_t value to a FILE stream. */
+void ray_lang_print(FILE* fp, ray_t* val);
 
 /* Interrupt support: allow external code (REPL signal handler) to request
- * that the evaluator abort early.  td_eval() and the bytecode VM check
+ * that the evaluator abort early.  ray_eval() and the bytecode VM check
  * this flag at function-call and loop boundaries. */
-void td_eval_request_interrupt(void);
-void td_eval_clear_interrupt(void);
-int  td_eval_is_interrupted(void);
+void ray_eval_request_interrupt(void);
+void ray_eval_clear_interrupt(void);
+int  ray_eval_is_interrupted(void);
 
-#endif /* TD_EVAL_H */
+#endif /* RAY_EVAL_H */

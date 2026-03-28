@@ -21,10 +21,10 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_HNSW_H
-#define TD_HNSW_H
+#ifndef RAY_HNSW_H
+#define RAY_HNSW_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* ---------- HNSW Index ----------
  *
@@ -45,14 +45,14 @@
 #define HNSW_DEFAULT_EF_C  200
 #define HNSW_DEFAULT_EF_S  50
 
-typedef struct td_hnsw_layer {
+typedef struct ray_hnsw_layer {
     int64_t*  neighbors;     /* flat array: n_nodes_in_layer * M_max entries */
     int64_t   n_nodes;       /* number of nodes in this layer */
     int64_t   M_max;         /* max neighbors per node in this layer */
     int64_t*  node_ids;      /* mapping: layer_idx -> global node id */
-} td_hnsw_layer_t;
+} ray_hnsw_layer_t;
 
-typedef struct td_hnsw {
+typedef struct ray_hnsw {
     int64_t          n_nodes;         /* total number of vectors */
     int32_t          dim;             /* embedding dimension */
     int32_t          n_layers;        /* number of layers (including layer 0) */
@@ -61,31 +61,31 @@ typedef struct td_hnsw {
     int32_t          ef_construction;  /* beam width during construction */
     int64_t          entry_point;     /* entry point node (highest layer) */
     int8_t*          node_level;      /* max layer for each node (n_nodes entries) */
-    td_hnsw_layer_t  layers[HNSW_MAX_LAYERS];
+    ray_hnsw_layer_t  layers[HNSW_MAX_LAYERS];
     const float*     vectors;         /* pointer to embedding data (not owned) */
     bool             owns_data;       /* true if loaded from disk (owns neighbor arrays etc.) */
-} td_hnsw_t;
+} ray_hnsw_t;
 
 /* --- Build / Free --- */
-td_hnsw_t* td_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
+ray_hnsw_t* ray_hnsw_build(const float* vectors, int64_t n_nodes, int32_t dim,
                            int32_t M, int32_t ef_construction);
-void td_hnsw_free(td_hnsw_t* idx);
+void ray_hnsw_free(ray_hnsw_t* idx);
 
 /* --- Search --- */
 /* Returns top-K nearest neighbors as (node_id, distance) pairs.
  * out_ids and out_dists must be pre-allocated with k entries.
  * Returns actual number of results (may be < k). */
-int64_t td_hnsw_search(const td_hnsw_t* idx,
+int64_t ray_hnsw_search(const ray_hnsw_t* idx,
                          const float* query, int32_t dim,
                          int64_t k, int32_t ef_search,
                          int64_t* out_ids, double* out_dists);
 
 /* --- Accessors --- */
-int32_t td_hnsw_dim(const td_hnsw_t* idx);
+int32_t ray_hnsw_dim(const ray_hnsw_t* idx);
 
 /* --- Persistence --- */
-td_err_t td_hnsw_save(const td_hnsw_t* idx, const char* dir);
-td_hnsw_t* td_hnsw_load(const char* dir);
-td_hnsw_t* td_hnsw_mmap(const char* dir);
+ray_err_t ray_hnsw_save(const ray_hnsw_t* idx, const char* dir);
+ray_hnsw_t* ray_hnsw_load(const char* dir);
+ray_hnsw_t* ray_hnsw_mmap(const char* dir);
 
-#endif /* TD_HNSW_H */
+#endif /* RAY_HNSW_H */

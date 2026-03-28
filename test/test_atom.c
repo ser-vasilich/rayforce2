@@ -22,7 +22,7 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -30,13 +30,13 @@
 
 static void* atom_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    td_heap_init();
+    ray_heap_init();
     return NULL;
 }
 
 static void atom_teardown(void* fixture) {
     (void)fixture;
-    td_heap_destroy();
+    ray_heap_destroy();
 }
 
 /* ---- Bool atom --------------------------------------------------------- */
@@ -44,18 +44,18 @@ static void atom_teardown(void* fixture) {
 static MunitResult test_atom_bool(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* t = td_bool(true);
+    ray_t* t = ray_bool(true);
     munit_assert_ptr_not_null(t);
-    munit_assert_false(TD_IS_ERR(t));
-    munit_assert_true(td_is_atom(t));
-    munit_assert_int(t->type, ==, TD_ATOM_BOOL);
+    munit_assert_false(RAY_IS_ERR(t));
+    munit_assert_true(ray_is_atom(t));
+    munit_assert_int(t->type, ==, RAY_ATOM_BOOL);
     munit_assert_uint(t->b8, ==, 1);
-    td_release(t);
+    ray_release(t);
 
-    td_t* f = td_bool(false);
-    munit_assert_int(f->type, ==, TD_ATOM_BOOL);
+    ray_t* f = ray_bool(false);
+    munit_assert_int(f->type, ==, RAY_ATOM_BOOL);
     munit_assert_uint(f->b8, ==, 0);
-    td_release(f);
+    ray_release(f);
 
     return MUNIT_OK;
 }
@@ -65,12 +65,12 @@ static MunitResult test_atom_bool(const void* params, void* fixture) {
 static MunitResult test_atom_u8(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_u8(255);
+    ray_t* v = ray_u8(255);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_U8);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_U8);
     munit_assert_uint(v->u8, ==, 255);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -80,12 +80,12 @@ static MunitResult test_atom_u8(const void* params, void* fixture) {
 static MunitResult test_atom_char(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_char('Z');
+    ray_t* v = ray_char('Z');
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_CHAR);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_CHAR);
     munit_assert_int(v->c8, ==, 'Z');
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -95,12 +95,12 @@ static MunitResult test_atom_char(const void* params, void* fixture) {
 static MunitResult test_atom_i16(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_i16(-1234);
+    ray_t* v = ray_i16(-1234);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_I16);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_I16);
     munit_assert_int(v->i16, ==, -1234);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -110,12 +110,12 @@ static MunitResult test_atom_i16(const void* params, void* fixture) {
 static MunitResult test_atom_i32(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_i32(1000000);
+    ray_t* v = ray_i32(1000000);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_I32);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_I32);
     munit_assert_int(v->i32, ==, 1000000);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -125,12 +125,12 @@ static MunitResult test_atom_i32(const void* params, void* fixture) {
 static MunitResult test_atom_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_i64(9876543210LL);
+    ray_t* v = ray_i64(9876543210LL);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_I64);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_I64);
     munit_assert_int(v->i64, ==, 9876543210LL);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -140,12 +140,12 @@ static MunitResult test_atom_i64(const void* params, void* fixture) {
 static MunitResult test_atom_f64(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_f64(3.14159265358979);
+    ray_t* v = ray_f64(3.14159265358979);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_F64);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_F64);
     munit_assert_double(v->f64, ==, 3.14159265358979);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -156,27 +156,27 @@ static MunitResult test_atom_str_sso(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
     const char* s = "hello";
-    td_t* v = td_str(s, 5);
+    ray_t* v = ray_str(s, 5);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_STR);
+    munit_assert_false(RAY_IS_ERR(v));
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_STR);
     munit_assert_uint(v->slen, ==, 5);
     munit_assert_memory_equal(5, v->sdata, "hello");
-    td_release(v);
+    ray_release(v);
 
     /* Empty string */
-    td_t* e = td_str("", 0);
-    munit_assert_int(e->type, ==, TD_ATOM_STR);
+    ray_t* e = ray_str("", 0);
+    munit_assert_int(e->type, ==, RAY_ATOM_STR);
     munit_assert_uint(e->slen, ==, 0);
-    td_release(e);
+    ray_release(e);
 
     /* Exactly 7 bytes — uses long-string path (no room for NUL in sdata[7]) */
-    td_t* m = td_str("1234567", 7);
-    munit_assert_int(m->type, ==, TD_ATOM_STR);
-    munit_assert_size(td_str_len(m), ==, 7);
-    munit_assert_memory_equal(7, td_str_ptr(m), "1234567");
-    td_release(m);
+    ray_t* m = ray_str("1234567", 7);
+    munit_assert_int(m->type, ==, RAY_ATOM_STR);
+    munit_assert_size(ray_str_len(m), ==, 7);
+    munit_assert_memory_equal(7, ray_str_ptr(m), "1234567");
+    ray_release(m);
 
     return MUNIT_OK;
 }
@@ -188,26 +188,26 @@ static MunitResult test_atom_str_long(const void* params, void* fixture) {
 
     const char* s = "hello world!";
     size_t len = strlen(s);
-    td_t* v = td_str(s, len);
+    ray_t* v = ray_str(s, len);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_STR);
+    munit_assert_false(RAY_IS_ERR(v));
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_STR);
 
     /* For long strings, obj points to a CHAR vector */
-    td_t* chars = v->obj;
+    ray_t* chars = v->obj;
     munit_assert_ptr_not_null(chars);
-    munit_assert_int(chars->type, ==, TD_CHAR);
+    munit_assert_int(chars->type, ==, RAY_CHAR);
     munit_assert_int(chars->len, ==, (int64_t)len);
-    munit_assert_memory_equal(len, td_data(chars), s);
+    munit_assert_memory_equal(len, ray_data(chars), s);
 
     /* Keep one guard ref so we can observe atom-owned release. */
-    td_retain(chars);
+    ray_retain(chars);
     munit_assert_uint(atomic_load_explicit(&chars->rc, memory_order_relaxed), ==, 2);
 
-    td_release(v);
+    ray_release(v);
     munit_assert_uint(atomic_load_explicit(&chars->rc, memory_order_relaxed), ==, 1);
-    td_release(chars);
+    ray_release(chars);
 
     return MUNIT_OK;
 }
@@ -217,12 +217,12 @@ static MunitResult test_atom_str_long(const void* params, void* fixture) {
 static MunitResult test_atom_sym(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_sym(42);
+    ray_t* v = ray_sym(42);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, TD_ATOM_SYM);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, RAY_ATOM_SYM);
     munit_assert_int(v->i64, ==, 42);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -232,12 +232,12 @@ static MunitResult test_atom_sym(const void* params, void* fixture) {
 static MunitResult test_atom_date(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_date(19700);  /* days since 2000-01-01 */
+    ray_t* v = ray_date(19700);  /* days since 2000-01-01 */
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, -TD_DATE);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, -RAY_DATE);
     munit_assert_int(v->i64, ==, 19700);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -247,12 +247,12 @@ static MunitResult test_atom_date(const void* params, void* fixture) {
 static MunitResult test_atom_time(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_time(43200000);  /* milliseconds since midnight (12:00:00.000) */
+    ray_t* v = ray_time(43200000);  /* milliseconds since midnight (12:00:00.000) */
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, -TD_TIME);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, -RAY_TIME);
     munit_assert_int(v->i64, ==, 43200000);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -262,12 +262,12 @@ static MunitResult test_atom_time(const void* params, void* fixture) {
 static MunitResult test_atom_timestamp(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* v = td_timestamp(1700000000000000000LL);
+    ray_t* v = ray_timestamp(1700000000000000000LL);
     munit_assert_ptr_not_null(v);
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, -TD_TIMESTAMP);
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, -RAY_TIMESTAMP);
     munit_assert_int(v->i64, ==, 1700000000000000000LL);
-    td_release(v);
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -281,25 +281,25 @@ static MunitResult test_atom_guid(const void* params, void* fixture) {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
         0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10
     };
-    td_t* v = td_guid(bytes);
+    ray_t* v = ray_guid(bytes);
     munit_assert_ptr_not_null(v);
-    munit_assert_false(TD_IS_ERR(v));
-    munit_assert_true(td_is_atom(v));
-    munit_assert_int(v->type, ==, -TD_GUID);
+    munit_assert_false(RAY_IS_ERR(v));
+    munit_assert_true(ray_is_atom(v));
+    munit_assert_int(v->type, ==, -RAY_GUID);
 
     /* obj points to a U8 vector of length 16 */
-    td_t* vec = v->obj;
+    ray_t* vec = v->obj;
     munit_assert_ptr_not_null(vec);
-    munit_assert_int(vec->type, ==, TD_U8);
+    munit_assert_int(vec->type, ==, RAY_U8);
     munit_assert_int(vec->len, ==, 16);
-    munit_assert_memory_equal(16, td_data(vec), bytes);
+    munit_assert_memory_equal(16, ray_data(vec), bytes);
 
-    td_retain(vec);
+    ray_retain(vec);
     munit_assert_uint(atomic_load_explicit(&vec->rc, memory_order_relaxed), ==, 2);
 
-    td_release(v);
+    ray_release(v);
     munit_assert_uint(atomic_load_explicit(&vec->rc, memory_order_relaxed), ==, 1);
-    td_release(vec);
+    ray_release(vec);
 
     return MUNIT_OK;
 }
@@ -309,15 +309,15 @@ static MunitResult test_atom_guid(const void* params, void* fixture) {
 static MunitResult test_is_atom(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    td_t* a = td_i64(0);
-    munit_assert_true(td_is_atom(a));
-    munit_assert_false(td_is_vec(a));
-    td_release(a);
+    ray_t* a = ray_i64(0);
+    munit_assert_true(ray_is_atom(a));
+    munit_assert_false(ray_is_vec(a));
+    ray_release(a);
 
     /* A raw alloc with type 0 is not an atom (LIST) */
-    td_t* b = td_alloc(0);
-    munit_assert_false(td_is_atom(b));
-    td_free(b);
+    ray_t* b = ray_alloc(0);
+    munit_assert_false(ray_is_atom(b));
+    ray_free(b);
 
     return MUNIT_OK;
 }

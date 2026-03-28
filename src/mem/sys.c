@@ -22,13 +22,13 @@
  */
 
 #include "sys.h"
-#include <teide/td.h>
+#include <rayforce.h>
 #include <string.h>
 #include <stdatomic.h>
 
 /* 32-byte header prepended to every sys allocation.
  * mmap returns page-aligned addresses; data at page+32 is 32-byte aligned,
- * satisfying TD_BLOCK_ALIGN for the weak td_alloc stub. */
+ * satisfying RAY_BLOCK_ALIGN for the weak ray_alloc stub. */
 #define SYS_HDR_SIZE 32
 
 typedef struct {
@@ -46,11 +46,11 @@ static inline size_t page_round(size_t n) {
     return (n + 4095) & ~(size_t)4095;
 }
 
-void* td_sys_alloc(size_t size) {
+void* ray_sys_alloc(size_t size) {
     if (size == 0) size = 1;
     if (size > SIZE_MAX - SYS_HDR_SIZE) return NULL;
     size_t total = page_round(SYS_HDR_SIZE + size);
-    void* p = td_vm_alloc(total);
+    void* p = ray_vm_alloc(total);
     if (!p) return NULL;
 
     sys_hdr_t* hdr = (sys_hdr_t*)p;
@@ -70,21 +70,21 @@ void* td_sys_alloc(size_t size) {
     return (char*)p + SYS_HDR_SIZE;
 }
 
-void td_sys_free(void* ptr) {
+void ray_sys_free(void* ptr) {
     if (!ptr) return;
     sys_hdr_t* hdr = (sys_hdr_t*)((char*)ptr - SYS_HDR_SIZE);
     size_t total = hdr->map_size;
-    td_vm_free(hdr, total);
+    ray_vm_free(hdr, total);
     atomic_fetch_sub_explicit(&g_sys_current, (int64_t)total,
                                memory_order_relaxed);
 }
 
-/* L5: td_sys_realloc(ptr, 0) frees ptr and returns NULL, matching the
+/* L5: ray_sys_realloc(ptr, 0) frees ptr and returns NULL, matching the
  * behavior of some realloc implementations. Callers should not rely on
- * this as a general-purpose free — use td_sys_free() explicitly. */
-void* td_sys_realloc(void* ptr, size_t new_size) {
-    if (!ptr) return td_sys_alloc(new_size);
-    if (new_size == 0) { td_sys_free(ptr); return NULL; }
+ * this as a general-purpose free — use ray_sys_free() explicitly. */
+void* ray_sys_realloc(void* ptr, size_t new_size) {
+    if (!ptr) return ray_sys_alloc(new_size);
+    if (new_size == 0) { ray_sys_free(ptr); return NULL; }
     if (new_size > SIZE_MAX - SYS_HDR_SIZE) return NULL;
 
     sys_hdr_t* old_hdr = (sys_hdr_t*)((char*)ptr - SYS_HDR_SIZE);
@@ -97,23 +97,23 @@ void* td_sys_realloc(void* ptr, size_t new_size) {
         return ptr;
     }
 
-    void* new_ptr = td_sys_alloc(new_size);
+    void* new_ptr = ray_sys_alloc(new_size);
     if (!new_ptr) return NULL;
     memcpy(new_ptr, ptr, old_usr < new_size ? old_usr : new_size);
-    td_sys_free(ptr);
+    ray_sys_free(ptr);
     return new_ptr;
 }
 
-char* td_sys_strdup(const char* s) {
+char* ray_sys_strdup(const char* s) {
     if (!s) return NULL;
     size_t len = strlen(s);
-    char* dup = (char*)td_sys_alloc(len + 1);
+    char* dup = (char*)ray_sys_alloc(len + 1);
     if (!dup) return NULL;
     memcpy(dup, s, len + 1);
     return dup;
 }
 
-void td_sys_get_stat(int64_t* out_current, int64_t* out_peak) {
+void ray_sys_get_stat(int64_t* out_current, int64_t* out_peak) {
     *out_current = atomic_load_explicit(&g_sys_current, memory_order_relaxed);
     *out_peak    = atomic_load_explicit(&g_sys_peak, memory_order_relaxed);
 }

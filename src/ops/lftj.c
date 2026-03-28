@@ -29,21 +29,21 @@ static bool lftj_grow_output(lftj_enum_ctx_t* ctx) {
     if (ctx->out_cap > INT64_MAX / 2) return false;
     int64_t new_cap = ctx->out_cap < 64 ? 64 : ctx->out_cap * 2;
     /* Allocate all new blocks first (atomic: no state change on failure) */
-    td_t* new_hdrs[LFTJ_MAX_VARS];
+    ray_t* new_hdrs[LFTJ_MAX_VARS];
     for (uint8_t v = 0; v < ctx->n_vars; v++) {
-        new_hdrs[v] = td_alloc((size_t)new_cap * sizeof(int64_t));
+        new_hdrs[v] = ray_alloc((size_t)new_cap * sizeof(int64_t));
         if (!new_hdrs[v]) {
-            for (uint8_t j = 0; j < v; j++) td_free(new_hdrs[j]);
+            for (uint8_t j = 0; j < v; j++) ray_free(new_hdrs[j]);
             return false;
         }
-        memcpy(td_data(new_hdrs[v]), ctx->col_data[v],
+        memcpy(ray_data(new_hdrs[v]), ctx->col_data[v],
                (size_t)ctx->out_count * sizeof(int64_t));
     }
     /* Commit: swap pointers (no allocation can fail past here) */
     for (uint8_t v = 0; v < ctx->n_vars; v++) {
-        td_free(ctx->buf_hdrs[v]);
+        ray_free(ctx->buf_hdrs[v]);
         ctx->buf_hdrs[v] = new_hdrs[v];
-        ctx->col_data[v] = (int64_t*)td_data(new_hdrs[v]);
+        ctx->col_data[v] = (int64_t*)ray_data(new_hdrs[v]);
     }
     ctx->out_cap = new_cap;
     return true;
@@ -54,7 +54,7 @@ static bool lftj_grow_output(lftj_enum_ctx_t* ctx) {
  * Returns true + sets *out if intersection found.
  * -------------------------------------------------------------------------- */
 
-bool leapfrog_search(td_lftj_iter_t** iters, int k, int64_t* out) {
+bool leapfrog_search(ray_lftj_iter_t** iters, int k, int64_t* out) {
     if (k <= 0) return false;
 
     /* Check for any exhausted iterator */
@@ -96,7 +96,7 @@ bool leapfrog_search(td_lftj_iter_t** iters, int k, int64_t* out) {
  * -------------------------------------------------------------------------- */
 
 bool lftj_build_plan(lftj_enum_ctx_t* ctx,
-                     td_rel_t** rels, uint8_t n_rels, uint8_t n_vars,
+                     ray_rel_t** rels, uint8_t n_rels, uint8_t n_vars,
                      const uint8_t* rel_src_var, const uint8_t* rel_dst_var) {
     if (n_vars > LFTJ_MAX_VARS) return false;
     ctx->n_vars = n_vars;
@@ -143,7 +143,7 @@ bool lftj_build_plan(lftj_enum_ctx_t* ctx,
 }
 
 bool lftj_build_default_plan(lftj_enum_ctx_t* ctx,
-                             td_rel_t** rels, uint8_t n_rels, uint8_t n_vars) {
+                             ray_rel_t** rels, uint8_t n_rels, uint8_t n_vars) {
     if (n_vars == 3 && n_rels == 3) {
         /* Triangle: rels[0]=a→b, rels[1]=b→c, rels[2]=a→c */
         uint8_t src_vars[3] = {0, 1, 0};
@@ -234,8 +234,8 @@ void lftj_enumerate(lftj_enum_ctx_t* ctx, uint8_t depth) {
     }
 
     /* Open iterators for this variable's bindings */
-    td_lftj_iter_t iter_buf[LFTJ_MAX_ITERS_PER_VAR];
-    td_lftj_iter_t* iter_ptrs[LFTJ_MAX_ITERS_PER_VAR];
+    ray_lftj_iter_t iter_buf[LFTJ_MAX_ITERS_PER_VAR];
+    ray_lftj_iter_t* iter_ptrs[LFTJ_MAX_ITERS_PER_VAR];
 
     for (uint8_t b = 0; b < vp->n_bindings; b++) {
         lftj_binding_t* bind = &vp->bindings[b];

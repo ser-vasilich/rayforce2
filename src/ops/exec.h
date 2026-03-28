@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_EXEC_H
-#define TD_EXEC_H
+#ifndef RAY_EXEC_H
+#define RAY_EXEC_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_EXEC_H */
+#endif /* RAY_EXEC_H */

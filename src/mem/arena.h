@@ -21,25 +21,25 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_ARENA_H
-#define TD_ARENA_H
+#ifndef RAY_ARENA_H
+#define RAY_ARENA_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-typedef struct td_arena td_arena_t;
+typedef struct ray_arena ray_arena_t;
 
-/* Create arena with given chunk size (bytes). Chunks allocated via td_sys_alloc. */
-td_arena_t* td_arena_new(size_t chunk_size);
+/* Create arena with given chunk size (bytes). Chunks allocated via ray_sys_alloc. */
+ray_arena_t* ray_arena_new(size_t chunk_size);
 
-/* Allocate td_t* block with nbytes of data space.
- * Returns 32-byte aligned td_t* with TD_ATTR_ARENA set, rc=1.
+/* Allocate ray_t* block with nbytes of data space.
+ * Returns 32-byte aligned ray_t* with RAY_ATTR_ARENA set, rc=1.
  * Returns NULL on OOM. */
-td_t* td_arena_alloc(td_arena_t* arena, size_t nbytes);
+ray_t* ray_arena_alloc(ray_arena_t* arena, size_t nbytes);
 
 /* Reset arena — rewind all chunks to zero. Memory retained for reuse. */
-void td_arena_reset(td_arena_t* arena);
+void ray_arena_reset(ray_arena_t* arena);
 
 /* Destroy arena — free all backing memory. */
-void td_arena_destroy(td_arena_t* arena);
+void ray_arena_destroy(ray_arena_t* arena);
 
-#endif /* TD_ARENA_H */
+#endif /* RAY_ARENA_H */

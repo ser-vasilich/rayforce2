@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_ATOM_H
-#define TD_ATOM_H
+#ifndef RAY_ATOM_H
+#define RAY_ATOM_H
 
 /*
  * atom.h -- Atom constructors.
@@ -31,6 +31,6 @@
  * negative type tag and the value stored in the header union.
  */
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_ATOM_H */
+#endif /* RAY_ATOM_H */

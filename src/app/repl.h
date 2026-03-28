@@ -1,19 +1,19 @@
-#ifndef TD_APP_REPL_H
-#define TD_APP_REPL_H
+#ifndef RAY_APP_REPL_H
+#define RAY_APP_REPL_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-typedef struct td_term td_term_t;
+typedef struct ray_term ray_term_t;
 
-typedef struct td_repl {
-    td_t*        _block;
-    td_term_t*   term;    /* NULL if piped/non-tty */
+typedef struct ray_repl {
+    ray_t*        _block;
+    ray_term_t*   term;    /* NULL if piped/non-tty */
     bool   timeit;  /* :timeit toggle — print expression timing */
-} td_repl_t;
+} ray_repl_t;
 
-td_repl_t* td_repl_create(void);
-void       td_repl_destroy(td_repl_t* repl);
-void       td_repl_run(td_repl_t* repl);
-int        td_repl_run_file(const char* path);
+ray_repl_t* ray_repl_create(void);
+void       ray_repl_destroy(ray_repl_t* repl);
+void       ray_repl_run(ray_repl_t* repl);
+int        ray_repl_run_file(const char* path);
 
-#endif /* TD_APP_REPL_H */
+#endif /* RAY_APP_REPL_H */

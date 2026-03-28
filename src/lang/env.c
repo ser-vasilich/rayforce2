@@ -5,30 +5,30 @@
 
 /* ---- Function constructors ---- */
 
-td_t* td_fn_unary(const char* name, uint8_t fn_attrs, td_unary_fn fn) {
-    td_t* obj = td_alloc(0);  /* atom, no data beyond header */
-    if (!obj) return TD_ERR_PTR(TD_ERR_OOM);
-    obj->type = TD_ATOM_UNARY;
+ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {
+    ray_t* obj = ray_alloc(0);  /* atom, no data beyond header */
+    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    obj->type = RAY_ATOM_UNARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
     (void)name;
     return obj;
 }
 
-td_t* td_fn_binary(const char* name, uint8_t fn_attrs, td_binary_fn fn) {
-    td_t* obj = td_alloc(0);
-    if (!obj) return TD_ERR_PTR(TD_ERR_OOM);
-    obj->type = TD_ATOM_BINARY;
+ray_t* ray_fn_binary(const char* name, uint8_t fn_attrs, ray_binary_fn fn) {
+    ray_t* obj = ray_alloc(0);
+    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    obj->type = RAY_ATOM_BINARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
     (void)name;
     return obj;
 }
 
-td_t* td_fn_vary(const char* name, uint8_t fn_attrs, td_vary_fn fn) {
-    td_t* obj = td_alloc(0);
-    if (!obj) return TD_ERR_PTR(TD_ERR_OOM);
-    obj->type = TD_ATOM_VARY;
+ray_t* ray_fn_vary(const char* name, uint8_t fn_attrs, ray_vary_fn fn) {
+    ray_t* obj = ray_alloc(0);
+    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    obj->type = RAY_ATOM_VARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
     (void)name;
@@ -37,7 +37,7 @@ td_t* td_fn_vary(const char* name, uint8_t fn_attrs, td_vary_fn fn) {
 
 /* ---- Global environment ---- */
 
-/* Spinlock protecting g_env mutations in td_env_set */
+/* Spinlock protecting g_env mutations in ray_env_set */
 static _Atomic(int) g_env_lock = 0;
 static inline void env_lock(void) {
     while (atomic_exchange_explicit(&g_env_lock, 1, memory_order_acquire)) {
@@ -54,7 +54,7 @@ static inline void env_unlock(void) {
 
 static struct {
     int64_t keys[ENV_CAP];
-    td_t*   vals[ENV_CAP];
+    ray_t*   vals[ENV_CAP];
     int32_t count;
 } g_env;
 
@@ -65,32 +65,32 @@ static struct {
 
 typedef struct {
     int64_t keys[FRAME_CAP];
-    td_t*   vals[FRAME_CAP];
+    ray_t*   vals[FRAME_CAP];
     int32_t count;
-} td_scope_frame_t;
+} ray_scope_frame_t;
 
-static _Thread_local td_scope_frame_t scope_stack[SCOPE_CAP];
+static _Thread_local ray_scope_frame_t scope_stack[SCOPE_CAP];
 static _Thread_local int32_t scope_depth = 0;
 
-td_err_t td_env_init(void) {
+ray_err_t ray_env_init(void) {
     memset(&g_env, 0, sizeof(g_env));
     scope_depth = 0;
-    return TD_OK;
+    return RAY_OK;
 }
 
-void td_env_destroy(void) {
+void ray_env_destroy(void) {
     /* Pop any remaining scopes */
-    while (scope_depth > 0) td_env_pop_scope();
+    while (scope_depth > 0) ray_env_pop_scope();
     for (int32_t i = 0; i < g_env.count; i++) {
-        if (g_env.vals[i]) td_release(g_env.vals[i]);
+        if (g_env.vals[i]) ray_release(g_env.vals[i]);
     }
     memset(&g_env, 0, sizeof(g_env));
 }
 
-td_t* td_env_get(int64_t sym_id) {
+ray_t* ray_env_get(int64_t sym_id) {
     /* Search local scopes top-down first */
     for (int32_t d = scope_depth - 1; d >= 0; d--) {
-        td_scope_frame_t* f = &scope_stack[d];
+        ray_scope_frame_t* f = &scope_stack[d];
         for (int32_t i = 0; i < f->count; i++) {
             if (f->keys[i] == sym_id) return f->vals[i];
         }
@@ -102,49 +102,49 @@ td_t* td_env_get(int64_t sym_id) {
     return NULL;
 }
 
-td_err_t td_env_set(int64_t sym_id, td_t* val) {
+ray_err_t ray_env_set(int64_t sym_id, ray_t* val) {
     env_lock();
     for (int32_t i = 0; i < g_env.count; i++) {
         if (g_env.keys[i] == sym_id) {
-            if (g_env.vals[i]) td_release(g_env.vals[i]);
-            td_retain(val);
+            if (g_env.vals[i]) ray_release(g_env.vals[i]);
+            ray_retain(val);
             g_env.vals[i] = val;
             env_unlock();
-            return TD_OK;
+            return RAY_OK;
         }
     }
     if (g_env.count >= ENV_CAP) {
         env_unlock();
-        return TD_ERR_OOM;
+        return RAY_ERR_OOM;
     }
     g_env.keys[g_env.count] = sym_id;
-    td_retain(val);
+    ray_retain(val);
     g_env.vals[g_env.count] = val;
     g_env.count++;
     env_unlock();
-    return TD_OK;
+    return RAY_OK;
 }
 
-td_err_t td_env_push_scope(void) {
-    if (scope_depth >= SCOPE_CAP) return TD_ERR_OOM;
+ray_err_t ray_env_push_scope(void) {
+    if (scope_depth >= SCOPE_CAP) return RAY_ERR_OOM;
     scope_stack[scope_depth].count = 0;
     scope_depth++;
-    return TD_OK;
+    return RAY_OK;
 }
 
-void td_env_pop_scope(void) {
+void ray_env_pop_scope(void) {
     if (scope_depth <= 0) return;
     scope_depth--;
-    td_scope_frame_t* f = &scope_stack[scope_depth];
+    ray_scope_frame_t* f = &scope_stack[scope_depth];
     for (int32_t i = 0; i < f->count; i++) {
-        if (f->vals[i]) td_release(f->vals[i]);
+        if (f->vals[i]) ray_release(f->vals[i]);
     }
     f->count = 0;
 }
 
 /* ---- Iteration ---- */
 
-int32_t td_env_list(int64_t* sym_ids, td_t** vals, int32_t max_entries) {
+int32_t ray_env_list(int64_t* sym_ids, ray_t** vals, int32_t max_entries) {
     int32_t n = g_env.count < max_entries ? g_env.count : max_entries;
     for (int32_t i = 0; i < n; i++) {
         sym_ids[i] = g_env.keys[i];
@@ -164,15 +164,15 @@ static int cmp_str_ptr(const void* a, const void* b) {
     return strcmp(*(const char**)a, *(const char**)b);
 }
 
-int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
+int64_t ray_env_lookup_prefix(const char* prefix, int64_t len,
                               const char** results, int64_t max_results) {
     int64_t count = 0;
 
     /* Scan global env keys */
     for (int32_t i = 0; i < g_env.count && count < max_results; i++) {
-        td_t* s = td_sym_str(g_env.keys[i]);
+        ray_t* s = ray_sym_str(g_env.keys[i]);
         if (!s) continue;
-        const char* name = td_str_ptr(s);
+        const char* name = ray_str_ptr(s);
         if (!name) continue;
         int64_t nlen = (int64_t)strlen(name);
         if (nlen >= len && strncmp(name, prefix, (size_t)len) == 0) {
@@ -204,22 +204,22 @@ int64_t td_env_lookup_prefix(const char* prefix, int64_t len,
     return count;
 }
 
-td_err_t td_env_set_local(int64_t sym_id, td_t* val) {
-    if (scope_depth <= 0) return td_env_set(sym_id, val);
-    td_scope_frame_t* f = &scope_stack[scope_depth - 1];
+ray_err_t ray_env_set_local(int64_t sym_id, ray_t* val) {
+    if (scope_depth <= 0) return ray_env_set(sym_id, val);
+    ray_scope_frame_t* f = &scope_stack[scope_depth - 1];
     /* Update existing in this frame */
     for (int32_t i = 0; i < f->count; i++) {
         if (f->keys[i] == sym_id) {
-            if (f->vals[i]) td_release(f->vals[i]);
-            td_retain(val);
+            if (f->vals[i]) ray_release(f->vals[i]);
+            ray_retain(val);
             f->vals[i] = val;
-            return TD_OK;
+            return RAY_OK;
         }
     }
-    if (f->count >= FRAME_CAP) return TD_ERR_OOM;
+    if (f->count >= FRAME_CAP) return RAY_ERR_OOM;
     f->keys[f->count] = sym_id;
-    td_retain(val);
+    ray_retain(val);
     f->vals[f->count] = val;
     f->count++;
-    return TD_OK;
+    return RAY_OK;
 }

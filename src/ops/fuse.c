@@ -24,7 +24,7 @@
 #include "fuse.h"
 #include "mem/sys.h"
 #include <string.h>
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* --------------------------------------------------------------------------
  * Fusion pass: merge element-wise chains into single fused nodes
@@ -39,7 +39,7 @@
 
 /* Element-wise opcodes: unary [OP_NEG=10..OP_CAST=19] and
  * binary [OP_ADD=20..OP_MAX2=34].  These ranges are contiguous by
- * design (see td.h opcode definitions). */
+ * design (see rayforce.h opcode definitions). */
 static bool is_elementwise(uint16_t opcode) {
     return (opcode >= OP_NEG && opcode <= OP_CAST) ||
            (opcode >= OP_ADD && opcode <= OP_MAX2);
@@ -48,7 +48,7 @@ static bool is_elementwise(uint16_t opcode) {
 /* O(ext_count) per call; acceptable for typical graph sizes (tens to
    hundreds of nodes).  L2: intentional duplication to keep files
    self-contained — also present in opt.c. */
-static td_op_ext_t* find_ext(td_graph_t* g, uint32_t node_id) {
+static ray_op_ext_t* find_ext(ray_graph_t* g, uint32_t node_id) {
     for (uint32_t i = 0; i < g->ext_count; i++) {
         if (g->ext_nodes[i] && g->ext_nodes[i]->base.id == node_id)
             return g->ext_nodes[i];
@@ -57,7 +57,7 @@ static td_op_ext_t* find_ext(td_graph_t* g, uint32_t node_id) {
 }
 
 /* Count references to each node (iterative) */
-static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
+static void count_refs(ray_graph_t* g, ray_op_t* root, uint32_t* ref_counts) {
     if (!root) return;
 
     uint32_t nc = g->node_count;
@@ -66,13 +66,13 @@ static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
     if (nc > UINT32_MAX / 2) return;
     uint32_t stack_cap = nc * 2;
     uint32_t stack_local[256];
-    uint32_t *stack = stack_cap <= 256 ? stack_local : (uint32_t*)td_sys_alloc(stack_cap * sizeof(uint32_t));
+    uint32_t *stack = stack_cap <= 256 ? stack_local : (uint32_t*)ray_sys_alloc(stack_cap * sizeof(uint32_t));
     if (!stack) return;
     int sp = 0;
     stack[sp++] = root->id;
     while (sp > 0) {
         uint32_t nid = stack[--sp];
-        td_op_t* n = &g->nodes[nid];
+        ray_op_t* n = &g->nodes[nid];
         ref_counts[nid]++;
         if (ref_counts[nid] > 1) continue;  /* already counted children */
         for (int i = 0; i < n->arity && i < 2; i++) {
@@ -82,7 +82,7 @@ static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
         /* M11: 3-input ops (OP_IF, OP_SUBSTR, OP_REPLACE) store the third
            operand node ID as (uintptr_t)ext->literal. */
         if (n->opcode == OP_IF || n->opcode == OP_SUBSTR || n->opcode == OP_REPLACE) {
-            td_op_ext_t* ext = find_ext(g, nid);
+            ray_op_ext_t* ext = find_ext(g, nid);
             if (ext) {
                 uint32_t third_id = (uint32_t)(uintptr_t)ext->literal;
                 if (third_id < nc && sp < (int)stack_cap)
@@ -93,7 +93,7 @@ static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
            uint32_t values in trailing bytes after the ext node.
            ext->sym holds the total arg count. */
         if (n->opcode == OP_CONCAT) {
-            td_op_ext_t* ext = find_ext(g, nid);
+            ray_op_ext_t* ext = find_ext(g, nid);
             /* M4: Guard against ext->sym < 2 — trailing uint32_t values
                only exist when there are more than 2 arguments. */
             if (ext && ext->sym >= 2) {
@@ -113,7 +113,7 @@ static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
             n->opcode == OP_JOIN  || n->opcode == OP_WINDOW_JOIN ||
             n->opcode == OP_WINDOW ||
             n->opcode == OP_SELECT) {
-            td_op_ext_t* ext = find_ext(g, nid);
+            ray_op_ext_t* ext = find_ext(g, nid);
             if (ext) {
                 switch (n->opcode) {
                     case OP_GROUP:
@@ -169,10 +169,10 @@ static void count_refs(td_graph_t* g, td_op_t* root, uint32_t* ref_counts) {
             }
         }
     }
-    if (stack_cap > 256) td_sys_free(stack);
+    if (stack_cap > 256) ray_sys_free(stack);
 }
 
-void td_fuse_pass(td_graph_t* g, td_op_t* root) {
+void ray_fuse_pass(ray_graph_t* g, ray_op_t* root) {
     if (!g || !root || g->node_count == 0) return;
 
     uint32_t nc = g->node_count;
@@ -181,7 +181,7 @@ void td_fuse_pass(td_graph_t* g, td_op_t* root) {
     if (nc <= 256) {
         ref_counts = ref_counts_stack;
     } else {
-        ref_counts = (uint32_t*)td_sys_alloc(nc * sizeof(uint32_t));
+        ref_counts = (uint32_t*)ray_sys_alloc(nc * sizeof(uint32_t));
         if (!ref_counts) return;
     }
     memset(ref_counts, 0, nc * sizeof(uint32_t));
@@ -191,14 +191,14 @@ void td_fuse_pass(td_graph_t* g, td_op_t* root) {
     /* Mark fuseable chains: element-wise nodes whose inputs have exactly
        one consumer (this node) and are also element-wise */
     for (uint32_t i = 0; i < nc; i++) {
-        td_op_t* n = &g->nodes[i];
+        ray_op_t* n = &g->nodes[i];
         if (!is_elementwise(n->opcode)) continue;
         if (n->flags & OP_FLAG_DEAD) continue;
 
         /* Check if all inputs are single-consumer element-wise */
         bool can_fuse = false;
         for (int j = 0; j < n->arity && j < 2; j++) {
-            td_op_t* inp = n->inputs[j];
+            ray_op_t* inp = n->inputs[j];
             if (inp && is_elementwise(inp->opcode) && ref_counts[inp->id] == 1) {
                 can_fuse = true;
             }
@@ -207,5 +207,5 @@ void td_fuse_pass(td_graph_t* g, td_op_t* root) {
             n->flags |= OP_FLAG_FUSED;
         }
     }
-    if (nc > 256) td_sys_free(ref_counts);
+    if (nc > 256) ray_sys_free(ref_counts);
 }

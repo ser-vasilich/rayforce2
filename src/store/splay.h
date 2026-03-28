@@ -21,9 +21,9 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_SPLAY_H
-#define TD_SPLAY_H
+#ifndef RAY_SPLAY_H
+#define RAY_SPLAY_H
 
-#include <teide/td.h>
+#include <rayforce.h>
 
-#endif /* TD_SPLAY_H */
+#endif /* RAY_SPLAY_H */

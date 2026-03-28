@@ -31,7 +31,7 @@
 /* ==========================================================================
  * Linux / macOS (POSIX)
  * ========================================================================== */
-#if defined(TD_OS_LINUX) || defined(TD_OS_MACOS)
+#if defined(RAY_OS_LINUX) || defined(RAY_OS_MACOS)
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -43,17 +43,17 @@
 /* --------------------------------------------------------------------------
  * Virtual memory
  * -------------------------------------------------------------------------- */
-void* td_vm_alloc(size_t size) {
+void* ray_vm_alloc(size_t size) {
     void* p = mmap(NULL, size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     return (p == MAP_FAILED) ? NULL : p;
 }
 
-void td_vm_free(void* ptr, size_t size) {
+void ray_vm_free(void* ptr, size_t size) {
     if (ptr) munmap(ptr, size);
 }
 
-void* td_vm_map_file(const char* path, size_t* out_size) {
+void* ray_vm_map_file(const char* path, size_t* out_size) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
 
@@ -79,28 +79,28 @@ void* td_vm_map_file(const char* path, size_t* out_size) {
     return p;
 }
 
-void td_vm_unmap_file(void* ptr, size_t size) {
+void ray_vm_unmap_file(void* ptr, size_t size) {
     if (ptr) munmap(ptr, size);
 }
 
-void td_vm_advise_seq(void* ptr, size_t size) {
+void ray_vm_advise_seq(void* ptr, size_t size) {
     if (ptr) madvise(ptr, size, MADV_SEQUENTIAL);
 }
 
-void td_vm_advise_willneed(void* ptr, size_t size) {
+void ray_vm_advise_willneed(void* ptr, size_t size) {
     if (ptr) madvise(ptr, size, MADV_WILLNEED);
 }
 
-void td_vm_release(void* ptr, size_t size) {
+void ray_vm_release(void* ptr, size_t size) {
     if (!ptr) return;
-#if defined(TD_OS_MACOS)
+#if defined(RAY_OS_MACOS)
     madvise(ptr, size, MADV_FREE);
 #else
     madvise(ptr, size, MADV_DONTNEED);
 #endif
 }
 
-void* td_vm_alloc_aligned(size_t size, size_t alignment) {
+void* ray_vm_alloc_aligned(size_t size, size_t alignment) {
     size_t total = size + alignment;
     void* mem = mmap(NULL, total, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -126,44 +126,44 @@ void* td_vm_alloc_aligned(size_t size, size_t alignment) {
  * Threading
  * -------------------------------------------------------------------------- */
 
-/* pthread entry expects void*(*)(void*), but td_thread_fn is void(*)(void*).
+/* pthread entry expects void*(*)(void*), but ray_thread_fn is void(*)(void*).
  * Use a small trampoline to bridge the signatures.                          */
 typedef struct {
-    td_thread_fn fn;
+    ray_thread_fn fn;
     void*        arg;
-} td_thread_trampoline_t;
+} ray_thread_trampoline_t;
 
 static void* thread_trampoline(void* raw) {
-    td_thread_trampoline_t ctx = *(td_thread_trampoline_t*)raw;
+    ray_thread_trampoline_t ctx = *(ray_thread_trampoline_t*)raw;
     /* Free the trampoline struct allocated on the heap. We copied it first
      * so the creating thread can proceed freely.                            */
-    td_sys_free(raw);
+    ray_sys_free(raw);
     ctx.fn(ctx.arg);
     return NULL;
 }
 
-td_err_t td_thread_create(td_thread_t* t, td_thread_fn fn, void* arg) {
-    td_thread_trampoline_t* ctx = (td_thread_trampoline_t*)td_sys_alloc(sizeof(*ctx));
-    if (!ctx) return TD_ERR_OOM;
+ray_err_t ray_thread_create(ray_thread_t* t, ray_thread_fn fn, void* arg) {
+    ray_thread_trampoline_t* ctx = (ray_thread_trampoline_t*)ray_sys_alloc(sizeof(*ctx));
+    if (!ctx) return RAY_ERR_OOM;
     ctx->fn  = fn;
     ctx->arg = arg;
 
     pthread_t pt;
     int rc = pthread_create(&pt, NULL, thread_trampoline, ctx);
     if (rc != 0) {
-        td_sys_free(ctx);
-        return TD_ERR_OOM;
+        ray_sys_free(ctx);
+        return RAY_ERR_OOM;
     }
-    *t = (td_thread_t)pt;
-    return TD_OK;
+    *t = (ray_thread_t)pt;
+    return RAY_OK;
 }
 
-td_err_t td_thread_join(td_thread_t t) {
+ray_err_t ray_thread_join(ray_thread_t t) {
     int rc = pthread_join((pthread_t)t, NULL);
-    return (rc == 0) ? TD_OK : TD_ERR_IO;
+    return (rc == 0) ? RAY_OK : RAY_ERR_IO;
 }
 
-uint32_t td_thread_count(void) {
+uint32_t ray_thread_count(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return (n > 0) ? (uint32_t)n : 1;
 }
@@ -171,43 +171,43 @@ uint32_t td_thread_count(void) {
 /* --------------------------------------------------------------------------
  * Semaphore
  * -------------------------------------------------------------------------- */
-#if defined(TD_OS_MACOS)
+#if defined(RAY_OS_MACOS)
 
-td_err_t td_sem_init(td_sem_t* s, uint32_t initial_value) {
+ray_err_t ray_sem_init(ray_sem_t* s, uint32_t initial_value) {
     *s = dispatch_semaphore_create((long)initial_value);
-    return (*s) ? TD_OK : TD_ERR_OOM;
+    return (*s) ? RAY_OK : RAY_ERR_OOM;
 }
 
-void td_sem_destroy(td_sem_t* s) {
+void ray_sem_destroy(ray_sem_t* s) {
     /* dispatch_semaphore is ARC-managed on modern macOS; explicit release for
      * non-ARC builds (our C code).                                           */
     if (*s) dispatch_release(*s);
     *s = NULL;
 }
 
-void td_sem_wait(td_sem_t* s) {
+void ray_sem_wait(ray_sem_t* s) {
     dispatch_semaphore_wait(*s, DISPATCH_TIME_FOREVER);
 }
 
-void td_sem_signal(td_sem_t* s) {
+void ray_sem_signal(ray_sem_t* s) {
     dispatch_semaphore_signal(*s);
 }
 
 #else /* Linux */
 
-td_err_t td_sem_init(td_sem_t* s, uint32_t initial_value) {
-    return (sem_init(s, 0, initial_value) == 0) ? TD_OK : TD_ERR_OOM;
+ray_err_t ray_sem_init(ray_sem_t* s, uint32_t initial_value) {
+    return (sem_init(s, 0, initial_value) == 0) ? RAY_OK : RAY_ERR_OOM;
 }
 
-void td_sem_destroy(td_sem_t* s) {
+void ray_sem_destroy(ray_sem_t* s) {
     sem_destroy(s);
 }
 
-void td_sem_wait(td_sem_t* s) {
+void ray_sem_wait(ray_sem_t* s) {
     while (sem_wait(s) != 0) { /* retry on EINTR */ }
 }
 
-void td_sem_signal(td_sem_t* s) {
+void ray_sem_signal(ray_sem_t* s) {
     sem_post(s);
 }
 
@@ -216,7 +216,7 @@ void td_sem_signal(td_sem_t* s) {
 /* ==========================================================================
  * Windows
  * ========================================================================== */
-#elif defined(TD_OS_WINDOWS)
+#elif defined(RAY_OS_WINDOWS)
 
 #ifndef WIN32_LEAN_AND_MEAN
   #define WIN32_LEAN_AND_MEAN
@@ -226,16 +226,16 @@ void td_sem_signal(td_sem_t* s) {
 /* --------------------------------------------------------------------------
  * Virtual memory
  * -------------------------------------------------------------------------- */
-void* td_vm_alloc(size_t size) {
+void* ray_vm_alloc(size_t size) {
     return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 }
 
-void td_vm_free(void* ptr, size_t size) {
+void ray_vm_free(void* ptr, size_t size) {
     (void)size;
     if (ptr) VirtualFree(ptr, 0, MEM_RELEASE);
 }
 
-void* td_vm_map_file(const char* path, size_t* out_size) {
+void* ray_vm_map_file(const char* path, size_t* out_size) {
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return NULL;
@@ -264,12 +264,12 @@ void* td_vm_map_file(const char* path, size_t* out_size) {
     return p;
 }
 
-void td_vm_unmap_file(void* ptr, size_t size) {
+void ray_vm_unmap_file(void* ptr, size_t size) {
     (void)size;
     if (ptr) UnmapViewOfFile(ptr);
 }
 
-void td_vm_advise_seq(void* ptr, size_t size) {
+void ray_vm_advise_seq(void* ptr, size_t size) {
     /* PrefetchVirtualMemory is Win8.1+. Best-effort; ignore failure. */
     WIN32_MEMORY_RANGE_ENTRY entry;
     entry.VirtualAddress = ptr;
@@ -277,13 +277,13 @@ void td_vm_advise_seq(void* ptr, size_t size) {
     PrefetchVirtualMemory(GetCurrentProcess(), 1, &entry, 0);
 }
 
-void td_vm_release(void* ptr, size_t size) {
+void ray_vm_release(void* ptr, size_t size) {
     if (!ptr) return;
     /* DiscardVirtualMemory (Win8.1+) or fallback to decommit+recommit */
     DiscardVirtualMemory(ptr, size);
 }
 
-void* td_vm_alloc_aligned(size_t size, size_t alignment) {
+void* ray_vm_alloc_aligned(size_t size, size_t alignment) {
     /* Over-allocate, find aligned offset. Can't trim on Windows, so the
      * pool header's vm_base field stores the original base for VirtualFree. */
     void* mem = VirtualAlloc(NULL, size + alignment,
@@ -297,39 +297,39 @@ void* td_vm_alloc_aligned(size_t size, size_t alignment) {
  * Threading
  * -------------------------------------------------------------------------- */
 typedef struct {
-    td_thread_fn fn;
+    ray_thread_fn fn;
     void*        arg;
-} td_thread_trampoline_t;
+} ray_thread_trampoline_t;
 
 static DWORD WINAPI thread_trampoline(LPVOID raw) {
-    td_thread_trampoline_t ctx = *(td_thread_trampoline_t*)raw;
+    ray_thread_trampoline_t ctx = *(ray_thread_trampoline_t*)raw;
     HeapFree(GetProcessHeap(), 0, raw);
     ctx.fn(ctx.arg);
     return 0;
 }
 
-td_err_t td_thread_create(td_thread_t* t, td_thread_fn fn, void* arg) {
-    td_thread_trampoline_t* ctx = HeapAlloc(GetProcessHeap(), 0, sizeof(*ctx));
-    if (!ctx) return TD_ERR_OOM;
+ray_err_t ray_thread_create(ray_thread_t* t, ray_thread_fn fn, void* arg) {
+    ray_thread_trampoline_t* ctx = HeapAlloc(GetProcessHeap(), 0, sizeof(*ctx));
+    if (!ctx) return RAY_ERR_OOM;
     ctx->fn  = fn;
     ctx->arg = arg;
 
     HANDLE h = CreateThread(NULL, 0, thread_trampoline, ctx, 0, NULL);
     if (!h) {
         HeapFree(GetProcessHeap(), 0, ctx);
-        return TD_ERR_OOM;
+        return RAY_ERR_OOM;
     }
-    *t = (td_thread_t)h;
-    return TD_OK;
+    *t = (ray_thread_t)h;
+    return RAY_OK;
 }
 
-td_err_t td_thread_join(td_thread_t t) {
+ray_err_t ray_thread_join(ray_thread_t t) {
     DWORD rc = WaitForSingleObject((HANDLE)t, INFINITE);
     CloseHandle((HANDLE)t);
-    return (rc == WAIT_OBJECT_0) ? TD_OK : TD_ERR_IO;
+    return (rc == WAIT_OBJECT_0) ? RAY_OK : RAY_ERR_IO;
 }
 
-uint32_t td_thread_count(void) {
+uint32_t ray_thread_count(void) {
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return (uint32_t)si.dwNumberOfProcessors;
@@ -338,22 +338,22 @@ uint32_t td_thread_count(void) {
 /* --------------------------------------------------------------------------
  * Semaphore
  * -------------------------------------------------------------------------- */
-td_err_t td_sem_init(td_sem_t* s, uint32_t initial_value) {
+ray_err_t ray_sem_init(ray_sem_t* s, uint32_t initial_value) {
     *s = CreateSemaphoreA(NULL, (LONG)initial_value, LONG_MAX, NULL);
-    return (*s) ? TD_OK : TD_ERR_OOM;
+    return (*s) ? RAY_OK : RAY_ERR_OOM;
 }
 
-void td_sem_destroy(td_sem_t* s) {
+void ray_sem_destroy(ray_sem_t* s) {
     if (*s) CloseHandle(*s);
     *s = NULL;
 }
 
-void td_sem_wait(td_sem_t* s) {
+void ray_sem_wait(ray_sem_t* s) {
     WaitForSingleObject(*s, INFINITE);
 }
 
-void td_sem_signal(td_sem_t* s) {
+void ray_sem_signal(ray_sem_t* s) {
     ReleaseSemaphore(*s, 1, NULL);
 }
 
-#endif /* TD_OS_WINDOWS */
+#endif /* RAY_OS_WINDOWS */

@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef TD_MEM_SYS_H
-#define TD_MEM_SYS_H
+#ifndef RAY_MEM_SYS_H
+#define RAY_MEM_SYS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -31,19 +31,19 @@
  * System-level mmap allocator for infrastructure that can't use the buddy
  * allocator (cross-thread lifetime, bootstrap, global state).
  *
- * Every allocation is tracked. td_mem_stats() reports the totals so users
+ * Every allocation is tracked. ray_mem_stats() reports the totals so users
  * can see the full memory footprint.
  *
  * Each allocation prepends a 32-byte header (stores mmap size + user size),
- * so td_sys_free() needs no size argument.
+ * so ray_sys_free() needs no size argument.
  * -------------------------------------------------------------------------- */
 
-void* td_sys_alloc(size_t size);
-void* td_sys_realloc(void* ptr, size_t new_size);
-void  td_sys_free(void* ptr);
-char* td_sys_strdup(const char* s);
+void* ray_sys_alloc(size_t size);
+void* ray_sys_realloc(void* ptr, size_t new_size);
+void  ray_sys_free(void* ptr);
+char* ray_sys_strdup(const char* s);
 
-/* Read current sys allocator counters (called by td_mem_stats in arena.c) */
-void  td_sys_get_stat(int64_t* out_current, int64_t* out_peak);
+/* Read current sys allocator counters (called by ray_mem_stats in arena.c) */
+void  ray_sys_get_stat(int64_t* out_current, int64_t* out_peak);
 
-#endif /* TD_MEM_SYS_H */
+#endif /* RAY_MEM_SYS_H */

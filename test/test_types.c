@@ -22,24 +22,24 @@
  */
 
 #include "munit.h"
-#include <teide/td.h>
+#include <rayforce.h>
 
 /* ---- test_type_sizes_known_types --------------------------------------- */
 
 static MunitResult test_type_sizes_known_types(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    munit_assert_uint(td_type_sizes[TD_BOOL], ==, 1);
-    munit_assert_uint(td_type_sizes[TD_U8],   ==, 1);
-    munit_assert_uint(td_type_sizes[TD_CHAR], ==, 1);
-    munit_assert_uint(td_type_sizes[TD_I16],  ==, 2);
-    munit_assert_uint(td_type_sizes[TD_I32],  ==, 4);
-    munit_assert_uint(td_type_sizes[TD_I64],  ==, 8);
-    munit_assert_uint(td_type_sizes[TD_F64],  ==, 8);
-    munit_assert_uint(td_type_sizes[TD_DATE], ==, 4);
-    munit_assert_uint(td_type_sizes[TD_TIME], ==, 4);
-    munit_assert_uint(td_type_sizes[TD_TIMESTAMP], ==, 8);
-    munit_assert_uint(td_type_sizes[TD_GUID], ==, 16);
+    munit_assert_uint(ray_type_sizes[RAY_BOOL], ==, 1);
+    munit_assert_uint(ray_type_sizes[RAY_U8],   ==, 1);
+    munit_assert_uint(ray_type_sizes[RAY_CHAR], ==, 1);
+    munit_assert_uint(ray_type_sizes[RAY_I16],  ==, 2);
+    munit_assert_uint(ray_type_sizes[RAY_I32],  ==, 4);
+    munit_assert_uint(ray_type_sizes[RAY_I64],  ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_F64],  ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_DATE], ==, 4);
+    munit_assert_uint(ray_type_sizes[RAY_TIME], ==, 4);
+    munit_assert_uint(ray_type_sizes[RAY_TIMESTAMP], ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_GUID], ==, 16);
 
     return MUNIT_OK;
 }
@@ -49,11 +49,11 @@ static MunitResult test_type_sizes_known_types(const void* params, void* fixture
 static MunitResult test_elem_size_macro(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    /* td_elem_size(t) should match td_type_sizes[t] */
-    munit_assert_uint(td_elem_size(TD_I64), ==, 8);
-    munit_assert_uint(td_elem_size(TD_I32), ==, 4);
-    munit_assert_uint(td_elem_size(TD_BOOL), ==, 1);
-    munit_assert_uint(td_elem_size(TD_GUID), ==, 16);
+    /* ray_elem_size(t) should match ray_type_sizes[t] */
+    munit_assert_uint(ray_elem_size(RAY_I64), ==, 8);
+    munit_assert_uint(ray_elem_size(RAY_I32), ==, 4);
+    munit_assert_uint(ray_elem_size(RAY_BOOL), ==, 1);
+    munit_assert_uint(ray_elem_size(RAY_GUID), ==, 16);
 
     return MUNIT_OK;
 }
@@ -64,14 +64,14 @@ static MunitResult test_type_sizes_pointer_types(const void* params, void* fixtu
     (void)params; (void)fixture;
 
     /* LIST and TABLE are pointer-sized (8 bytes) */
-    munit_assert_uint(td_type_sizes[TD_LIST],  ==, 8);
-    munit_assert_uint(td_type_sizes[TD_TABLE], ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_LIST],  ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_TABLE], ==, 8);
 
     /* SYM default width is 8 (W64) */
-    munit_assert_uint(td_type_sizes[TD_SYM],   ==, 8);
+    munit_assert_uint(ray_type_sizes[RAY_SYM],   ==, 8);
 
     /* SEL has no fixed element size */
-    munit_assert_uint(td_type_sizes[TD_SEL],   ==, 0);
+    munit_assert_uint(ray_type_sizes[RAY_SEL],   ==, 0);
 
     return MUNIT_OK;
 }
