@@ -225,7 +225,11 @@ static ray_t* parse_vector(ray_parser_t *p) {
     bool all_numeric = (first_type == -RAY_I64 || first_type == -RAY_F64);
 
     for (int32_t i = 0; i < count; i++) {
-        if (elems[i]->attrs & RAY_ATTR_NAME) goto boxed_list;
+        /* Inside [...], names are symbol literals, not variable references */
+        if (elems[i]->attrs & RAY_ATTR_NAME) {
+            elems[i]->attrs &= ~RAY_ATTR_NAME;
+            /* type is already -RAY_SYM from parse_expr */
+        }
         if (i == 0) continue;
         int8_t t = elems[i]->type;
         if (t != first_type) homogeneous = false;
@@ -273,6 +277,27 @@ static ray_t* parse_vector(ray_parser_t *p) {
                 for (int32_t i = 0; i < count; i++) d[i] = elems[i]->i64;
                 break;
             }
+            case RAY_STR: {
+                /* String vectors use ray_str_vec_append */
+                ray_t* svec = ray_vec_new(RAY_STR, count);
+                if (RAY_IS_ERR(svec)) {
+                    ray_free(vec);
+                    for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+                    return svec;
+                }
+                for (int32_t i = 0; i < count; i++) {
+                    const char* s = ray_str_ptr(elems[i]);
+                    size_t slen = ray_str_len(elems[i]);
+                    svec = ray_str_vec_append(svec, s, slen);
+                    if (RAY_IS_ERR(svec)) {
+                        for (int32_t j = i; j < count; j++) ray_release(elems[j]);
+                        return svec;
+                    }
+                }
+                ray_free(vec);
+                for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+                return svec;
+            }
             default: goto boxed_list;
         }
         vec->len = count;
@@ -298,24 +323,9 @@ static ray_t* parse_vector(ray_parser_t *p) {
     }
 
 boxed_list:
-    /* Fallback: boxed list (mixed types, nested structures, etc.) */
-    {
-        ray_t* list = ray_list_new(count);
-        if (RAY_IS_ERR(list)) {
-            for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
-            return list;
-        }
-        list->attrs |= RAY_ATTR_VECTOR;
-        for (int32_t i = 0; i < count; i++) {
-            list = ray_list_append(list, elems[i]);
-            ray_release(elems[i]);
-            if (RAY_IS_ERR(list)) {
-                for (int32_t j = i + 1; j < count; j++) ray_release(elems[j]);
-                return list;
-            }
-        }
-        return list;
-    }
+    /* Mixed types in vector literal — domain error */
+    for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+    return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 }
 
 /* ── Dict literal: {key: val key: val ...} ── */

@@ -52,7 +52,7 @@
  *
  *   Bits 0x01-0x03  RAY_SYM vectors:  sym index width (RAY_SYM_W8/W16/W32/W64)
  *   Bits 0x01-0x10  function objects (RAY_UNARY/BINARY/VARY): RAY_FN_* flags
- *   Bits 0x01-0x02  RAY_LIST atoms:   RAY_ATTR_VECTOR / RAY_ATTR_DICT
+ *   Bit  0x02       RAY_LIST:         RAY_ATTR_DICT
  *   Bit  0x10       vectors:         RAY_ATTR_SLICE
  *   Bit  0x20       vectors:         RAY_ATTR_NULLMAP_EXT
  *   Bit  0x20       -RAY_SYM:        RAY_ATTR_NAME (variable reference)

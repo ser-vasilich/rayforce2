@@ -333,9 +333,9 @@ void ray_compile(ray_t *lambda) {
     /* Register params as locals */
     ray_t *params_list = LAMBDA_PARAMS(lambda);
     int64_t param_count = ray_len(params_list);
-    ray_t **param_syms = (ray_t **)ray_data(params_list);
+    int64_t *param_ids = (int64_t*)ray_data(params_list);
     for (int64_t i = 0; i < param_count; i++) {
-        if (add_local(&c, param_syms[i]->i64) < 0) { c.error = true; break; }
+        if (add_local(&c, param_ids[i]) < 0) { c.error = true; break; }
     }
 
     /* Compile body expressions */

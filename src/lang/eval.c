@@ -1493,7 +1493,7 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
     }
 
     /* List → function call: (fn arg1 arg2 ...) */
-    if (expr->type == RAY_LIST && !(expr->attrs & (RAY_ATTR_VECTOR | RAY_ATTR_DICT))) {
+    if (expr->type == RAY_LIST && !(expr->attrs & (RAY_ATTR_DICT))) {
         int64_t n = ray_len(expr);
         if (n == 0) return NULL;
         ray_t** elems = (ray_t**)ray_data(expr);
@@ -1564,7 +1564,7 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
 /* Check if an expression is an aggregation call (head is an agg function) */
 static int is_agg_expr(ray_t* expr) {
     if (!expr || expr->type != RAY_LIST) return 0;
-    if (expr->attrs & (RAY_ATTR_VECTOR | RAY_ATTR_DICT)) return 0;
+    if (expr->attrs & (RAY_ATTR_DICT)) return 0;
     int64_t n = ray_len(expr);
     if (n < 2) return 0;
     ray_t** elems = (ray_t**)ray_data(expr);
@@ -1628,12 +1628,14 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
         ray_op_t* key_ops[16];
         uint8_t n_keys = 0;
 
-        if (by_expr->type == RAY_LIST && (by_expr->attrs & RAY_ATTR_VECTOR)) {
-            /* Multiple keys: [key1 key2 ...] */
+        if (by_expr->type == RAY_SYM) {
+            /* Multiple keys as SYM vector: [col1 col2 ...] */
             int64_t nk = ray_len(by_expr);
-            ray_t** key_elems = (ray_t**)ray_data(by_expr);
+            int64_t* sym_ids = (int64_t*)ray_data(by_expr);
             for (int64_t i = 0; i < nk && n_keys < 16; i++) {
-                key_ops[n_keys] = compile_expr_dag(g, key_elems[i]);
+                ray_t* name_str = ray_sym_str(sym_ids[i]);
+                if (!name_str) { ray_graph_free(g); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+                key_ops[n_keys] = ray_scan(g, ray_str_ptr(name_str));
                 if (!key_ops[n_keys]) { ray_graph_free(g); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
                 n_keys++;
             }
@@ -2246,10 +2248,7 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
     ray_t* _bxk = NULL;
     keys = unbox_vec_arg(keys, &_bxk);
     if (RAY_IS_ERR(keys)) return keys;
-    /* Accept typed-vector keys (now unboxed) or boxed lists with ATTR_VECTOR */
     if (!is_list(keys))
-        { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-    if (!_bxk && !(keys->attrs & RAY_ATTR_VECTOR))
         { if (_bxk) ray_release(_bxk); return RAY_ERR_PTR(RAY_ERR_TYPE); }
 
     int64_t nk = ray_len(keys);
@@ -2690,12 +2689,12 @@ static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
     ray_t* body = LAMBDA_BODY(lambda);
 
     int64_t param_count = ray_len(params_list);
-    ray_t** param_syms = (ray_t**)ray_data(params_list);
 
     if (ray_env_push_scope() != RAY_OK) return RAY_ERR_PTR(RAY_ERR_OOM);
 
+    int64_t* param_ids = (int64_t*)ray_data(params_list);
     for (int64_t i = 0; i < param_count && i < argc; i++) {
-        (void)ray_env_set_local(param_syms[i]->i64, call_args[i]);
+        (void)ray_env_set_local(param_ids[i], call_args[i]);
     }
 
     int64_t body_count = ray_len(body);
@@ -3397,27 +3396,6 @@ ray_t* ray_eval(ray_t* obj) {
 
     /* Empty list */
     if (ray_len(obj) == 0) { ray_retain(obj); ret = obj; goto out; }
-
-    /* Vector literal [x y z]: evaluate each element, return as data list */
-    if (obj->attrs & RAY_ATTR_VECTOR) {
-        int64_t len = ray_len(obj);
-        ray_t** src = (ray_t**)ray_data(obj);
-        ray_t* result = ray_alloc(len * sizeof(ray_t*));
-        if (!result) { ret = RAY_ERR_PTR(RAY_ERR_OOM); goto out; }
-        result->type = RAY_LIST;
-        result->attrs = RAY_ATTR_VECTOR;
-        result->len = len;
-        ray_t** dst = (ray_t**)ray_data(result);
-        for (int64_t i = 0; i < len; i++) {
-            dst[i] = ray_eval(src[i]);
-            if (RAY_IS_ERR(dst[i])) {
-                for (int64_t j = 0; j < i; j++) ray_release(dst[j]);
-                ray_release(result);
-                ret = dst[i]; goto out;
-            }
-        }
-        ret = result; goto out;
-    }
 
     /* List: evaluate first element, dispatch by type */
     ray_t** elems = (ray_t**)ray_data(obj);

@@ -17,7 +17,6 @@
 #define RAY_ATTR_NAME        0x20  /* ray_t SYM atom with this flag = name reference */
 
 /* Vector literal flag (distinguishes [x y z] data from (f x y) calls in RAY_LIST) */
-#define RAY_ATTR_VECTOR      0x01  /* RAY_LIST with this flag = data vector, not call */
 #define RAY_ATTR_DICT        0x02  /* RAY_LIST with this flag = dict {k: v ...} */
 
 /* Function type signatures */
