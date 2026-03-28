@@ -293,28 +293,14 @@ static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
  * ══════════════════════════════════════════ */
 
 ray_t* ray_sum_fn(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_SUM);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        int64_t len = ray_len(x);
-        if (len == 0) return make_i64(0);
-        if (x->type == RAY_I64) {
-            int64_t* d = (int64_t*)ray_data(x);
-            int64_t s = 0;
-            for (int64_t i = 0; i < len; i++) s += d[i];
-            return make_i64(s);
-        }
-        if (x->type == RAY_F64) {
-            double* d = (double*)ray_data(x);
-            double s = 0.0;
-            for (int64_t i = 0; i < len; i++) s += d[i];
-            return make_f64(s);
-        }
-        if (x->type == RAY_I32) {
-            int32_t* d = (int32_t*)ray_data(x);
-            int64_t s = 0;
-            for (int64_t i = 0; i < len; i++) s += d[i];
-            return make_i64(s);
-        }
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_sum(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
@@ -332,35 +318,28 @@ ray_t* ray_sum_fn(ray_t* x) {
 }
 
 ray_t* ray_count_fn(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_COUNT);
     if (x->type == RAY_TABLE) return make_i64(ray_table_nrows(x));
-    if (ray_is_vec(x)) return make_i64(ray_len(x));
+    if (ray_is_vec(x)) {
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_count(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
+    }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     return make_i64(ray_len(x));
 }
 
 ray_t* ray_avg_fn(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_AVG);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        int64_t len = ray_len(x);
-        if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        if (x->type == RAY_I64) {
-            int64_t* d = (int64_t*)ray_data(x);
-            double s = 0.0;
-            for (int64_t i = 0; i < len; i++) s += (double)d[i];
-            return make_f64(s / (double)len);
-        }
-        if (x->type == RAY_F64) {
-            double* d = (double*)ray_data(x);
-            double s = 0.0;
-            for (int64_t i = 0; i < len; i++) s += d[i];
-            return make_f64(s / (double)len);
-        }
-        if (x->type == RAY_I32) {
-            int32_t* d = (int32_t*)ray_data(x);
-            double s = 0.0;
-            for (int64_t i = 0; i < len; i++) s += (double)d[i];
-            return make_f64(s / (double)len);
-        }
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_avg(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
@@ -375,28 +354,14 @@ ray_t* ray_avg_fn(ray_t* x) {
 }
 
 ray_t* ray_min(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MIN);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        int64_t len = ray_len(x);
-        if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        if (x->type == RAY_I64) {
-            int64_t* d = (int64_t*)ray_data(x);
-            int64_t m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = d[i];
-            return make_i64(m);
-        }
-        if (x->type == RAY_F64) {
-            double* d = (double*)ray_data(x);
-            double m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = d[i];
-            return make_f64(m);
-        }
-        if (x->type == RAY_I32) {
-            int32_t* d = (int32_t*)ray_data(x);
-            int64_t m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = (int64_t)d[i];
-            return make_i64(m);
-        }
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_min_op(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
@@ -416,28 +381,14 @@ ray_t* ray_min(ray_t* x) {
 }
 
 ray_t* ray_max(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MAX);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        int64_t len = ray_len(x);
-        if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        if (x->type == RAY_I64) {
-            int64_t* d = (int64_t*)ray_data(x);
-            int64_t m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = d[i];
-            return make_i64(m);
-        }
-        if (x->type == RAY_F64) {
-            double* d = (double*)ray_data(x);
-            double m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = d[i];
-            return make_f64(m);
-        }
-        if (x->type == RAY_I32) {
-            int32_t* d = (int32_t*)ray_data(x);
-            int64_t m = d[0];
-            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = (int64_t)d[i];
-            return make_i64(m);
-        }
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_max_op(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
@@ -457,12 +408,14 @@ ray_t* ray_max(ray_t* x) {
 }
 
 ray_t* ray_first_fn(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_FIRST);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        if (ray_len(x) == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        if (x->type == RAY_I64) return make_i64(((int64_t*)ray_data(x))[0]);
-        if (x->type == RAY_F64) return make_f64(((double*)ray_data(x))[0]);
-        if (x->type == RAY_I32) return make_i64(((int32_t*)ray_data(x))[0]);
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_first(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (ray_len(x) == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -472,13 +425,14 @@ ray_t* ray_first_fn(ray_t* x) {
 }
 
 ray_t* ray_last_fn(ray_t* x) {
+    if (ray_is_lazy(x)) return ray_lazy_append(x, OP_LAST);
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
-        int64_t len = ray_len(x);
-        if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-        if (x->type == RAY_I64) return make_i64(((int64_t*)ray_data(x))[len - 1]);
-        if (x->type == RAY_F64) return make_f64(((double*)ray_data(x))[len - 1]);
-        if (x->type == RAY_I32) return make_i64(((int32_t*)ray_data(x))[len - 1]);
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        ray_graph_t* g = ray_graph_new(NULL);
+        if (!g) return RAY_ERR_PTR(RAY_ERR_OOM);
+        ray_op_t* in = ray_graph_input_vec(g, x);
+        ray_op_t* op = ray_last(g, in);
+        return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
@@ -514,6 +468,8 @@ static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
 }
 
 ray_t* ray_med(ray_t* x) {
+    if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
+    if (RAY_IS_ERR(x)) return x;
     int64_t len;
     ray_t* scratch;
     double* vals;
@@ -555,6 +511,8 @@ ray_t* ray_med(ray_t* x) {
 }
 
 ray_t* ray_dev(ray_t* x) {
+    if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
+    if (RAY_IS_ERR(x)) return x;
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
