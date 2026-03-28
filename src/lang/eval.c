@@ -588,6 +588,8 @@ static ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
  * Also supports (map fn vec) for unary mapping. */
 ray_t* ray_map(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
 
@@ -643,6 +645,8 @@ ray_t* ray_pmap(ray_t** args, int64_t n) {
 /* (fold fn vec) or (fold fn init vec) — reduce with binary fn */
 ray_t* ray_fold(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
     ray_t* vec;
@@ -684,6 +688,8 @@ ray_t* ray_fold(ray_t** args, int64_t n) {
 /* (scan fn vec) — running fold, returns vector of partial results */
 ray_t* ray_scan_fn(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
     ray_t* vec = args[1];
@@ -719,6 +725,8 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
 
 /* (filter vec mask) — filter vector by boolean mask */
 ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
+    if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
+    if (ray_is_lazy(mask)) mask = ray_lazy_materialize(mask);
     if (!is_list(vec) || !is_list(mask)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     int64_t mlen = ray_len(mask);
@@ -751,6 +759,8 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
 /* (apply fn vec1 vec2) — zip-apply fn element-wise over two vectors */
 ray_t* ray_apply(ray_t** args, int64_t n) {
     if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
     ray_t* vec1 = args[1];
@@ -801,6 +811,7 @@ static int atom_eq(ray_t* a, ray_t* b) {
 
 /* (distinct vec) — remove duplicates, preserving first occurrence */
 ray_t* ray_distinct_fn(ray_t* x) {
+    if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
     if (len == 0) { ray_retain(x); return x; }
@@ -828,6 +839,8 @@ ray_t* ray_distinct_fn(ray_t* x) {
 
 /* (in val vec) — check membership */
 ray_t* ray_in(ray_t* val, ray_t* vec) {
+    if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
+    if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
@@ -839,6 +852,8 @@ ray_t* ray_in(ray_t* val, ray_t* vec) {
 
 /* (except vec1 vec2) — elements in vec1 not in vec2 */
 ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
+    if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
+    if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -867,6 +882,8 @@ ray_t* ray_except(ray_t* vec1, ray_t* vec2) {
 
 /* (union vec1 vec2) — elements in vec1 + elements in vec2 not already in vec1 */
 ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
+    if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
+    if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -899,6 +916,8 @@ ray_t* ray_union(ray_t* vec1, ray_t* vec2) {
 
 /* (sect vec1 vec2) — intersection: elements in both */
 ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
+    if (ray_is_lazy(vec1)) vec1 = ray_lazy_materialize(vec1);
+    if (ray_is_lazy(vec2)) vec2 = ray_lazy_materialize(vec2);
     if (!is_list(vec1) || !is_list(vec2)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len1 = ray_len(vec1);
     int64_t len2 = ray_len(vec2);
@@ -926,6 +945,7 @@ ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
 
 /* (take vec n) — first n elements (positive) or last |n| elements (negative) */
 ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
+    if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (!is_list(vec) || n_obj->type != RAY_ATOM_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
@@ -955,6 +975,7 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
 
 /* (at vec idx) or (at table 'col) — index into vector or table */
 ray_t* ray_at(ray_t* vec, ray_t* idx) {
+    if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     /* Table column access by symbol key */
     if (vec->type == RAY_TABLE && idx->type == RAY_ATOM_SYM) {
         ray_t* col = ray_table_get_col(vec, idx->i64);
@@ -1008,6 +1029,7 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
 
 /* (find vec val) — index of first occurrence, or -1 */
 ray_t* ray_find(ray_t* vec, ray_t* val) {
+    if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (!is_list(vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     ray_t** elems = (ray_t**)ray_data(vec);
@@ -1041,6 +1063,7 @@ ray_t* ray_til(ray_t* x) {
 
 /* (reverse vec) — reverse a vector */
 ray_t* ray_reverse(ray_t* x) {
+    if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
     if (!is_list(x)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(x);
     ray_t** elems = (ray_t**)ray_data(x);
