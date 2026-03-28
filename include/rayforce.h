@@ -127,6 +127,9 @@ extern "C" {
 /* Variable-length string column (inline + pool) */
 #define RAY_STR       21
 
+/* Lazy DAG handle (atom-only; stored inline in nullmap region) */
+#define RAY_LAZY      104
+
 /* Function types (Rayforce-compatible) */
 #define RAY_LAMBDA    100   /* User-defined function (compiled body + env) */
 #define RAY_UNARY     101   /* Unary builtin: ray_t* (*)(ray_t*) */
@@ -138,6 +141,7 @@ extern "C" {
 #define RAY_ATOM_UNARY     (-RAY_UNARY)
 #define RAY_ATOM_BINARY    (-RAY_BINARY)
 #define RAY_ATOM_VARY      (-RAY_VARY)
+#define RAY_ATOM_LAZY      (-RAY_LAZY)
 
 /* Function attribute flags (stored in attrs byte) */
 #define RAY_FN_NONE          0x00
@@ -317,6 +321,23 @@ typedef union RAY_ALIGN(32) ray_t {
 
 /* Type sizes lookup table (defined in types.c) */
 extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];
+
+/* ===== Lazy DAG Handle Accessors =====
+ *
+ * A lazy handle is a ray_t with type == RAY_ATOM_LAZY.  It stores two
+ * pointers in the nullmap region (bytes 0-15), which is unused for atoms:
+ *   Bytes 0-7:  ray_graph_t* (owns the graph)
+ *   Bytes 8-15: ray_op_t*    (the output node)
+ */
+typedef struct ray_graph ray_graph_t;
+typedef struct ray_op    ray_op_t;
+
+#define RAY_LAZY_GRAPH(p) (*(ray_graph_t**)((p)->nullmap))
+#define RAY_LAZY_OP(p)    (*(ray_op_t**)(((p)->nullmap) + 8))
+
+static inline bool ray_is_lazy(ray_t* x) {
+    return x && !RAY_IS_ERR(x) && x->type == RAY_ATOM_LAZY;
+}
 
 /* ===== Accessor Macros ===== */
 
@@ -1136,6 +1157,13 @@ void ray_graph_dump(ray_graph_t* g, ray_op_t* root, void* out);
 /* ===== Executor API ===== */
 
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root);
+
+/* ===== Lazy DAG Handle API ===== */
+
+ray_op_t* ray_graph_input_vec(ray_graph_t* g, ray_t* vec);
+ray_t*    ray_lazy_wrap(ray_graph_t* g, ray_op_t* op);
+ray_t*    ray_lazy_append(ray_t* lazy, uint16_t opcode);
+ray_t*    ray_lazy_materialize(ray_t* val);
 
 /* ===== Storage API ===== */
 
