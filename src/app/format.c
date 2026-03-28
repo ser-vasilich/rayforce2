@@ -447,6 +447,376 @@ static void fmt_dict(fmt_buf_t* b, ray_t* dict, int mode) {
     fmt_puts(b, "}");
 }
 
+/* ===== Box-drawing glyphs (UTF-8) ===== */
+
+#define G_TL "\xe2\x94\x8c"    /* ┌ */
+#define G_TR "\xe2\x94\x90"    /* ┐ */
+#define G_BL "\xe2\x94\x94"    /* └ */
+#define G_BR "\xe2\x94\x98"    /* ┘ */
+#define G_H  "\xe2\x94\x80"    /* ─ */
+#define G_V  "\xe2\x94\x82"    /* │ */
+#define G_TT "\xe2\x94\xac"    /* ┬ */
+#define G_BT "\xe2\x94\xb4"    /* ┴ */
+#define G_LT "\xe2\x94\x9c"    /* ├ */
+#define G_RT "\xe2\x94\xa4"    /* ┤ */
+#define G_X  "\xe2\x94\xbc"    /* ┼ */
+#define G_HDOTS "\xe2\x80\xa6" /* … */
+
+/* ===== Table formatter helpers ===== */
+
+static void fmt_centered(fmt_buf_t* b, const char* s, int32_t slen, int32_t width) {
+    int32_t left  = (width - slen) / 2;
+    int32_t right = width - slen - left;
+    for (int32_t i = 0; i < left; i++)  fmt_putc(b, ' ');
+    fmt_putn(b, s, slen);
+    for (int32_t i = 0; i < right; i++) fmt_putc(b, ' ');
+}
+
+/* Maximum pre-formatted cells: FMT_TABLE_MAX_WIDTH * FMT_TABLE_MAX_HEIGHT = 200 */
+#define FMT_CELL_BUF_SIZE 64
+
+typedef struct {
+    char    str[FMT_CELL_BUF_SIZE];
+    int32_t len;
+} fmt_cell_t;
+
+static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
+    int64_t ncols = ray_table_ncols(tbl);
+    int64_t nrows = ray_table_nrows(tbl);
+
+    /* Compact mode */
+    if (mode == 0) {
+        fmt_puts(b, "(table ");
+        fmt_putc(b, '[');
+        for (int64_t i = 0; i < ncols; i++) {
+            if (i > 0) fmt_putc(b, ' ');
+            int64_t name_id = ray_table_col_name(tbl, i);
+            ray_t* name_str = ray_sym_str(name_id);
+            if (name_str && !RAY_IS_ERR(name_str)) {
+                fmt_putn(b, ray_str_ptr(name_str), (int32_t)ray_str_len(name_str));
+                ray_release(name_str);
+            }
+        }
+        fmt_puts(b, "]" G_HDOTS ")");
+        return;
+    }
+
+    /* Full mode (1) and show mode (2) */
+    int64_t table_width  = ncols;
+    int64_t table_height = nrows;
+
+    if (mode == 1) {
+        if (table_width > FMT_TABLE_MAX_WIDTH)
+            table_width = FMT_TABLE_MAX_WIDTH;
+        if (table_height > FMT_TABLE_MAX_HEIGHT)
+            table_height = FMT_TABLE_MAX_HEIGHT;
+    }
+
+    if (table_width == 0) {
+        fmt_puts(b, "<table>");
+        return;
+    }
+
+    bool has_hidden_cols = (table_width < ncols);
+    bool has_hidden_rows = (table_height < nrows);
+
+    /* Allocate metadata arrays.  For mode 1 they fit on the stack
+     * (max 10 cols x 20 rows).  For mode 2 we heap-allocate. */
+    bool heap_alloc = (table_width > FMT_TABLE_MAX_WIDTH ||
+                       table_height > FMT_TABLE_MAX_HEIGHT);
+
+    int32_t     col_widths_stack[FMT_TABLE_MAX_WIDTH];
+    const char* col_names_stack[FMT_TABLE_MAX_WIDTH];
+    int32_t     col_name_lens_stack[FMT_TABLE_MAX_WIDTH];
+    const char* col_types_stack[FMT_TABLE_MAX_WIDTH];
+    int32_t     col_type_lens_stack[FMT_TABLE_MAX_WIDTH];
+    ray_t*      name_refs_stack[FMT_TABLE_MAX_WIDTH];
+    fmt_cell_t  cells_stack[FMT_TABLE_MAX_WIDTH * FMT_TABLE_MAX_HEIGHT];
+
+    /* Heap-backed pointers (NULL when using stack) */
+    ray_t* heap_widths_blk = NULL;
+    ray_t* heap_names_blk  = NULL;
+    ray_t* heap_nlen_blk   = NULL;
+    ray_t* heap_types_blk  = NULL;
+    ray_t* heap_tlen_blk   = NULL;
+    ray_t* heap_refs_blk   = NULL;
+    ray_t* heap_cells_blk  = NULL;
+
+    int32_t*     col_widths;
+    const char** col_names;
+    int32_t*     col_name_lens;
+    const char** col_types;
+    int32_t*     col_type_lens;
+    ray_t**      name_refs;
+    fmt_cell_t*  cells;
+
+    if (!heap_alloc) {
+        col_widths    = col_widths_stack;
+        col_names     = col_names_stack;
+        col_name_lens = col_name_lens_stack;
+        col_types     = col_types_stack;
+        col_type_lens = col_type_lens_stack;
+        name_refs     = name_refs_stack;
+        cells         = cells_stack;
+    } else {
+        heap_widths_blk = ray_alloc((size_t)(table_width * (int64_t)sizeof(int32_t)));
+        heap_names_blk  = ray_alloc((size_t)(table_width * (int64_t)sizeof(const char*)));
+        heap_nlen_blk   = ray_alloc((size_t)(table_width * (int64_t)sizeof(int32_t)));
+        heap_types_blk  = ray_alloc((size_t)(table_width * (int64_t)sizeof(const char*)));
+        heap_tlen_blk   = ray_alloc((size_t)(table_width * (int64_t)sizeof(int32_t)));
+        heap_refs_blk   = ray_alloc((size_t)(table_width * (int64_t)sizeof(ray_t*)));
+        heap_cells_blk  = ray_alloc((size_t)(table_width * table_height * (int64_t)sizeof(fmt_cell_t)));
+
+        col_widths    = (int32_t*)ray_data(heap_widths_blk);
+        col_names     = (const char**)ray_data(heap_names_blk);
+        col_name_lens = (int32_t*)ray_data(heap_nlen_blk);
+        col_types     = (const char**)ray_data(heap_types_blk);
+        col_type_lens = (int32_t*)ray_data(heap_tlen_blk);
+        name_refs     = (ray_t**)ray_data(heap_refs_blk);
+        cells         = (fmt_cell_t*)ray_data(heap_cells_blk);
+    }
+
+    /* Pre-format cells and calculate column widths */
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        /* Column name */
+        int64_t name_id = ray_table_col_name(tbl, ci);
+        ray_t* name_str = ray_sym_str(name_id);
+        name_refs[ci] = name_str;
+        if (name_str && !RAY_IS_ERR(name_str)) {
+            col_names[ci]     = ray_str_ptr(name_str);
+            col_name_lens[ci] = (int32_t)ray_str_len(name_str);
+        } else {
+            col_names[ci]     = "?";
+            col_name_lens[ci] = 1;
+            name_refs[ci]     = NULL;
+        }
+
+        /* Column type */
+        ray_t* col_vec = ray_table_get_col_idx(tbl, ci);
+        const char* tname = ray_type_name(col_vec ? col_vec->type : 0);
+        col_types[ci]     = tname;
+        col_type_lens[ci] = (int32_t)strlen(tname);
+
+        /* Start with max of name and type lengths */
+        int32_t max_w = col_name_lens[ci];
+        if (col_type_lens[ci] > max_w) max_w = col_type_lens[ci];
+
+        int64_t col_len = col_vec ? ray_len(col_vec) : 0;
+
+        /* Format first half (head rows) */
+        int64_t half = table_height / 2;
+        for (int64_t ri = 0; ri < half; ri++) {
+            fmt_cell_t* cell = &cells[ci * table_height + ri];
+            if (ri < col_len) {
+                fmt_buf_t tmp;
+                fmt_init(&tmp);
+                fmt_raw_elem(&tmp, col_vec, ri);
+                int32_t clen = tmp.len < FMT_CELL_BUF_SIZE - 1 ? tmp.len : FMT_CELL_BUF_SIZE - 1;
+                memcpy(cell->str, tmp.buf, (size_t)clen);
+                cell->str[clen] = '\0';
+                cell->len = clen;
+                fmt_destroy(&tmp);
+            } else {
+                memcpy(cell->str, "NA", 3);
+                cell->len = 2;
+            }
+            if (cell->len > max_w) max_w = cell->len;
+        }
+
+        /* Format second half (tail rows) */
+        for (int64_t ri = half; ri < table_height; ri++) {
+            fmt_cell_t* cell = &cells[ci * table_height + ri];
+            int64_t src_idx;
+            if (table_height == col_len || !has_hidden_rows) {
+                src_idx = ri;
+            } else {
+                src_idx = col_len - table_height + ri;
+            }
+            if (src_idx >= 0 && src_idx < col_len) {
+                fmt_buf_t tmp;
+                fmt_init(&tmp);
+                fmt_raw_elem(&tmp, col_vec, src_idx);
+                int32_t clen = tmp.len < FMT_CELL_BUF_SIZE - 1 ? tmp.len : FMT_CELL_BUF_SIZE - 1;
+                memcpy(cell->str, tmp.buf, (size_t)clen);
+                cell->str[clen] = '\0';
+                cell->len = clen;
+                fmt_destroy(&tmp);
+            } else {
+                memcpy(cell->str, "NA", 3);
+                cell->len = 2;
+            }
+            if (cell->len > max_w) max_w = cell->len;
+        }
+
+        col_widths[ci] = max_w + 2; /* +2 for padding (1 space each side) */
+    }
+
+    /* Calculate total width (sum of col widths + separators between columns) */
+    int32_t total_width = 0;
+    for (int64_t ci = 0; ci < table_width; ci++)
+        total_width += col_widths[ci];
+    total_width += (int32_t)(table_width - 1); /* separators between columns */
+
+    /* Format footer to check if we need to widen the last column */
+    char footer[128];
+    int footer_len = snprintf(footer, sizeof(footer),
+        " %" PRId64 " rows (%" PRId64 " shown) %" PRId64 " columns (%" PRId64 " shown)",
+        nrows, table_height, ncols, table_width);
+
+    if (total_width < footer_len) {
+        col_widths[table_width - 1] += footer_len - total_width;
+        total_width = footer_len;
+    }
+
+    /* Extra width for hidden columns indicator */
+    if (has_hidden_cols)
+        total_width += 4; /* "───┐" or " … │" */
+
+    /* === Render === */
+
+    /* 1. Top border: ┌──┬──┐ */
+    fmt_puts(b, G_TL);
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        for (int32_t j = 0; j < col_widths[ci]; j++)
+            fmt_puts(b, G_H);
+        if (ci < table_width - 1)
+            fmt_puts(b, G_TT);
+        else if (has_hidden_cols)
+            fmt_puts(b, G_TT);
+        else
+            fmt_puts(b, G_TR);
+    }
+    if (has_hidden_cols) {
+        fmt_puts(b, G_H G_H G_H G_TR);
+    }
+
+    /* 2. Header row: │ name │ (centered) */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_V);
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        fmt_centered(b, col_names[ci], col_name_lens[ci], col_widths[ci]);
+        fmt_puts(b, G_V);
+    }
+    if (has_hidden_cols) {
+        fmt_puts(b, " " G_HDOTS " " G_V);
+    }
+
+    /* 3. Type row: │ type │ (centered) */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_V);
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        fmt_centered(b, col_types[ci], col_type_lens[ci], col_widths[ci]);
+        fmt_puts(b, G_V);
+    }
+    if (has_hidden_cols) {
+        fmt_puts(b, " " G_HDOTS " " G_V);
+    }
+
+    /* 4. Separator: ├──┼──┤ */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_LT);
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        for (int32_t j = 0; j < col_widths[ci]; j++)
+            fmt_puts(b, G_H);
+        if (ci < table_width - 1)
+            fmt_puts(b, G_X);
+        else if (has_hidden_cols)
+            fmt_puts(b, G_X);
+        else
+            fmt_puts(b, G_RT);
+    }
+    if (has_hidden_cols) {
+        fmt_puts(b, G_H G_H G_H G_RT);
+    }
+
+    /* 5. Data rows */
+    int64_t half = table_height / 2;
+    for (int64_t ri = 0; ri < table_height; ri++) {
+        fmt_putc(b, '\n');
+
+        /* 6. Truncation indicator row between head and tail */
+        if (has_hidden_rows && ri == half) {
+            fmt_puts(b, G_V);
+            for (int64_t ci = 0; ci < table_width; ci++) {
+                /* Center the ellipsis (3 bytes, 1 display char) */
+                int32_t left  = (col_widths[ci] - 1) / 2;
+                int32_t right = col_widths[ci] - 1 - left;
+                for (int32_t p = 0; p < left; p++)  fmt_putc(b, ' ');
+                fmt_puts(b, G_HDOTS);
+                for (int32_t p = 0; p < right; p++) fmt_putc(b, ' ');
+                fmt_puts(b, G_V);
+            }
+            if (has_hidden_cols) {
+                fmt_puts(b, " " G_HDOTS " " G_V);
+            }
+            fmt_putc(b, '\n');
+        }
+
+        /* Data row: │ val │ (left-aligned with 1-space padding) */
+        fmt_puts(b, G_V);
+        for (int64_t ci = 0; ci < table_width; ci++) {
+            fmt_cell_t* cell = &cells[ci * table_height + ri];
+            fmt_putc(b, ' ');
+            fmt_putn(b, cell->str, cell->len);
+            int32_t pad = col_widths[ci] - cell->len - 1;
+            for (int32_t p = 0; p < pad; p++)
+                fmt_putc(b, ' ');
+            fmt_puts(b, G_V);
+        }
+        if (has_hidden_cols) {
+            fmt_puts(b, " " G_HDOTS " " G_V);
+        }
+    }
+
+    /* 7. Bottom border (separator before footer): ├──┴──┤ */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_LT);
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        for (int32_t j = 0; j < col_widths[ci]; j++)
+            fmt_puts(b, G_H);
+        if (ci < table_width - 1)
+            fmt_puts(b, G_BT);
+        else if (has_hidden_cols)
+            fmt_puts(b, G_BT);
+        else
+            fmt_puts(b, G_RT);
+    }
+    if (has_hidden_cols) {
+        fmt_puts(b, G_H G_H G_H G_RT);
+    }
+
+    /* 8. Footer row: │ N rows (M shown) C columns (K shown) │ */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_V);
+    fmt_putn(b, footer, footer_len);
+    for (int32_t i = footer_len; i < total_width; i++)
+        fmt_putc(b, ' ');
+    fmt_puts(b, G_V);
+
+    /* Final bottom border: └───┘ */
+    fmt_putc(b, '\n');
+    fmt_puts(b, G_BL);
+    for (int32_t i = 0; i < total_width; i++)
+        fmt_puts(b, G_H);
+    fmt_puts(b, G_BR);
+
+    /* Release name string refs */
+    for (int64_t ci = 0; ci < table_width; ci++) {
+        if (name_refs[ci]) ray_release(name_refs[ci]);
+    }
+
+    /* Free heap allocations if used */
+    if (heap_alloc) {
+        ray_free(heap_widths_blk);
+        ray_free(heap_names_blk);
+        ray_free(heap_nlen_blk);
+        ray_free(heap_types_blk);
+        ray_free(heap_tlen_blk);
+        ray_free(heap_refs_blk);
+        ray_free(heap_cells_blk);
+    }
+}
+
 /* ===== Core dispatch ===== */
 
 static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
@@ -482,7 +852,7 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
     } else if (type == RAY_LIST) {
         fmt_list(b, obj, mode);
     } else if (type == RAY_TABLE) {
-        fmt_puts(b, "<table>");
+        fmt_table(b, obj, mode);
     } else {
         fmt_puts(b, "<todo>");
     }
