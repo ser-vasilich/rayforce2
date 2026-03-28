@@ -64,9 +64,26 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # Rayfall REPL binary
+# Version and build info for REPL banner
+set(TEIDE_VERSION "0.1.0")
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE TEIDE_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT TEIDE_GIT_COMMIT)
+    set(TEIDE_GIT_COMMIT "unknown")
+endif()
+string(TIMESTAMP TEIDE_BUILD_DATE "%Y-%m-%d" UTC)
+
 add_executable(teide_repl src/lang/repl.c)
 target_link_libraries(teide_repl PRIVATE teide_static)
 target_include_directories(teide_repl PRIVATE include src)
+target_compile_definitions(teide_repl PRIVATE
+    TEIDE_VERSION="${TEIDE_VERSION}"
+    TEIDE_GIT_COMMIT="${TEIDE_GIT_COMMIT}"
+    TEIDE_BUILD_DATE="${TEIDE_BUILD_DATE}")
 target_compile_options(teide_repl PRIVATE ${TEIDE_WARNINGS})
 target_compile_options(teide_repl PRIVATE
     $<$<CONFIG:Debug>:${TEIDE_DEBUG_FLAGS}>

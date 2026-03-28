@@ -21,6 +21,10 @@
 #define STDIN_FD STDIN_FILENO
 #endif
 
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 /* Cross-platform monotonic time in nanoseconds */
 static int64_t time_now_ns(void) {
 #if defined(_WIN32)
@@ -35,9 +39,89 @@ static int64_t time_now_ns(void) {
 #endif
 }
 
+#ifndef TEIDE_VERSION
+#define TEIDE_VERSION "dev"
+#endif
+#ifndef TEIDE_GIT_COMMIT
+#define TEIDE_GIT_COMMIT "unknown"
+#endif
+#ifndef TEIDE_BUILD_DATE
+#define TEIDE_BUILD_DATE "unknown"
+#endif
+
+static void get_cpu_name(char* buf, size_t sz) {
+#if defined(__linux__)
+    FILE* f = fopen("/proc/cpuinfo", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "model name", 10) == 0) {
+                char* p = strchr(line, ':');
+                if (p) {
+                    p++;
+                    while (*p == ' ') p++;
+                    size_t len = strlen(p);
+                    if (len > 0 && p[len - 1] == '\n') p[len - 1] = '\0';
+                    snprintf(buf, sz, "%s", p);
+                    fclose(f);
+                    return;
+                }
+            }
+        }
+        fclose(f);
+    }
+    snprintf(buf, sz, "unknown");
+#elif defined(__APPLE__)
+    size_t len = sz;
+    if (sysctlbyname("machdep.cpu.brand_string", buf, &len, NULL, 0) != 0)
+        snprintf(buf, sz, "unknown");
+#elif defined(_WIN32)
+    snprintf(buf, sz, "unknown");
+#else
+    snprintf(buf, sz, "unknown");
+#endif
+}
+
+static int64_t get_total_mem_mb(void) {
+#if defined(__linux__)
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_sz = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page_sz > 0)
+        return (int64_t)pages * (int64_t)page_sz / (1024 * 1024);
+    return 0;
+#elif defined(__APPLE__)
+    int64_t mem = 0;
+    size_t len = sizeof(mem);
+    sysctlbyname("hw.memsize", &mem, &len, NULL, 0);
+    return mem / (1024 * 1024);
+#elif defined(_WIN32)
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatusEx(&ms);
+    return (int64_t)(ms.ullTotalPhys / (1024 * 1024));
+#else
+    return 0;
+#endif
+}
+
+static void print_banner(void) {
+    char cpu[256];
+    get_cpu_name(cpu, sizeof(cpu));
+    int64_t mem_mb = get_total_mem_mb();
+    int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
+
+    fprintf(stdout,
+        "Teide %s (%s, %s)\n"
+        "%s | %d cores | %" PRId64 " MB RAM\n"
+        "Apache-2.0 license | type :? for help\n\n",
+        TEIDE_VERSION, TEIDE_GIT_COMMIT, TEIDE_BUILD_DATE,
+        cpu, ncores, mem_mb);
+}
+
 #define PIPE_BUF_SIZE 4096
-#define MAX_PRINT_ROWS 40
-#define MAX_COL_WIDTH 40
+#define MAX_PRINT_ROWS  40
+#define MAX_PRINT_ELEMS 20
+#define MAX_COL_WIDTH   40
 
 /* ===== Pretty-print helpers ===== */
 
@@ -116,22 +200,27 @@ static void print_vector(FILE* fp, td_t* val) {
     bool is_dict = (val->attrs & TD_ATTR_DICT) != 0;
 
     if (is_dict) {
+        int64_t npairs = len / 2;
+        int64_t show = npairs > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : npairs;
         fprintf(fp, "{");
-        for (int64_t i = 0; i + 1 < len; i += 2) {
+        for (int64_t i = 0; i < show; i++) {
             if (i > 0) fprintf(fp, " ");
-            td_lang_print(fp, elems[i]);
+            td_lang_print(fp, elems[i * 2]);
             fprintf(fp, ": ");
-            td_lang_print(fp, elems[i + 1]);
+            td_lang_print(fp, elems[i * 2 + 1]);
         }
+        if (npairs > show) fprintf(fp, " ...(+%" PRId64 ")", npairs - show);
         fprintf(fp, "}");
         return;
     }
 
+    int64_t show = len > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : len;
     fprintf(fp, "[");
-    for (int64_t i = 0; i < len; i++) {
+    for (int64_t i = 0; i < show; i++) {
         if (i > 0) fprintf(fp, " ");
         td_lang_print(fp, elems[i]);
     }
+    if (len > show) fprintf(fp, " ...(+%" PRId64 ")", len - show);
     fprintf(fp, "]");
 }
 
@@ -140,7 +229,7 @@ static void print_typed_vector(FILE* fp, td_t* vec) {
     int64_t len = td_len(vec);
     char elem_buf[256];
     fprintf(fp, "[");
-    int64_t show = len > 100 ? 100 : len;
+    int64_t show = len > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : len;
     for (int64_t i = 0; i < show; i++) {
         if (i > 0) fprintf(fp, " ");
         fmt_vec_elem(vec, i, elem_buf, (int)sizeof(elem_buf));
@@ -342,32 +431,55 @@ static const char* type_label(td_t* val) {
     }
 }
 
+static bool cmd_match(const char* cmd, size_t clen,
+                      const char* name, size_t nlen,
+                      const char** arg, size_t* arg_len) {
+    if (clen < nlen) return false;
+    if (memcmp(cmd, name, nlen) != 0) return false;
+    if (clen == nlen) { *arg = NULL; *arg_len = 0; return true; }
+    if (cmd[nlen] != ' ') return false;
+    /* Skip spaces after command name */
+    size_t off = nlen + 1;
+    while (off < clen && cmd[off] == ' ') off++;
+    *arg = cmd + off;
+    *arg_len = clen - off;
+    return true;
+}
+
 static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
     if (len == 0 || str[0] != ':') return false;
 
     const char* cmd = str + 1;
     size_t clen = len - 1;
+    const char* arg = NULL;
+    size_t arg_len = 0;
 
-    if ((clen == 1 && cmd[0] == '?') ||
-        (clen == 4 && memcmp(cmd, "help", 4) == 0)) {
+    if (cmd_match(cmd, clen, "?", 1, &arg, &arg_len) ||
+        cmd_match(cmd, clen, "help", 4, &arg, &arg_len)) {
         fprintf(stdout,
             "Commands:\n"
-            "  :help, :?     Show this help\n"
-            "  :timeit, :t   Toggle expression timing\n"
-            "  :env          List defined variables\n"
-            "  :clear        Clear screen\n"
-            "  :quit, :q     Exit REPL\n");
+            "  :help, :?       Show this help\n"
+            "  :t, :timeit     Toggle expression timing\n"
+            "  :t <expr>       Time a single expression\n"
+            "  :env            List defined variables\n"
+            "  :clear          Clear screen\n"
+            "  :quit, :q       Exit REPL\n");
         return true;
     }
 
-    if ((clen == 1 && cmd[0] == 't') ||
-        (clen == 6 && memcmp(cmd, "timeit", 6) == 0)) {
-        repl->timeit = !repl->timeit;
-        fprintf(stdout, "timing %s\n", repl->timeit ? "on" : "off");
+    if (cmd_match(cmd, clen, "t", 1, &arg, &arg_len) ||
+        cmd_match(cmd, clen, "timeit", 6, &arg, &arg_len)) {
+        if (arg && arg_len > 0) {
+            /* :t <expr> — time a single expression */
+            eval_and_print(repl->term, arg, repl->term != NULL, true);
+        } else {
+            repl->timeit = !repl->timeit;
+            fprintf(stdout, "timing %s\n", repl->timeit ? "on" : "off");
+        }
         return true;
     }
 
-    if (clen == 3 && memcmp(cmd, "env", 3) == 0) {
+    if (cmd_match(cmd, clen, "env", 3, &arg, &arg_len)) {
         int64_t sym_ids[512];
         td_t* vals[512];
         int32_t n = td_env_list(sym_ids, vals, 512);
@@ -380,7 +492,7 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
         return true;
     }
 
-    if (clen == 5 && memcmp(cmd, "clear", 5) == 0) {
+    if (cmd_match(cmd, clen, "clear", 5, &arg, &arg_len)) {
         fprintf(stdout, "\033[2J\033[H");
         fflush(stdout);
         return true;
@@ -393,6 +505,7 @@ static bool handle_command(td_repl_t* repl, const char* str, size_t len) {
 
 static void run_interactive(td_repl_t* repl) {
     td_term_t* term = repl->term;
+    print_banner();
 
     for (;;) {
         td_t* line = td_term_read(term);

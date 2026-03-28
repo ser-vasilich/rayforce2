@@ -1028,144 +1028,22 @@ void td_term_collect_completions(td_term_t* term, const char* prefix,
     term->comp_count = n;
 }
 
-/* ===== Dropdown popup menu ===== */
+/* ===== Inline tab-cycle completion ===== */
 
-/* Maximum items visible in popup at once */
-#define POPUP_MAX_VIS 10
-
-void td_term_popup_show(td_term_t* term) {
-    if (term->popup_count <= 0) return;
-
-    /* Calculate max visible items */
-    int32_t max_vis = term->term_height - 3;
-    if (max_vis > POPUP_MAX_VIS) max_vis = POPUP_MAX_VIS;
-    if (max_vis < 1) max_vis = 1;
-    if (max_vis > term->popup_count) max_vis = term->popup_count;
-    term->popup_max_visible = max_vis;
-
-    /* Adjust scroll so selected item is visible */
-    if (term->popup_selected < term->popup_scroll)
-        term->popup_scroll = term->popup_selected;
-    if (term->popup_selected >= term->popup_scroll + max_vis)
-        term->popup_scroll = term->popup_selected - max_vis + 1;
-
-    /* Calculate box width from longest item */
-    int32_t max_item_len = 0;
-    for (int32_t i = 0; i < term->popup_count; i++) {
-        int32_t len = (int32_t)strlen(term->popup_items[i]);
-        if (len > max_item_len) max_item_len = len;
-    }
-    int32_t box_width = max_item_len + 4; /* border + padding */
-    if (box_width > term->term_width - 2) box_width = term->term_width - 2;
-    int32_t inner_width = box_width - 2; /* inside the vertical bars */
-
-    /* Save cursor position */
-    printf("\033[s");
-
-    /* Move cursor to line below the current input */
-    /* We're at the cursor position in the input — move to end of content first,
-     * then down one line, then to start */
-    int32_t total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
-    int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
-    total_width += ghost_vis;
-    int32_t content_rows = 1;
-    if (term->term_width > 0)
-        content_rows = (total_width + term->term_width - 1) / term->term_width;
-    if (content_rows < 1) content_rows = 1;
-
-    /* We need to position below the content. Move to start of line, then down. */
-    printf("\r");
-    /* Move down from current cursor row to content bottom + 1 */
-    int32_t cursor_total = term->prompt_len + td_term_visual_width(term->buf, term->buf_pos);
-    int32_t cursor_row = 0;
-    if (term->term_width > 0)
-        cursor_row = cursor_total / term->term_width;
-    int32_t rows_down = content_rows - cursor_row;
-    if (rows_down > 0)
-        td_cursor_move_down(rows_down);
-
-    /* Calculate horizontal offset: align with word start */
-    int32_t word_col = term->prompt_len + td_term_visual_width(term->buf, term->ghost_word_start);
-    int32_t popup_col = word_col;
-    /* Clamp so popup doesn't go off right edge */
-    if (popup_col + box_width > term->term_width)
-        popup_col = term->term_width - box_width;
-    if (popup_col < 0) popup_col = 0;
-
-    /* Render top border */
-    printf("\r");
-    if (popup_col > 0) td_cursor_move_right(popup_col);
-    printf("\xe2\x94\x8c"); /* U+250C: box drawings light down and right */
-    for (int32_t i = 0; i < inner_width; i++)
-        printf("\xe2\x94\x80"); /* U+2500: box drawings light horizontal */
-    printf("\xe2\x94\x90"); /* U+2510: box drawings light down and left */
-
-    /* Render visible items */
-    for (int32_t i = 0; i < max_vis; i++) {
-        int32_t idx = term->popup_scroll + i;
-        const char* item = term->popup_items[idx];
-        int32_t ilen = (int32_t)strlen(item);
-        int32_t pad = inner_width - 1 - ilen; /* 1 for leading space */
-        if (pad < 0) { ilen = inner_width - 1; pad = 0; }
-
-        printf("\n\r");
-        if (popup_col > 0) td_cursor_move_right(popup_col);
-        printf("\xe2\x94\x82"); /* U+2502: box drawings light vertical */
-        if (idx == term->popup_selected)
-            printf("\033[7m"); /* reverse video */
-        printf(" ");
-        fwrite(item, 1, (size_t)ilen, stdout);
-        for (int32_t p = 0; p < pad; p++) putchar(' ');
-        if (idx == term->popup_selected)
-            printf("\033[0m");
-        printf("\xe2\x94\x82");
-    }
-
-    /* Render bottom border */
-    printf("\n\r");
-    if (popup_col > 0) td_cursor_move_right(popup_col);
-    printf("\xe2\x94\x94"); /* U+2514: box drawings light up and right */
-    for (int32_t i = 0; i < inner_width; i++)
-        printf("\xe2\x94\x80");
-    printf("\xe2\x94\x98"); /* U+2518: box drawings light up and left */
-
-    /* Restore cursor position */
-    printf("\033[u");
-    fflush(stdout);
-}
-
-void td_term_popup_hide(td_term_t* term) {
-    if (!term->popup_visible) return;
-    term->popup_visible = 0;
-
-    /* Save cursor, move below content, clear everything below, restore cursor */
-    printf("\033[s");
-
-    /* Move to end of content area */
-    int32_t total_width = term->prompt_len + td_term_visual_width(term->buf, term->buf_len);
-    int32_t ghost_vis = (term->ghost_len > 0 && term->buf_pos == term->buf_len)
-                        ? td_term_visual_width(term->ghost, term->ghost_len) : 0;
-    total_width += ghost_vis;
-    int32_t content_rows = 1;
-    if (term->term_width > 0)
-        content_rows = (total_width + term->term_width - 1) / term->term_width;
-    if (content_rows < 1) content_rows = 1;
-
-    int32_t cursor_total = term->prompt_len + td_term_visual_width(term->buf, term->buf_pos);
-    int32_t cursor_row = 0;
-    if (term->term_width > 0)
-        cursor_row = cursor_total / term->term_width;
-    int32_t rows_down = content_rows - cursor_row;
-    if (rows_down > 0)
-        td_cursor_move_down(rows_down);
-
-    /* Clear from here to end of screen */
-    printf("\n\033[J");
-
-    /* Restore cursor */
-    printf("\033[u");
-    fflush(stdout);
+/* Replace the word at comp_cycle_start..+comp_cycle_len with comp_items[idx] */
+static void comp_cycle_insert(td_term_t* term, int32_t idx) {
+    const char* item = term->comp_items[idx];
+    int32_t ilen = (int32_t)strlen(item);
+    int32_t ws = term->comp_cycle_start;
+    int32_t old_len = term->comp_cycle_len;
+    int32_t tail = term->buf_len - (ws + old_len);
+    if (ws + ilen + tail >= TERM_BUF_SIZE) return;
+    memmove(term->buf + ws + ilen, term->buf + ws + old_len, (size_t)tail);
+    memcpy(term->buf + ws, item, (size_t)ilen);
+    term->buf_len = ws + ilen + tail;
+    term->buf_pos = ws + ilen;
+    term->comp_cycle_len = ilen;
+    term->comp_cycle_idx = idx;
 }
 
 /* ===== Multi-line input ===== */
@@ -1211,19 +1089,22 @@ int32_t td_term_count_unmatched(td_term_t* term) {
 
 /* ===== Prompt ===== */
 
-#define PROMPT_STR "teide> "
-#define PROMPT_LEN 7
-#define CONT_PROMPT_STR "  \xc2\xb7\xc2\xb7\xc2\xb7 "  /* "  ··· " in UTF-8 */
-#define CONT_PROMPT_LEN 9  /* 2 spaces + 3x2-byte dots + 1 space = 9 bytes */
+/* Green ‣ (U+2023) prompt, matching Rayforce style */
+#define PROMPT_STR "\033[32m\xe2\x80\xa3\033[0m "
+#define PROMPT_LEN 13  /* ESC[32m (5) + ‣ (3) + ESC[0m (4) + space (1) = 13 bytes */
+#define PROMPT_VIS  2  /* visual: ‣ + space */
+#define CONT_PROMPT_STR "\033[90m\xe2\x80\xa6\033[0m "  /* gray … (U+2026) */
+#define CONT_PROMPT_LEN 13  /* ESC[90m (5) + … (3) + ESC[0m (4) + space (1) = 13 bytes */
+#define CONT_PROMPT_VIS  2  /* visual: … + space */
 
 void td_term_prompt(td_term_t* term) {
     write(STDOUT_FILENO, PROMPT_STR, PROMPT_LEN);
-    term->prompt_len = PROMPT_LEN;
+    term->prompt_len = PROMPT_VIS;
 }
 
 void td_term_continuation_prompt(td_term_t* term) {
     write(STDOUT_FILENO, CONT_PROMPT_STR, CONT_PROMPT_LEN);
-    term->prompt_len = 6; /* visual width: "  ··· " = 2+3+1 = 6 chars */
+    term->prompt_len = CONT_PROMPT_VIS;
 }
 
 /* ===== Redraw ===== */
@@ -1316,9 +1197,6 @@ void td_term_redraw(td_term_t* term) {
         td_cursor_move_left(ghost_vis);
     td_term_goto_position(term, term->buf_len, term->buf_pos);
 
-    /* Redraw popup if visible */
-    if (term->popup_visible)
-        td_term_popup_show(term);
 
     td_cursor_show();
     fflush(stdout);
@@ -1427,9 +1305,9 @@ td_t* td_term_read(td_term_t* term) {
             int seq0 = term_read_byte(term);
             if (seq0 == -2) goto interrupted; /* SIGINT during esc read */
             if (seq0 < 0) {
-                /* Bare Esc (no sequence followed) — dismiss popup if visible */
-                if (term->popup_visible) {
-                    td_term_popup_hide(term);
+                /* Bare Esc — cancel tab cycling if active */
+                if (term->comp_cycling) {
+                    term->comp_cycling = 0;
                     td_term_redraw(term);
                 }
                 continue;
@@ -1482,9 +1360,9 @@ td_t* td_term_read(td_term_t* term) {
                     default: continue;
                 }
             }
-            /* Unrecognized escape — if popup is visible, dismiss it */
-            if (term->popup_visible) {
-                td_term_popup_hide(term);
+            /* Unrecognized escape — cancel tab cycling */
+            if (term->comp_cycling) {
+                term->comp_cycling = 0;
                 td_term_redraw(term);
             }
             continue;
@@ -1495,8 +1373,7 @@ td_t* td_term_read(td_term_t* term) {
     interrupted:
         /* External SIGINT — treat like Ctrl-C: clear line */
         td_term_clear_interrupt();
-        if (term->popup_visible)
-            td_term_popup_hide(term);
+        term->comp_cycling = 0;
         term->buf_len = 0;
         term->buf_pos = 0;
         term->multiline_len = 0;
@@ -1506,57 +1383,9 @@ td_t* td_term_read(td_term_t* term) {
         continue;
 
     handle:
-        /* ---- Popup navigation mode ---- */
-        if (term->popup_visible) {
-            if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
-                if (term->popup_selected > 0) {
-                    term->popup_selected--;
-                    td_term_popup_show(term);
-                }
-                continue;
-            }
-            if (key == -KEYCODE_DOWN || key == KEYCODE_CTRL_N) {
-                if (term->popup_selected < term->popup_count - 1) {
-                    term->popup_selected++;
-                    td_term_popup_show(term);
-                }
-                continue;
-            }
-            if (key == KEYCODE_TAB) {
-                /* Cycle to next item */
-                term->popup_selected++;
-                if (term->popup_selected >= term->popup_count)
-                    term->popup_selected = 0;
-                td_term_popup_show(term);
-                continue;
-            }
-            if (key == KEYCODE_RETURN) {
-                /* Accept selected item into buffer */
-                if (term->popup_selected >= 0 && term->popup_selected < term->popup_count) {
-                    const char* item = term->popup_items[term->popup_selected];
-                    int32_t ilen = (int32_t)strlen(item);
-                    /* Replace the word being completed */
-                    int32_t ws = term->ghost_word_start;
-                    int32_t wlen = term->ghost_word_len;
-                    int32_t tail = term->buf_len - (ws + wlen);
-                    if (ws + ilen + tail < TERM_BUF_SIZE) {
-                        memmove(term->buf + ws + ilen,
-                                term->buf + ws + wlen,
-                                (size_t)tail);
-                        memcpy(term->buf + ws, item, (size_t)ilen);
-                        term->buf_len = ws + ilen + tail;
-                        term->buf_pos = ws + ilen;
-                    }
-                }
-                td_term_popup_hide(term);
-                term->ghost_len = 0;
-                td_term_redraw(term);
-                continue;
-            }
-            /* Any other key: hide popup, fall through to normal handling */
-            td_term_popup_hide(term);
-            /* Fall through */
-        }
+        /* Reset tab-cycle on any non-Tab key */
+        if (key != KEYCODE_TAB)
+            term->comp_cycling = 0;
 
         /* Arrow keys are encoded as negative to distinguish from printable chars */
         if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
@@ -1618,6 +1447,7 @@ td_t* td_term_read(td_term_t* term) {
             term->buf[term->buf_len] = '\0';
             int32_t unmatched = td_term_count_unmatched(term);
             if (unmatched > 0) {
+                term->comp_cycling = 0;
                 /* Append buf + newline to multiline_buf, show continuation */
                 if (term->multiline_len + term->buf_len + 1 < TERM_BUF_SIZE) {
                     memcpy(term->multiline_buf + term->multiline_len,
@@ -1642,6 +1472,31 @@ td_t* td_term_read(td_term_t* term) {
                 td_term_continuation_prompt(term);
                 fflush(stdout);
                 continue;
+            }
+            /* Redraw line without bracket highlights before submitting */
+            term->ghost_len = 0;
+            term->comp_cycling = 0;
+            {
+                /* Move to start of line, clear, rewrite with no bracket match */
+                td_cursor_hide();
+                printf("\r\033[J");
+                char hlbuf[TERM_BUF_SIZE * 8];
+                int32_t hlen = 0;
+                if (term->multiline_len > 0) {
+                    memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);
+                    hlen = CONT_PROMPT_LEN;
+                } else {
+                    memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
+                    hlen = PROMPT_LEN;
+                }
+                if (term->buf_len > 0)
+                    hlen += term_highlight_into(hlbuf + hlen,
+                                (int32_t)sizeof(hlbuf) - hlen,
+                                term->buf, term->buf_len, -1, -1);
+                fflush(stdout);
+                write(STDOUT_FILENO, hlbuf, (size_t)hlen);
+                td_cursor_show();
+                fflush(stdout);
             }
             putchar('\n');
             fflush(stdout);
@@ -1686,8 +1541,7 @@ td_t* td_term_read(td_term_t* term) {
         }
 
         case KEYCODE_CTRL_C: {
-            if (term->popup_visible)
-                td_term_popup_hide(term);
+            term->comp_cycling = 0;
             term->buf_len = 0;
             term->buf_pos = 0;
             term->multiline_len = 0;
@@ -1859,19 +1713,28 @@ td_t* td_term_read(td_term_t* term) {
         }
 
         case KEYCODE_TAB: {
+            if (term->comp_cycling) {
+                /* Already cycling — advance to next candidate */
+                int32_t next = (term->comp_cycle_idx + 1) % term->comp_count;
+                comp_cycle_insert(term, next);
+                term->ghost_len = 0;
+                td_term_redraw(term);
+                continue;
+            }
             if (term->ghost_len > 0 && term->comp_count == 1) {
                 /* Single match — accept ghost text directly */
                 td_term_accept_ghost(term);
                 td_term_update_ghost(term);
                 td_term_redraw(term);
             } else if (term->comp_count >= 2) {
-                /* Multiple matches — show popup */
-                term->popup_visible = 1;
-                term->popup_items = term->comp_items;
-                term->popup_count = term->comp_count;
-                term->popup_selected = 0;
-                term->popup_scroll = 0;
-                td_term_popup_show(term);
+                /* Multiple matches — start inline cycling */
+                term->comp_cycling = 1;
+                term->comp_cycle_start = term->ghost_word_start;
+                term->comp_cycle_len = term->ghost_word_len;
+                term->comp_cycle_idx = -1;
+                comp_cycle_insert(term, 0);
+                term->ghost_len = 0;
+                td_term_redraw(term);
             } else if (term->ghost_len > 0) {
                 /* Accept whatever ghost we have */
                 td_term_accept_ghost(term);

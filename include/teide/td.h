@@ -265,6 +265,7 @@ typedef enum {
     TD_ERR_CORRUPT,
     TD_ERR_CANCEL,
     TD_ERR_PARSE,
+    TD_ERR_NAME,
     TD_ERR_LIMIT
 } td_err_t;
 

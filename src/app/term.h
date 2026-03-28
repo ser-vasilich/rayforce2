@@ -81,13 +81,11 @@ typedef struct td_term {
     /* Multi-source completion candidates */
     const char* comp_items[256];  /* borrowed pointers — valid until next collect */
     int32_t     comp_count;
-    /* Dropdown popup menu state */
-    int32_t     popup_visible;
-    int32_t     popup_selected;
-    int32_t     popup_count;
-    int32_t     popup_scroll;
-    const char** popup_items;     /* borrowed from comp_items */
-    int32_t     popup_max_visible;
+    /* Tab-cycle completion state */
+    int32_t     comp_cycling;     /* 1 if currently cycling completions */
+    int32_t     comp_cycle_idx;   /* index into comp_items for current cycle */
+    int32_t     comp_cycle_start; /* buf position where cycled word starts */
+    int32_t     comp_cycle_len;   /* length of currently inserted completion */
     /* Scratch buffer for null-terminated completion word copies */
     char        comp_scratch[TERM_BUF_SIZE];
     int32_t     comp_scratch_len;
@@ -137,9 +135,6 @@ int32_t td_term_find_matching_paren(const char* buf, int32_t buf_len,
 void td_term_collect_completions(td_term_t* term, const char* prefix,
                                  int32_t prefix_len);
 
-/* Dropdown popup autocomplete menu */
-void td_term_popup_show(td_term_t* term);
-void td_term_popup_hide(td_term_t* term);
 
 /* Multi-line input: count unmatched opening brackets in multiline_buf + buf */
 int32_t td_term_count_unmatched(td_term_t* term);

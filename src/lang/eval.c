@@ -2,6 +2,7 @@
 #include "lang/env.h"
 #include "lang/parse.h"
 #include "io/csv.h"
+#include "ops/pool.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,6 +293,29 @@ static td_t* atomic_map_unary(td_unary_fn fn, td_t* arg) {
  * ══════════════════════════════════════════ */
 
 static td_t* ray_sum(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return make_i64(0);
+        if (x->type == TD_I64) {
+            int64_t* d = (int64_t*)td_data(x);
+            int64_t s = 0;
+            for (int64_t i = 0; i < len; i++) s += d[i];
+            return make_i64(s);
+        }
+        if (x->type == TD_F64) {
+            double* d = (double*)td_data(x);
+            double s = 0.0;
+            for (int64_t i = 0; i < len; i++) s += d[i];
+            return make_f64(s);
+        }
+        if (x->type == TD_I32) {
+            int32_t* d = (int32_t*)td_data(x);
+            int64_t s = 0;
+            for (int64_t i = 0; i < len; i++) s += d[i];
+            return make_i64(s);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return make_i64(0);
@@ -309,11 +333,35 @@ static td_t* ray_sum(td_t* x) {
 
 static td_t* ray_count(td_t* x) {
     if (x->type == TD_TABLE) return make_i64(td_table_nrows(x));
+    if (td_is_vec(x)) return make_i64(td_len(x));
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     return make_i64(td_len(x));
 }
 
 static td_t* ray_avg(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        if (x->type == TD_I64) {
+            int64_t* d = (int64_t*)td_data(x);
+            double s = 0.0;
+            for (int64_t i = 0; i < len; i++) s += (double)d[i];
+            return make_f64(s / (double)len);
+        }
+        if (x->type == TD_F64) {
+            double* d = (double*)td_data(x);
+            double s = 0.0;
+            for (int64_t i = 0; i < len; i++) s += d[i];
+            return make_f64(s / (double)len);
+        }
+        if (x->type == TD_I32) {
+            int32_t* d = (int32_t*)td_data(x);
+            double s = 0.0;
+            for (int64_t i = 0; i < len; i++) s += (double)d[i];
+            return make_f64(s / (double)len);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
@@ -327,6 +375,29 @@ static td_t* ray_avg(td_t* x) {
 }
 
 static td_t* ray_min(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        if (x->type == TD_I64) {
+            int64_t* d = (int64_t*)td_data(x);
+            int64_t m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = d[i];
+            return make_i64(m);
+        }
+        if (x->type == TD_F64) {
+            double* d = (double*)td_data(x);
+            double m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = d[i];
+            return make_f64(m);
+        }
+        if (x->type == TD_I32) {
+            int32_t* d = (int32_t*)td_data(x);
+            int64_t m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] < m) m = (int64_t)d[i];
+            return make_i64(m);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
@@ -345,6 +416,29 @@ static td_t* ray_min(td_t* x) {
 }
 
 static td_t* ray_max(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        if (x->type == TD_I64) {
+            int64_t* d = (int64_t*)td_data(x);
+            int64_t m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = d[i];
+            return make_i64(m);
+        }
+        if (x->type == TD_F64) {
+            double* d = (double*)td_data(x);
+            double m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = d[i];
+            return make_f64(m);
+        }
+        if (x->type == TD_I32) {
+            int32_t* d = (int32_t*)td_data(x);
+            int64_t m = d[0];
+            for (int64_t i = 1; i < len; i++) if (d[i] > m) m = (int64_t)d[i];
+            return make_i64(m);
+        }
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
@@ -363,6 +457,13 @@ static td_t* ray_max(td_t* x) {
 }
 
 static td_t* ray_first(td_t* x) {
+    if (td_is_vec(x)) {
+        if (td_len(x) == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        if (x->type == TD_I64) return make_i64(((int64_t*)td_data(x))[0]);
+        if (x->type == TD_F64) return make_f64(((double*)td_data(x))[0]);
+        if (x->type == TD_I32) return make_i64(((int32_t*)td_data(x))[0]);
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     if (td_len(x) == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
     td_t* elem = ((td_t**)td_data(x))[0];
@@ -371,6 +472,14 @@ static td_t* ray_first(td_t* x) {
 }
 
 static td_t* ray_last(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        if (x->type == TD_I64) return make_i64(((int64_t*)td_data(x))[len - 1]);
+        if (x->type == TD_F64) return make_f64(((double*)td_data(x))[len - 1]);
+        if (x->type == TD_I32) return make_i64(((int32_t*)td_data(x))[len - 1]);
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
@@ -379,21 +488,58 @@ static td_t* ray_last(td_t* x) {
     return elem;
 }
 
-static td_t* ray_med(td_t* x) {
-    if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
+/* Helper: copy typed vec elements to double scratch buffer.
+ * Returns scratch td_t* (caller must td_release), or error. */
+static td_t* vec_to_f64_scratch(td_t* x, double** out_vals) {
     int64_t len = td_len(x);
-    if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
-    td_t** elems = (td_t**)td_data(x);
-    /* Allocate scratch as a td_t vector to use td_release for cleanup */
     td_t* scratch = td_alloc(len * sizeof(double));
     if (!scratch) return TD_ERR_PTR(TD_ERR_OOM);
     scratch->type = TD_F64;
     scratch->len = len;
     double* vals = (double*)td_data(scratch);
-    for (int64_t i = 0; i < len; i++) {
-        if (!is_numeric(elems[i])) { td_release(scratch); return TD_ERR_PTR(TD_ERR_TYPE); }
-        vals[i] = as_f64(elems[i]);
+    if (x->type == TD_I64) {
+        int64_t* d = (int64_t*)td_data(x);
+        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+    } else if (x->type == TD_F64) {
+        memcpy(vals, td_data(x), (size_t)len * sizeof(double));
+    } else if (x->type == TD_I32) {
+        int32_t* d = (int32_t*)td_data(x);
+        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+    } else {
+        td_release(scratch);
+        return TD_ERR_PTR(TD_ERR_TYPE);
     }
+    *out_vals = vals;
+    return scratch;
+}
+
+static td_t* ray_med(td_t* x) {
+    int64_t len;
+    td_t* scratch;
+    double* vals;
+
+    if (td_is_vec(x)) {
+        len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        scratch = vec_to_f64_scratch(x, &vals);
+        if (TD_IS_ERR(scratch)) return scratch;
+    } else if (is_list(x)) {
+        len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        td_t** elems = (td_t**)td_data(x);
+        scratch = td_alloc(len * sizeof(double));
+        if (!scratch) return TD_ERR_PTR(TD_ERR_OOM);
+        scratch->type = TD_F64;
+        scratch->len = len;
+        vals = (double*)td_data(scratch);
+        for (int64_t i = 0; i < len; i++) {
+            if (!is_numeric(elems[i])) { td_release(scratch); return TD_ERR_PTR(TD_ERR_TYPE); }
+            vals[i] = as_f64(elems[i]);
+        }
+    } else {
+        return TD_ERR_PTR(TD_ERR_TYPE);
+    }
+
     /* Insertion sort */
     for (int64_t i = 1; i < len; i++) {
         double key = vals[i];
@@ -409,6 +555,23 @@ static td_t* ray_med(td_t* x) {
 }
 
 static td_t* ray_dev(td_t* x) {
+    if (td_is_vec(x)) {
+        int64_t len = td_len(x);
+        if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+        double* vals;
+        td_t* scratch = vec_to_f64_scratch(x, &vals);
+        if (TD_IS_ERR(scratch)) return scratch;
+        double sum = 0.0;
+        for (int64_t i = 0; i < len; i++) sum += vals[i];
+        double mean = sum / (double)len;
+        double var = 0.0;
+        for (int64_t i = 0; i < len; i++) {
+            double d = vals[i] - mean;
+            var += d * d;
+        }
+        td_release(scratch);
+        return make_f64(sqrt(var / (double)len));
+    }
     if (!is_list(x)) return TD_ERR_PTR(TD_ERR_TYPE);
     int64_t len = td_len(x);
     if (len == 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
@@ -894,6 +1057,28 @@ static td_t* ray_find(td_t* vec, td_t* val) {
         if (atom_eq(elems[i], val)) return make_i64(i);
     }
     return make_i64(-1);
+}
+
+/* (til n) — generate integer sequence [0, 1, ..., n-1] */
+static void til_fill(void* ctx, uint32_t worker_id, int64_t start, int64_t end) {
+    (void)worker_id;
+    int64_t* out = (int64_t*)ctx;
+    for (int64_t i = start; i < end; i++)
+        out[i] = i;
+}
+
+static td_t* ray_til(td_t* x) {
+    if (!td_is_atom(x) || x->type != TD_ATOM_I64) return TD_ERR_PTR(TD_ERR_TYPE);
+    int64_t n = x->i64;
+    if (n < 0) return TD_ERR_PTR(TD_ERR_DOMAIN);
+    if (n == 0) return td_vec_new(TD_I64, 0);
+
+    td_t* vec = td_vec_new(TD_I64, n);
+    if (!vec || TD_IS_ERR(vec)) return vec;
+    vec->len = n;
+    int64_t* out = (int64_t*)td_data(vec);
+    td_pool_dispatch(td_pool_get(), til_fill, out, n);
+    return vec;
 }
 
 /* (reverse vec) — reverse a vector */
@@ -2948,6 +3133,7 @@ static void td_register_builtins(void) {
     register_binary("at",      TD_FN_NONE, ray_at);
     register_binary("find",    TD_FN_NONE, ray_find);
     register_unary("reverse",  TD_FN_NONE, ray_reverse);
+    register_unary("til",      TD_FN_NONE, ray_til);
 
     /* Table operations */
     register_vary("list",      TD_FN_NONE, ray_list);
@@ -3016,7 +3202,7 @@ td_t* td_eval(td_t* obj) {
         /* Name reference: resolve from env */
         if (obj->type == TD_ATOM_SYM && (obj->attrs & TD_ATTR_NAME)) {
             td_t* val = td_env_get(obj->i64);
-            if (!val) { ret = TD_ERR_PTR(TD_ERR_DOMAIN); goto out; }
+            if (!val) { ret = TD_ERR_PTR(TD_ERR_NAME); goto out; }
             td_retain(val);
             ret = val; goto out;
         }
