@@ -1,6 +1,7 @@
 #include "app/format.h"
 #include "table/sym.h"
 #include "lang/eval.h"  /* RAY_ATTR_DICT */
+#include "ops/ops.h"    /* RAY_LAZY, ray_lazy_materialize */
 #include "mem/heap.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -853,8 +854,22 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
         fmt_list(b, obj, mode);
     } else if (type == RAY_TABLE) {
         fmt_table(b, obj, mode);
+    } else if (type == RAY_DICT) {
+        fmt_dict(b, obj, mode);
+    } else if (type == RAY_LAMBDA) {
+        fmt_puts(b, "lambda");
+    } else if (type == RAY_UNARY) {
+        fmt_puts(b, "builtin/1");
+    } else if (type == RAY_BINARY) {
+        fmt_puts(b, "builtin/2");
+    } else if (type == RAY_VARY) {
+        fmt_puts(b, "builtin/n");
+    } else if (type == RAY_LAZY) {
+        ray_t* concrete = ray_lazy_materialize(obj);
+        fmt_obj(b, concrete, mode);
+        return;
     } else {
-        fmt_puts(b, "<todo>");
+        fmt_printf(b, "<%s>", ray_type_name(type));
     }
 }
 
