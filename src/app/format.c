@@ -883,9 +883,7 @@ ray_t* ray_fmt(ray_t* obj, int mode) {
 void ray_fmt_print(FILE* fp, ray_t* obj, int mode) {
     ray_t* s = ray_fmt(obj, mode);
     if (s) {
-        const char* p = (const char*)ray_data(s);
-        int64_t     n = s->len;
-        fwrite(p, 1, (size_t)n, fp);
+        fwrite(ray_str_ptr(s), 1, ray_str_len(s), fp);
         ray_release(s);
     }
 }

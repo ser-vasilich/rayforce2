@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include "app/format.h"
 #include "app/repl.h"
 #include "app/term.h"
 #include "lang/env.h"
@@ -125,237 +126,19 @@ static void print_banner(void) {
 }
 
 #define PIPE_BUF_SIZE 4096
-#define MAX_PRINT_ROWS  40
-#define MAX_PRINT_ELEMS 20
-#define MAX_COL_WIDTH   40
-
-/* ===== Pretty-print helpers ===== */
-
-/* Check if vector element at idx is null */
-static bool vec_is_null(ray_t* vec, int64_t idx) {
-    if (!(vec->attrs & RAY_ATTR_HAS_NULLS)) return false;
-    const uint8_t* bm;
-    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
-        ray_t* ext = vec->ext_nullmap;
-        if (!ext) return false;
-        bm = (const uint8_t*)ray_data(ext);
-    } else {
-        if (idx >= 128) return false;
-        bm = vec->nullmap;
-    }
-    return (bm[idx / 8] >> (idx % 8)) & 1;
-}
-
-/* Format a single vector element into buf, return chars written */
-static int fmt_vec_elem(ray_t* vec, int64_t idx, char* out, int max) {
-    if (vec_is_null(vec, idx))
-        return snprintf(out, (size_t)max, "null");
-
-    switch (vec->type) {
-    case RAY_BOOL: {
-        bool* data = (bool*)ray_data(vec);
-        return snprintf(out, (size_t)max, "%s", data[idx] ? "true" : "false");
-    }
-    case RAY_I64: {
-        int64_t* data = (int64_t*)ray_data(vec);
-        return snprintf(out, (size_t)max, "%" PRId64, data[idx]);
-    }
-    case RAY_F64: {
-        double* data = (double*)ray_data(vec);
-        return snprintf(out, (size_t)max, "%g", data[idx]);
-    }
-    case RAY_I32: {
-        int32_t* data = (int32_t*)ray_data(vec);
-        return snprintf(out, (size_t)max, "%d", data[idx]);
-    }
-    case RAY_I16: {
-        int16_t* data = (int16_t*)ray_data(vec);
-        return snprintf(out, (size_t)max, "%d", (int)data[idx]);
-    }
-    case RAY_SYM: {
-        uint8_t esz = (uint8_t)RAY_SYM_ELEM(vec->attrs);
-        const uint8_t* base = (const uint8_t*)ray_data(vec);
-        int64_t sym_id = 0;
-        memcpy(&sym_id, base + idx * esz, esz);
-        ray_t* s = ray_sym_str(sym_id);
-        if (s) return snprintf(out, (size_t)max, "%.*s",
-                               (int)ray_str_len(s), ray_str_ptr(s));
-        return snprintf(out, (size_t)max, "?sym%" PRId64, sym_id);
-    }
-    case RAY_STR: {
-        size_t slen = 0;
-        const char* s = ray_str_vec_get(vec, idx, &slen);
-        if (s) return snprintf(out, (size_t)max, "%.*s", (int)slen, s);
-        return snprintf(out, (size_t)max, "null");
-    }
-    case RAY_DATE: {
-        int64_t* data = (int64_t*)ray_data(vec);
-        int64_t d = data[idx];
-        /* Rayforce date = days since 2000-01-01 */
-        return snprintf(out, (size_t)max, "%" PRId64, d);
-    }
-    default:
-        return snprintf(out, (size_t)max, "?");
-    }
-}
-
-/* Print a vector in [1 2 3 ...] format */
-static void print_vector(FILE* fp, ray_t* val) {
-    int64_t len = ray_len(val);
-    ray_t** elems = (ray_t**)ray_data(val);
-    bool is_dict = (val->attrs & RAY_ATTR_DICT) != 0;
-
-    if (is_dict) {
-        int64_t npairs = len / 2;
-        int64_t show = npairs > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : npairs;
-        fprintf(fp, "{");
-        for (int64_t i = 0; i < show; i++) {
-            if (i > 0) fprintf(fp, " ");
-            ray_lang_print(fp, elems[i * 2]);
-            fprintf(fp, ": ");
-            ray_lang_print(fp, elems[i * 2 + 1]);
-        }
-        if (npairs > show) fprintf(fp, " ...(+%" PRId64 ")", npairs - show);
-        fprintf(fp, "}");
-        return;
-    }
-
-    int64_t show = len > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : len;
-    fprintf(fp, "[");
-    for (int64_t i = 0; i < show; i++) {
-        if (i > 0) fprintf(fp, " ");
-        ray_lang_print(fp, elems[i]);
-    }
-    if (len > show) fprintf(fp, " ...(+%" PRId64 ")", len - show);
-    fprintf(fp, "]");
-}
-
-/* Print a typed vector (RAY_I64, RAY_F64, RAY_SYM, RAY_STR, etc.) */
-static void print_typed_vector(FILE* fp, ray_t* vec) {
-    int64_t len = ray_len(vec);
-    char elem_buf[256];
-    fprintf(fp, "[");
-    int64_t show = len > MAX_PRINT_ELEMS ? MAX_PRINT_ELEMS : len;
-    for (int64_t i = 0; i < show; i++) {
-        if (i > 0) fprintf(fp, " ");
-        fmt_vec_elem(vec, i, elem_buf, (int)sizeof(elem_buf));
-        fprintf(fp, "%s", elem_buf);
-    }
-    if (len > show) fprintf(fp, " ...(+%" PRId64 ")", len - show);
-    fprintf(fp, "]");
-}
-
-/* Print a table in columnar format */
-static void print_table(FILE* fp, ray_t* tbl) {
-    int64_t ncols = ray_table_ncols(tbl);
-    int64_t nrows = ray_table_nrows(tbl);
-
-    if (ncols == 0) {
-        fprintf(fp, "(empty table)\n");
-        return;
-    }
-
-    /* Collect column names and vectors */
-    ray_t* cols[256];
-    const char* names[256];
-    int name_lens[256];
-    int col_widths[256];
-    int actual_ncols = ncols > 256 ? 256 : (int)ncols;
-
-    for (int c = 0; c < actual_ncols; c++) {
-        cols[c] = ray_table_get_col_idx(tbl, c);
-        int64_t name_id = ray_table_col_name(tbl, c);
-        ray_t* ns = ray_sym_str(name_id);
-        if (ns) {
-            names[c] = ray_str_ptr(ns);
-            name_lens[c] = (int)ray_str_len(ns);
-        } else {
-            names[c] = "?";
-            name_lens[c] = 1;
-        }
-        col_widths[c] = name_lens[c];
-    }
-
-    /* Determine column widths by sampling rows */
-    int64_t sample = nrows > MAX_PRINT_ROWS ? MAX_PRINT_ROWS : nrows;
-    char elem_buf[256];
-    for (int64_t r = 0; r < sample; r++) {
-        for (int c = 0; c < actual_ncols; c++) {
-            if (!cols[c]) continue;
-            int w = fmt_vec_elem(cols[c], r, elem_buf, (int)sizeof(elem_buf));
-            if (w > MAX_COL_WIDTH) w = MAX_COL_WIDTH;
-            if (w > col_widths[c]) col_widths[c] = w;
-        }
-    }
-
-    /* Print header */
-    for (int c = 0; c < actual_ncols; c++) {
-        if (c > 0) fprintf(fp, " | ");
-        fprintf(fp, "%-*.*s", col_widths[c], name_lens[c], names[c]);
-    }
-    fprintf(fp, "\n");
-
-    /* Print separator */
-    for (int c = 0; c < actual_ncols; c++) {
-        if (c > 0) fprintf(fp, "-+-");
-        for (int i = 0; i < col_widths[c]; i++) fputc('-', fp);
-    }
-    fprintf(fp, "\n");
-
-    /* Print rows */
-    for (int64_t r = 0; r < sample; r++) {
-        for (int c = 0; c < actual_ncols; c++) {
-            if (c > 0) fprintf(fp, " | ");
-            if (cols[c]) {
-                int w = fmt_vec_elem(cols[c], r, elem_buf, (int)sizeof(elem_buf));
-                (void)w;
-                fprintf(fp, "%-*s", col_widths[c], elem_buf);
-            } else {
-                fprintf(fp, "%-*s", col_widths[c], "null");
-            }
-        }
-        fprintf(fp, "\n");
-    }
-
-    if (nrows > sample)
-        fprintf(fp, "... %" PRId64 " more rows\n", nrows - sample);
-
-    fprintf(fp, "(%" PRId64 " row%s)\n", nrows, nrows == 1 ? "" : "s");
-}
-
 /* Pretty-print a result value */
 static void repl_print_result(FILE* fp, ray_t* val, bool use_color) {
     if (!val) return;
     if (RAY_IS_ERR(val)) {
         ray_err_t code = RAY_ERR_CODE(val);
-        if (use_color) fprintf(fp, "\033[31m");
+        if (use_color) fprintf(fp, "\033[1;31m");
         fprintf(fp, "error: %s", ray_err_str(code));
         if (use_color) fprintf(fp, "\033[0m");
         fprintf(fp, "\n");
         return;
     }
-
-    switch (val->type) {
-    case RAY_TABLE:
-        print_table(fp, val);
-        break;
-    case RAY_LIST:
-        print_vector(fp, val);
-        fprintf(fp, "\n");
-        break;
-    default:
-        if (ray_is_atom(val)) {
-            ray_lang_print(fp, val);
-            fprintf(fp, "\n");
-        } else if (ray_is_vec(val)) {
-            print_typed_vector(fp, val);
-            fprintf(fp, "\n");
-        } else {
-            ray_lang_print(fp, val);
-            fprintf(fp, "\n");
-        }
-        break;
-    }
+    ray_fmt_print(fp, val, 1);
+    fprintf(fp, "\n");
 }
 
 ray_repl_t* ray_repl_create(void) {
