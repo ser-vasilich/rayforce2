@@ -3314,6 +3314,113 @@ static MunitResult test_exec_reduce_empty(const void* params, void* data) {
     return MUNIT_OK;
 }
 
+/* ---- Lazy handle: basic wrap + materialize ---- */
+static MunitResult test_lazy_wrap_materialize(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+
+    int64_t raw[] = {1, 2, 3, 4, 5};
+    ray_t* vec = ray_vec_from_raw(RAY_I64, raw, 5);
+
+    ray_graph_t* g = ray_graph_new(NULL);
+    ray_op_t* input = ray_graph_input_vec(g, vec);
+    ray_op_t* sum_op = ray_sum(g, input);
+
+    ray_t* lazy = ray_lazy_wrap(g, sum_op);
+    munit_assert_false(RAY_IS_ERR(lazy));
+    munit_assert_true(ray_is_lazy(lazy));
+
+    ray_t* result = ray_lazy_materialize(lazy);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 15);
+
+    ray_release(result);
+    ray_release(vec);
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- Lazy handle: chain two independent lazy handles ---- */
+static MunitResult test_lazy_chain(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+
+    /* First lazy: sum of [1,2,3,4,5] = 15 */
+    int64_t raw1[] = {1, 2, 3, 4, 5};
+    ray_t* vec1 = ray_vec_from_raw(RAY_I64, raw1, 5);
+    ray_graph_t* g1 = ray_graph_new(NULL);
+    ray_op_t* in1 = ray_graph_input_vec(g1, vec1);
+    ray_op_t* sum1 = ray_sum(g1, in1);
+    ray_t* lazy1 = ray_lazy_wrap(g1, sum1);
+    munit_assert_false(RAY_IS_ERR(lazy1));
+
+    /* Second lazy: min of [10,20,30] = 10 */
+    int64_t raw2[] = {10, 20, 30};
+    ray_t* vec2 = ray_vec_from_raw(RAY_I64, raw2, 3);
+    ray_graph_t* g2 = ray_graph_new(NULL);
+    ray_op_t* in2 = ray_graph_input_vec(g2, vec2);
+    ray_op_t* min2 = ray_min_op(g2, in2);
+    ray_t* lazy2 = ray_lazy_wrap(g2, min2);
+    munit_assert_false(RAY_IS_ERR(lazy2));
+
+    /* Materialize both independently */
+    ray_t* r1 = ray_lazy_materialize(lazy1);
+    munit_assert_false(RAY_IS_ERR(r1));
+    munit_assert_int(r1->i64, ==, 15);
+
+    ray_t* r2 = ray_lazy_materialize(lazy2);
+    munit_assert_false(RAY_IS_ERR(r2));
+    munit_assert_int(r2->i64, ==, 10);
+
+    ray_release(r1);
+    ray_release(r2);
+    ray_release(vec1);
+    ray_release(vec2);
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- Lazy handle: materialize passthrough on non-lazy value ---- */
+static MunitResult test_lazy_materialize_passthrough(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+
+    ray_t* atom = ray_i64(42);
+    munit_assert_false(ray_is_lazy(atom));
+
+    ray_t* result = ray_lazy_materialize(atom);
+    /* Should return the same pointer unchanged */
+    munit_assert_ptr_equal(result, atom);
+    munit_assert_int(result->i64, ==, 42);
+
+    ray_release(atom);
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
+/* ---- Lazy handle: release without materialize (cleanup) ---- */
+static MunitResult test_lazy_release_no_materialize(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+
+    int64_t raw[] = {1, 2, 3, 4, 5};
+    ray_t* vec = ray_vec_from_raw(RAY_I64, raw, 5);
+
+    ray_graph_t* g = ray_graph_new(NULL);
+    ray_op_t* input = ray_graph_input_vec(g, vec);
+    ray_op_t* sum_op = ray_sum(g, input);
+
+    ray_t* lazy = ray_lazy_wrap(g, sum_op);
+    munit_assert_false(RAY_IS_ERR(lazy));
+
+    /* Release without materializing — should not leak under ASan */
+    ray_release(lazy);
+
+    ray_release(vec);
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
 /* ======================================================================
  * Suite
  * ====================================================================== */
@@ -3387,6 +3494,10 @@ static MunitTest exec_tests[] = {
     { "/str_substr_null", test_exec_str_substr_null,   NULL, NULL, 0, NULL },
     { "/str_replace_null", test_exec_str_replace_null, NULL, NULL, 0, NULL },
     { "/str_concat_null", test_exec_str_concat_null,   NULL, NULL, 0, NULL },
+    { "/lazy_wrap_materialize", test_lazy_wrap_materialize, NULL, NULL, 0, NULL },
+    { "/lazy_chain",            test_lazy_chain,            NULL, NULL, 0, NULL },
+    { "/lazy_materialize_passthrough", test_lazy_materialize_passthrough, NULL, NULL, 0, NULL },
+    { "/lazy_release_no_materialize",  test_lazy_release_no_materialize,  NULL, NULL, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL }
 };
 
