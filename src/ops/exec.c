@@ -366,32 +366,32 @@ typedef struct {
 static bool atom_to_numeric(ray_t* atom, double* out_f, int64_t* out_i, bool* out_is_f64) {
     if (!atom || !ray_is_atom(atom)) return false;
     switch (atom->type) {
-        case RAY_ATOM_F64:
+        case -RAY_F64:
             *out_f = atom->f64;
             *out_i = (int64_t)atom->f64;
             *out_is_f64 = true;
             return true;
-        case RAY_ATOM_I64:
-        case RAY_ATOM_SYM:
-        case RAY_ATOM_DATE:
-        case RAY_ATOM_TIME:
-        case RAY_ATOM_TIMESTAMP:
+        case -RAY_I64:
+        case -RAY_SYM:
+        case -RAY_DATE:
+        case -RAY_TIME:
+        case -RAY_TIMESTAMP:
             *out_i = atom->i64;
             *out_f = (double)atom->i64;
             *out_is_f64 = false;
             return true;
-        case RAY_ATOM_I32:
+        case -RAY_I32:
             *out_i = (int64_t)atom->i32;
             *out_f = (double)atom->i32;
             *out_is_f64 = false;
             return true;
-        case RAY_ATOM_I16:
+        case -RAY_I16:
             *out_i = (int64_t)atom->i16;
             *out_f = (double)atom->i16;
             *out_is_f64 = false;
             return true;
-        case RAY_ATOM_U8:
-        case RAY_ATOM_BOOL:
+        case -RAY_U8:
+        case -RAY_BOOL:
             *out_i = (int64_t)atom->u8;
             *out_f = (double)atom->u8;
             *out_is_f64 = false;
@@ -849,7 +849,7 @@ static bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t*
                     /* Try resolving string constant to symbol intern ID —
                      * enables fused evaluation of SYM column comparisons
                      * (e.g. id2 = 'id080' compiles to integer EQ). */
-                    if (ext->literal->type == RAY_ATOM_STR) {
+                    if (ext->literal->type == -RAY_STR) {
                         const char* s = ray_str_ptr(ext->literal);
                         size_t slen = ray_str_len(ext->literal);
                         int64_t sid = ray_sym_find(s, slen);
@@ -1374,11 +1374,11 @@ static ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input)
     return result;
 }
 
-/* Convert an atom (RAY_ATOM_STR or RAY_SYM scalar) to ray_str_t for comparison */
+/* Convert an atom (-RAY_STR or RAY_SYM scalar) to ray_str_t for comparison */
 static void atom_to_str_t(ray_t* atom, ray_str_t* out, const char** out_pool) {
     const char* sp;
     size_t sl;
-    if (atom->type == RAY_ATOM_STR) {
+    if (atom->type == -RAY_STR) {
         sp = ray_str_ptr(atom);
         sl = ray_str_len(atom);
     } else if (atom->type == RAY_STR) {
@@ -1544,7 +1544,7 @@ static void binary_range(ray_op_t* op, int8_t out_type,
         else if (lp_u32)  lv = (double)lp_u32[i];
         else if (lp_i16)  lv = (double)lp_i16[i];
         else if (lp_bool) lv = (double)lp_bool[i];
-        else if (l_scalar && (lhs->type == RAY_ATOM_F64 || lhs->type == -RAY_F64 || lhs->type == RAY_F64)) lv = l_f64;
+        else if (l_scalar && (lhs->type == -RAY_F64 || lhs->type == -RAY_F64 || lhs->type == RAY_F64)) lv = l_f64;
         else              lv = (double)l_i64;
 
         if (rp_f64)       rv = rp_f64[i];
@@ -1553,7 +1553,7 @@ static void binary_range(ray_op_t* op, int8_t out_type,
         else if (rp_u32)  rv = (double)rp_u32[i];
         else if (rp_i16)  rv = (double)rp_i16[i];
         else if (rp_bool) rv = (double)rp_bool[i];
-        else if (r_scalar && (rhs->type == RAY_ATOM_F64 || rhs->type == -RAY_F64 || rhs->type == RAY_F64)) rv = r_f64;
+        else if (r_scalar && (rhs->type == -RAY_F64 || rhs->type == -RAY_F64 || rhs->type == RAY_F64)) rv = r_f64;
         else              rv = (double)r_i64;
 
         if (out_type == RAY_F64) {
@@ -1648,14 +1648,14 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
     result->len = len;
 
     /* RAY_STR comparison: use ray_str_t_eq / ray_str_t_cmp directly.
-       Handles RAY_STR column vs RAY_STR column, or RAY_ATOM_STR scalar vs RAY_STR column. */
+       Handles RAY_STR column vs RAY_STR column, or -RAY_STR scalar vs RAY_STR column. */
     {
         bool l_is_str = (!l_scalar && lhs->type == RAY_STR);
         bool r_is_str = (!r_scalar && rhs->type == RAY_STR);
-        bool l_atom_str = (l_scalar && (lhs->type == RAY_ATOM_STR
+        bool l_atom_str = (l_scalar && (lhs->type == -RAY_STR
                           || lhs->type == RAY_STR
                           || (RAY_IS_SYM(lhs->type) && ray_is_atom(lhs))));
-        bool r_atom_str = (r_scalar && (rhs->type == RAY_ATOM_STR
+        bool r_atom_str = (r_scalar && (rhs->type == -RAY_STR
                           || rhs->type == RAY_STR
                           || (RAY_IS_SYM(rhs->type) && ray_is_atom(rhs))));
 
@@ -1664,7 +1664,7 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
             uint16_t opc = op->opcode;
             if (opc < OP_EQ || opc > OP_GE) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
             /* At least one side is a RAY_STR column — use string comparison path.
-               The scalar side (if any) must be RAY_ATOM_STR or RAY_SYM atom.
+               The scalar side (if any) must be -RAY_STR or RAY_SYM atom.
                The non-scalar side must be RAY_STR. */
             if (l_scalar && !l_atom_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
             if (r_scalar && !r_atom_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
@@ -1690,13 +1690,13 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
        ray_sym_find returns -1 if string not in table → no match. */
     bool str_resolved = false;
     int64_t resolved_sym_id = 0;
-    if (r_scalar && rhs->type == RAY_ATOM_STR &&
+    if (r_scalar && rhs->type == -RAY_STR &&
         RAY_IS_SYM(lhs->type)) {
         const char* s = ray_str_ptr(rhs);
         size_t slen = ray_str_len(rhs);
         resolved_sym_id = ray_sym_find(s, slen);
         str_resolved = true;
-    } else if (l_scalar && lhs->type == RAY_ATOM_STR &&
+    } else if (l_scalar && lhs->type == -RAY_STR &&
                RAY_IS_SYM(rhs->type)) {
         const char* s = ray_str_ptr(lhs);
         size_t slen = ray_str_len(lhs);
@@ -1707,10 +1707,10 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
     double l_f64_val = 0, r_f64_val = 0;
     int64_t l_i64_val = 0, r_i64_val = 0;
     if (l_scalar) {
-        if (str_resolved && lhs->type == RAY_ATOM_STR)
+        if (str_resolved && lhs->type == -RAY_STR)
             l_i64_val = resolved_sym_id;
         else if (ray_is_atom(lhs)) {
-            if (lhs->type == RAY_ATOM_F64 || lhs->type == -RAY_F64) l_f64_val = lhs->f64;
+            if (lhs->type == -RAY_F64 || lhs->type == -RAY_F64) l_f64_val = lhs->f64;
             else l_i64_val = lhs->i64;
         } else {
             int8_t t = lhs->type;
@@ -1719,10 +1719,10 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
         }
     }
     if (r_scalar) {
-        if (str_resolved && rhs->type == RAY_ATOM_STR)
+        if (str_resolved && rhs->type == -RAY_STR)
             r_i64_val = resolved_sym_id;
         else if (ray_is_atom(rhs)) {
-            if (rhs->type == RAY_ATOM_F64 || rhs->type == -RAY_F64) r_f64_val = rhs->f64;
+            if (rhs->type == -RAY_F64 || rhs->type == -RAY_F64) r_f64_val = rhs->f64;
             else r_i64_val = rhs->i64;
         } else {
             int8_t t = rhs->type;
@@ -6078,36 +6078,36 @@ static ray_t* materialize_broadcast_input(ray_t* src, int64_t nrows) {
     }
 
     switch (src->type) {
-        case RAY_ATOM_F64: {
+        case -RAY_F64: {
             double v = src->f64;
             for (int64_t i = 0; i < nrows; i++) ((double*)ray_data(out))[i] = v;
             return out;
         }
-        case RAY_ATOM_I64:
-        case RAY_ATOM_SYM:
-        case RAY_ATOM_TIMESTAMP: {
+        case -RAY_I64:
+        case -RAY_SYM:
+        case -RAY_TIMESTAMP: {
             int64_t v = src->i64;
             for (int64_t i = 0; i < nrows; i++) ((int64_t*)ray_data(out))[i] = v;
             return out;
         }
-        case RAY_ATOM_DATE:
-        case RAY_ATOM_TIME: {
+        case -RAY_DATE:
+        case -RAY_TIME: {
             int32_t v = (int32_t)src->i64;
             for (int64_t i = 0; i < nrows; i++) ((int32_t*)ray_data(out))[i] = v;
             return out;
         }
-        case RAY_ATOM_I32: {
+        case -RAY_I32: {
             int32_t v = src->i32;
             for (int64_t i = 0; i < nrows; i++) ((int32_t*)ray_data(out))[i] = v;
             return out;
         }
-        case RAY_ATOM_I16: {
+        case -RAY_I16: {
             int16_t v = src->i16;
             for (int64_t i = 0; i < nrows; i++) ((int16_t*)ray_data(out))[i] = v;
             return out;
         }
-        case RAY_ATOM_U8:
-        case RAY_ATOM_BOOL: {
+        case -RAY_U8:
+        case -RAY_BOOL: {
             uint8_t v = src->u8;
             for (int64_t i = 0; i < nrows; i++) ((uint8_t*)ray_data(out))[i] = v;
             return out;
@@ -10328,14 +10328,14 @@ static ray_t* exec_if(ray_graph_t* g, ray_op_t* op) {
                                : (e_arr ? e_arr[i] : e_scalar);
     } else if (out_type == RAY_STR) {
         /* RAY_STR: resolve each side to string data and ray_str_vec_append.
-         * Scalars may be RAY_ATOM_STR or RAY_SYM atoms. */
+         * Scalars may be -RAY_STR or RAY_SYM atoms. */
         result->len = 0; /* ray_str_vec_append manages len */
         for (int64_t i = 0; i < len; i++) {
             const char* sp;
             size_t sl;
             if (cond_p[i]) {
                 if (then_scalar) {
-                    if (then_v->type == RAY_ATOM_STR) {
+                    if (then_v->type == -RAY_STR) {
                         sp = ray_str_ptr(then_v);
                         sl = ray_str_len(then_v);
                     } else if (then_v->type == RAY_STR) {
@@ -10358,7 +10358,7 @@ static ray_t* exec_if(ray_graph_t* g, ray_op_t* op) {
                 }
             } else {
                 if (else_scalar) {
-                    if (else_v->type == RAY_ATOM_STR) {
+                    if (else_v->type == -RAY_STR) {
                         sp = ray_str_ptr(else_v);
                         sl = ray_str_len(else_v);
                     } else if (else_v->type == RAY_STR) {
@@ -10388,14 +10388,14 @@ static ray_t* exec_if(ray_graph_t* g, ray_op_t* op) {
          * Scalars may be string atoms that need interning. Output is always W64. */
         int64_t t_scalar = 0, e_scalar = 0;
         if (then_scalar) {
-            if (then_v->type == RAY_ATOM_STR) {
+            if (then_v->type == -RAY_STR) {
                 t_scalar = ray_sym_intern(ray_str_ptr(then_v), ray_str_len(then_v));
             } else {
                 t_scalar = then_v->i64;
             }
         }
         if (else_scalar) {
-            if (else_v->type == RAY_ATOM_STR) {
+            if (else_v->type == -RAY_STR) {
                 e_scalar = ray_sym_intern(ray_str_ptr(else_v), ray_str_len(else_v));
             } else {
                 e_scalar = else_v->i64;
@@ -10773,8 +10773,8 @@ static ray_t* exec_substr(ray_graph_t* g, ray_op_t* op) {
     const int64_t* l_data = NULL;
     const int32_t* s_data_i32 = NULL;
     const int32_t* l_data_i32 = NULL;
-    if (start_v->type == RAY_ATOM_I64) s_scalar = start_v->i64;
-    else if (start_v->type == RAY_ATOM_F64) s_scalar = (int64_t)start_v->f64;
+    if (start_v->type == -RAY_I64) s_scalar = start_v->i64;
+    else if (start_v->type == -RAY_F64) s_scalar = (int64_t)start_v->f64;
     else if (start_v->len == 1) {
         if (start_v->type == RAY_F64)
             s_scalar = (int64_t)((double*)ray_data(start_v))[0];
@@ -10785,8 +10785,8 @@ static ray_t* exec_substr(ray_graph_t* g, ray_op_t* op) {
     }
     else if (start_v->type == RAY_I32) s_data_i32 = (const int32_t*)ray_data(start_v);
     else s_data = (const int64_t*)ray_data(start_v);
-    if (len_v->type == RAY_ATOM_I64) l_scalar = len_v->i64;
-    else if (len_v->type == RAY_ATOM_F64) l_scalar = (int64_t)len_v->f64;
+    if (len_v->type == -RAY_I64) l_scalar = len_v->i64;
+    else if (len_v->type == -RAY_F64) l_scalar = (int64_t)len_v->f64;
     else if (len_v->len == 1) {
         if (len_v->type == RAY_F64)
             l_scalar = (int64_t)((double*)ray_data(len_v))[0];
@@ -11034,7 +11034,7 @@ static ray_t* exec_concat(ray_graph_t* g, ray_op_t* op) {
                 int64_t ar = ray_is_atom(args[a]) ? 0 : (r < args[a]->len ? r : 0);
                 sym_elem(args[a], ar, &sp, &sl);
                 total += sl;
-            } else if (t == RAY_ATOM_STR) {
+            } else if (t == -RAY_STR) {
                 total += ray_str_len(args[a]);
             }
         }
@@ -11067,7 +11067,7 @@ static ray_t* exec_concat(ray_graph_t* g, ray_op_t* op) {
                 int64_t ar = ray_is_atom(args[a]) ? 0 : (r < args[a]->len ? r : 0);
                 sym_elem(args[a], ar, &sp, &sl);
                 if (bi + sl < buf_cap) { memcpy(buf + bi, sp, sl); bi += sl; }
-            } else if (t == RAY_ATOM_STR) {
+            } else if (t == -RAY_STR) {
                 const char* sp = ray_str_ptr(args[a]);
                 size_t sl = ray_str_len(args[a]);
                 if (sp && bi + sl < buf_cap) { memcpy(buf + bi, sp, sl); bi += sl; }
@@ -15312,18 +15312,18 @@ static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
         /* Empty table: return an empty vector of the matching type */
         int8_t at = atom->type;
         int8_t vt;
-        if      (at == RAY_ATOM_STR)  vt = RAY_STR;
-        else if (at == RAY_ATOM_I64)  vt = RAY_I64;
-        else if (at == RAY_ATOM_F64)  vt = RAY_F64;
-        else if (at == RAY_ATOM_BOOL) vt = RAY_BOOL;
-        else if (at == RAY_ATOM_SYM)  vt = RAY_SYM;
+        if      (at == -RAY_STR)  vt = RAY_STR;
+        else if (at == -RAY_I64)  vt = RAY_I64;
+        else if (at == -RAY_F64)  vt = RAY_F64;
+        else if (at == -RAY_BOOL) vt = RAY_BOOL;
+        else if (at == -RAY_SYM)  vt = RAY_SYM;
         else return RAY_ERR_PTR(RAY_ERR_TYPE);
         return ray_vec_new(vt, 0);
     }
     int8_t at = atom->type;
 
-    /* RAY_ATOM_STR → RAY_STR column */
-    if (at == RAY_ATOM_STR) {
+    /* -RAY_STR → RAY_STR column */
+    if (at == -RAY_STR) {
         const char* sp = ray_str_ptr(atom);
         size_t sl = ray_str_len(atom);
         ray_t* vec = ray_vec_new(RAY_STR, nrows);
@@ -15337,10 +15337,10 @@ static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
 
     /* Numeric / bool / sym scalars */
     int8_t vt;
-    if      (at == RAY_ATOM_I64)  vt = RAY_I64;
-    else if (at == RAY_ATOM_F64)  vt = RAY_F64;
-    else if (at == RAY_ATOM_BOOL) vt = RAY_BOOL;
-    else if (at == RAY_ATOM_SYM)  vt = RAY_SYM;
+    if      (at == -RAY_I64)  vt = RAY_I64;
+    else if (at == -RAY_F64)  vt = RAY_F64;
+    else if (at == -RAY_BOOL) vt = RAY_BOOL;
+    else if (at == -RAY_SYM)  vt = RAY_SYM;
     else return RAY_ERR_PTR(RAY_ERR_TYPE);
 
     size_t esz = (vt == RAY_BOOL) ? 1 : 8;

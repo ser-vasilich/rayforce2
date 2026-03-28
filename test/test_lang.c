@@ -73,7 +73,7 @@ static MunitResult test_lex_i64(const void* params, void* fixture) {
     ray_t* result = ray_parse("42");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 42);
     ray_release(result);
     return MUNIT_OK;
@@ -84,7 +84,7 @@ static MunitResult test_lex_neg_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_parse("-7");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, -7);
     ray_release(result);
     return MUNIT_OK;
@@ -95,7 +95,7 @@ static MunitResult test_lex_f64(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_parse("3.14");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(result->type, ==, -RAY_F64);
     munit_assert_double(result->f64, ==, 3.14);
     ray_release(result);
     return MUNIT_OK;
@@ -106,7 +106,7 @@ static MunitResult test_lex_string(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_parse("\"hello\"");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_STR);
+    munit_assert_int(result->type, ==, -RAY_STR);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -116,7 +116,7 @@ static MunitResult test_lex_symbol(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_parse("'AAPL");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_SYM);
+    munit_assert_int(result->type, ==, -RAY_SYM);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -126,12 +126,12 @@ static MunitResult test_lex_bool(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* t = ray_parse("true");
     munit_assert_ptr_not_null(t);
-    munit_assert_int(t->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(t->type, ==, -RAY_BOOL);
     munit_assert_uint(t->b8, ==, 1);
     ray_release(t);
 
     ray_t* f = ray_parse("false");
-    munit_assert_int(f->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(f->type, ==, -RAY_BOOL);
     munit_assert_uint(f->b8, ==, 0);
     ray_release(f);
     return MUNIT_OK;
@@ -193,7 +193,7 @@ static MunitResult test_eval_literal(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_eval_str("42");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 42);
     ray_release(result);
     return MUNIT_OK;
@@ -205,7 +205,7 @@ static MunitResult test_eval_add(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(+ 1 2)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 3);
     ray_release(result);
     return MUNIT_OK;
@@ -216,7 +216,7 @@ static MunitResult test_eval_nested_arith(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_eval_str("(+ (* 2 3) 4)");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 10);
     ray_release(result);
     return MUNIT_OK;
@@ -247,7 +247,7 @@ static MunitResult test_eval_cmp(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_eval_str("(> 5 3)");
     munit_assert_ptr_not_null(result);
-    munit_assert_int(result->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(result->type, ==, -RAY_BOOL);
     munit_assert_uint(result->b8, ==, 1);
     ray_release(result);
     return MUNIT_OK;
@@ -259,7 +259,7 @@ static MunitResult test_eval_set(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set x 10) x)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 10);
     ray_release(result);
     return MUNIT_OK;
@@ -271,7 +271,7 @@ static MunitResult test_eval_if_true(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(if true 1 2)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 1);
     ray_release(result);
     return MUNIT_OK;
@@ -283,7 +283,7 @@ static MunitResult test_eval_if_false(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(if false 1 2)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 2);
     ray_release(result);
     return MUNIT_OK;
@@ -295,7 +295,7 @@ static MunitResult test_eval_let(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (let x 5) (+ x 3))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 8);
     ray_release(result);
     return MUNIT_OK;
@@ -307,7 +307,7 @@ static MunitResult test_eval_lambda(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set double (fn [x] (* x 2))) (double 5))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 10);
     ray_release(result);
     return MUNIT_OK;
@@ -319,7 +319,7 @@ static MunitResult test_eval_lambda_multi(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set add3 (fn [a b c] (+ a (+ b c)))) (add3 1 2 3))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 6);
     ray_release(result);
     return MUNIT_OK;
@@ -331,7 +331,7 @@ static MunitResult test_eval_lambda_let(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set f (fn [a b] (let c (+ a b)) (+ c 1))) (f 3 4))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 8);
     ray_release(result);
     return MUNIT_OK;
@@ -343,7 +343,7 @@ static MunitResult test_compile_basic(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set f (fn [x] (+ x 1))) (f 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 11);
     ray_release(result);
     return MUNIT_OK;
@@ -356,7 +356,7 @@ static MunitResult test_compile_closure(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(do (set f (fn [a b] (let c (+ a b)) (* c 2))) (f 3 4))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 14);
     ray_release(result);
     return MUNIT_OK;
@@ -369,7 +369,7 @@ static MunitResult test_vm_fib(const void* params, void* fixture) {
         "(do (set fib (fn [n] (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))) (fib 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 55);
     ray_release(result);
     return MUNIT_OK;
@@ -382,7 +382,7 @@ static MunitResult test_vm_loop(const void* params, void* fixture) {
         "(do (set sum-to (fn [n acc] (if (== n 0) acc (sum-to (- n 1) (+ acc n))))) (sum-to 100 0))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 5050);
     ray_release(result);
     return MUNIT_OK;
@@ -394,7 +394,7 @@ static MunitResult test_eval_try(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(try (/ 10 0) (fn [e] 0))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 0);
     ray_release(result);
     return MUNIT_OK;
@@ -406,7 +406,7 @@ static MunitResult test_eval_raise(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(try (raise \"boom\") (fn [e] 42))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 42);
     ray_release(result);
     return MUNIT_OK;
@@ -450,7 +450,7 @@ static MunitResult test_eval_sum(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(sum [1 2 3 4 5])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 15);
     ray_release(result);
     return MUNIT_OK;
@@ -462,7 +462,7 @@ static MunitResult test_eval_count(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(count [1 2 3])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 3);
     ray_release(result);
     return MUNIT_OK;
@@ -474,7 +474,7 @@ static MunitResult test_eval_avg(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(avg [2 4 6])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(result->type, ==, -RAY_F64);
     munit_assert_double(result->f64, ==, 4.0);
     ray_release(result);
     return MUNIT_OK;
@@ -486,14 +486,14 @@ static MunitResult test_eval_min_max(const void* params, void* fixture) {
     ray_t* mn = ray_eval_str("(min [5 2 8])");
     munit_assert_ptr_not_null(mn);
     munit_assert_false(RAY_IS_ERR(mn));
-    munit_assert_int(mn->type, ==, RAY_ATOM_I64);
+    munit_assert_int(mn->type, ==, -RAY_I64);
     munit_assert_int(mn->i64, ==, 2);
     ray_release(mn);
 
     ray_t* mx = ray_eval_str("(max [5 2 8])");
     munit_assert_ptr_not_null(mx);
     munit_assert_false(RAY_IS_ERR(mx));
-    munit_assert_int(mx->type, ==, RAY_ATOM_I64);
+    munit_assert_int(mx->type, ==, -RAY_I64);
     munit_assert_int(mx->i64, ==, 8);
     ray_release(mx);
     return MUNIT_OK;
@@ -505,14 +505,14 @@ static MunitResult test_eval_first_last(const void* params, void* fixture) {
     ray_t* f = ray_eval_str("(first [1 2 3])");
     munit_assert_ptr_not_null(f);
     munit_assert_false(RAY_IS_ERR(f));
-    munit_assert_int(f->type, ==, RAY_ATOM_I64);
+    munit_assert_int(f->type, ==, -RAY_I64);
     munit_assert_int(f->i64, ==, 1);
     ray_release(f);
 
     ray_t* l = ray_eval_str("(last [1 2 3])");
     munit_assert_ptr_not_null(l);
     munit_assert_false(RAY_IS_ERR(l));
-    munit_assert_int(l->type, ==, RAY_ATOM_I64);
+    munit_assert_int(l->type, ==, -RAY_I64);
     munit_assert_int(l->i64, ==, 3);
     ray_release(l);
     return MUNIT_OK;
@@ -556,7 +556,7 @@ static MunitResult test_eval_fold(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(fold + [1 2 3 4 5])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 15);
     ray_release(result);
     return MUNIT_OK;
@@ -633,14 +633,14 @@ static MunitResult test_eval_in(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(in 2 [1 2 3])");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(result->type, ==, -RAY_BOOL);
     munit_assert_uint(result->b8, ==, 1);
     ray_release(result);
 
     ray_t* result2 = ray_eval_str("(in 9 [1 2 3])");
     munit_assert_ptr_not_null(result2);
     munit_assert_false(RAY_IS_ERR(result2));
-    munit_assert_int(result2->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(result2->type, ==, -RAY_BOOL);
     munit_assert_uint(result2->b8, ==, 0);
     ray_release(result2);
     return MUNIT_OK;
@@ -730,7 +730,7 @@ static MunitResult test_eval_at(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(at [10 20 30] 1)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 20);
     ray_release(result);
     return MUNIT_OK;
@@ -742,7 +742,7 @@ static MunitResult test_eval_find(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(find [1 2 3] 2)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 1);
     ray_release(result);
     return MUNIT_OK;
@@ -804,8 +804,8 @@ static MunitResult test_eval_key_table(const void* params, void* fixture) {
     munit_assert_int(result->type, ==, RAY_LIST);
     munit_assert_int(ray_len(result), ==, 2);
     ray_t** elems = (ray_t**)ray_data(result);
-    munit_assert_int(elems[0]->type, ==, RAY_ATOM_SYM);
-    munit_assert_int(elems[1]->type, ==, RAY_ATOM_SYM);
+    munit_assert_int(elems[0]->type, ==, -RAY_SYM);
+    munit_assert_int(elems[1]->type, ==, -RAY_SYM);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -817,7 +817,7 @@ static MunitResult test_eval_count_table(const void* params, void* fixture) {
         "(do (set t (table ['a 'b] (list [1 2 3] [10 20 30]))) (count t))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 3);
     ray_release(result);
     return MUNIT_OK;
@@ -1182,7 +1182,7 @@ static MunitResult test_eval_println(const void* params, void* fixture) {
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
     /* println returns null (i64 0) */
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 0);
     ray_release(result);
     return MUNIT_OK;
@@ -1199,7 +1199,7 @@ static MunitResult test_eval_read_write_csv(const void* params, void* fixture) {
         "(count t2))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 3);
     ray_release(result);
     return MUNIT_OK;
@@ -1211,7 +1211,7 @@ static MunitResult test_eval_as_cast(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(as 'I64 \"42\")");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 42);
     ray_release(result);
     return MUNIT_OK;
@@ -1224,18 +1224,18 @@ static MunitResult test_eval_type(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(type 42)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
-    munit_assert_int(result->i64, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
+    munit_assert_int(result->i64, ==, -RAY_I64);
     ray_release(result);
     /* type of f64 literal */
     result = ray_eval_str("(type 3.14)");
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->i64, ==, RAY_ATOM_F64);
+    munit_assert_int(result->i64, ==, -RAY_F64);
     ray_release(result);
     /* type of boolean */
     result = ray_eval_str("(type true)");
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->i64, ==, RAY_ATOM_BOOL);
+    munit_assert_int(result->i64, ==, -RAY_BOOL);
     ray_release(result);
     return MUNIT_OK;
 }
@@ -1295,7 +1295,7 @@ static MunitResult test_verb_sum_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(sum (til 100))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 4950);
     ray_release(result);
     return MUNIT_OK;
@@ -1306,7 +1306,7 @@ static MunitResult test_verb_avg_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(avg (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(result->type, ==, -RAY_F64);
     munit_assert_double_equal(result->f64, 4.5, 4);
     ray_release(result);
     return MUNIT_OK;
@@ -1317,7 +1317,7 @@ static MunitResult test_verb_min_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(min (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 0);
     ray_release(result);
     return MUNIT_OK;
@@ -1328,7 +1328,7 @@ static MunitResult test_verb_max_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(max (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 9);
     ray_release(result);
     return MUNIT_OK;
@@ -1339,7 +1339,7 @@ static MunitResult test_verb_count_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(count (til 100))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 100);
     ray_release(result);
     return MUNIT_OK;
@@ -1350,7 +1350,7 @@ static MunitResult test_verb_first_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(first (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 0);
     ray_release(result);
     return MUNIT_OK;
@@ -1361,7 +1361,7 @@ static MunitResult test_verb_last_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(last (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 9);
     ray_release(result);
     return MUNIT_OK;
@@ -1372,7 +1372,7 @@ static MunitResult test_verb_dev_til(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(dev (til 10))");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(result->type, ==, -RAY_F64);
     munit_assert_double_equal(result->f64, 2.8722813232690143, 4);
     ray_release(result);
     return MUNIT_OK;
@@ -1383,7 +1383,7 @@ static MunitResult test_verb_if_sum(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(if (> (sum (til 10)) 0) 1 0)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 1);
     ray_release(result);
     return MUNIT_OK;
@@ -1394,7 +1394,7 @@ static MunitResult test_verb_sum_var(const void* params, void* fixture) {
     ray_t* result = ray_eval_str("(set x (til 10)) (sum x)");
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 45);
     ray_release(result);
     return MUNIT_OK;

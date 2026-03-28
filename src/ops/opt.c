@@ -245,32 +245,32 @@ static ray_op_ext_t* ensure_ext_node(ray_graph_t* g, uint32_t node_id) {
 static bool atom_to_numeric(ray_t* v, double* out_f, int64_t* out_i, bool* is_f64) {
     if (!v || !ray_is_atom(v)) return false;
     switch (v->type) {
-        case RAY_ATOM_F64:
+        case -RAY_F64:
             *out_f = v->f64;
             *out_i = (int64_t)v->f64;
             *is_f64 = true;
             return true;
-        case RAY_ATOM_I64:
-        case RAY_ATOM_SYM:
-        case RAY_ATOM_DATE:
-        case RAY_ATOM_TIME:
-        case RAY_ATOM_TIMESTAMP:
+        case -RAY_I64:
+        case -RAY_SYM:
+        case -RAY_DATE:
+        case -RAY_TIME:
+        case -RAY_TIMESTAMP:
             *out_i = v->i64;
             *out_f = (double)v->i64;
             *is_f64 = false;
             return true;
-        case RAY_ATOM_I32:
+        case -RAY_I32:
             *out_i = (int64_t)v->i32;
             *out_f = (double)v->i32;
             *is_f64 = false;
             return true;
-        case RAY_ATOM_I16:
+        case -RAY_I16:
             *out_i = (int64_t)v->i16;
             *out_f = (double)v->i16;
             *is_f64 = false;
             return true;
-        case RAY_ATOM_U8:
-        case RAY_ATOM_BOOL:
+        case -RAY_U8:
+        case -RAY_BOOL:
             *out_i = (int64_t)v->u8;
             *out_f = (double)v->u8;
             *is_f64 = false;

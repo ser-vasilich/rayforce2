@@ -85,10 +85,10 @@ static int32_t add_constant(compiler_t *c, ray_t *value) {
         ray_t *v = c->consts[i];
         if (v == value) return i;
         if (v->type == value->type && ray_is_atom(v)) {
-            if (v->type == RAY_ATOM_I64 && v->i64 == value->i64) return i;
-            if (v->type == RAY_ATOM_F64 && v->f64 == value->f64) return i;
-            if (v->type == RAY_ATOM_BOOL && v->b8 == value->b8) return i;
-            if (v->type == RAY_ATOM_SYM && v->i64 == value->i64 &&
+            if (v->type == -RAY_I64 && v->i64 == value->i64) return i;
+            if (v->type == -RAY_F64 && v->f64 == value->f64) return i;
+            if (v->type == -RAY_BOOL && v->b8 == value->b8) return i;
+            if (v->type == -RAY_SYM && v->i64 == value->i64 &&
                 v->attrs == value->attrs) return i;
         }
     }
@@ -165,7 +165,7 @@ static void compile_list(compiler_t *c, ray_t *ast) {
     init_sf_syms();
 
     /* Check for special forms by name */
-    if (head->type == RAY_ATOM_SYM && (head->attrs & RAY_ATTR_NAME)) {
+    if (head->type == -RAY_SYM && (head->attrs & RAY_ATTR_NAME)) {
         int64_t sym_id = head->i64;
 
         /* (set name value) — dynamic eval (set modifies global env) */
@@ -204,7 +204,7 @@ static void compile_list(compiler_t *c, ray_t *ast) {
                 int32_t jmp_pos = emit_jump(c, OP_JMP);
                 patch_jump(c, jmpf_pos);
                 ray_t *zero = ray_alloc(0);
-                zero->type = RAY_ATOM_I64;
+                zero->type = -RAY_I64;
                 zero->i64 = 0;
                 int32_t idx = add_constant(c, zero);
                 ray_release(zero);
@@ -235,7 +235,7 @@ static void compile_list(compiler_t *c, ray_t *ast) {
 
     /* Look up head at compile time to determine call type */
     ray_t *fn = NULL;
-    if (head->type == RAY_ATOM_SYM && (head->attrs & RAY_ATTR_NAME))
+    if (head->type == -RAY_SYM && (head->attrs & RAY_ATTR_NAME))
         fn = ray_env_get(head->i64);
 
     /* Unrecognized special form: dynamic eval on entire form */
@@ -285,7 +285,7 @@ static void compile_expr(compiler_t *c, ray_t *ast) {
     if (!ast || RAY_IS_ERR(ast)) return;
 
     if (ray_is_atom(ast)) {
-        if (ast->type == RAY_ATOM_SYM && (ast->attrs & RAY_ATTR_NAME)) {
+        if (ast->type == -RAY_SYM && (ast->attrs & RAY_ATTR_NAME)) {
             int32_t slot = find_local(c, ast->i64);
             if (slot >= 0) {
                 emit(c, OP_LOADENV);

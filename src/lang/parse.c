@@ -339,7 +339,7 @@ ray_t* ray_parse(const char* source) {
         for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
         return RAY_ERR_PTR(RAY_ERR_OOM);
     }
-    do_sym->type = RAY_ATOM_SYM;
+    do_sym->type = -RAY_SYM;
     do_sym->attrs = RAY_ATTR_NAME;
     do_sym->i64 = ray_sym_intern("do", 2);
     elems[0] = do_sym;

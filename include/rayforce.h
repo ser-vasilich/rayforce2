@@ -179,22 +179,6 @@ typedef union ray_t* (*ray_vary_fn)(union ray_t**, int64_t);
 #define RAY_IS_PARTED(t)       ((t) >= RAY_PARTED_BASE && (t) < RAY_MAPCOMMON)
 #define RAY_PARTED_BASETYPE(t) ((t) - RAY_PARTED_BASE)
 
-/* Atom variants (negative type tags) */
-#define RAY_ATOM_BOOL       (-RAY_BOOL)
-#define RAY_ATOM_U8         (-RAY_U8)
-#define RAY_ATOM_CHAR       (-RAY_CHAR)
-#define RAY_ATOM_I16        (-RAY_I16)
-#define RAY_ATOM_I32        (-RAY_I32)
-#define RAY_ATOM_I64        (-RAY_I64)
-#define RAY_ATOM_F64        (-RAY_F64)
-#define RAY_ATOM_F32        (-RAY_F32)
-#define RAY_ATOM_STR        (-RAY_STR)
-#define RAY_ATOM_DATE       (-RAY_DATE)
-#define RAY_ATOM_TIME       (-RAY_TIME)
-#define RAY_ATOM_TIMESTAMP  (-RAY_TIMESTAMP)
-#define RAY_ATOM_GUID       (-RAY_GUID)
-#define RAY_ATOM_SYM        (-RAY_SYM)
-
 /* Number of types (positive range): must be > max type ID */
 #define RAY_TYPE_COUNT 22
 
@@ -208,7 +192,7 @@ typedef union ray_t* (*ray_vary_fn)(union ray_t**, int64_t);
  *   Bits 0x01-0x02  RAY_LIST atoms:   RAY_ATTR_VECTOR / RAY_ATTR_DICT
  *   Bit  0x10       vectors:         RAY_ATTR_SLICE
  *   Bit  0x20       vectors:         RAY_ATTR_NULLMAP_EXT
- *   Bit  0x20       RAY_ATOM_SYM:     RAY_ATTR_NAME (variable reference)
+ *   Bit  0x20       -RAY_SYM:        RAY_ATTR_NAME (variable reference)
  *   Bit  0x40       vectors:         RAY_ATTR_HAS_NULLS
  *   Bit  0x80       all types:       RAY_ATTR_ARENA (arena-allocated, no refcount)
  *

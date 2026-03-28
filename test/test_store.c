@@ -784,9 +784,9 @@ static MunitResult test_col_save_load_str(const void* params, void* fixture) {
     munit_assert_ptr_not_null(l0);
     munit_assert_ptr_not_null(l1);
     munit_assert_ptr_not_null(l2);
-    munit_assert_int(l0->type, ==, RAY_ATOM_STR);
-    munit_assert_int(l1->type, ==, RAY_ATOM_STR);
-    munit_assert_int(l2->type, ==, RAY_ATOM_STR);
+    munit_assert_int(l0->type, ==, -RAY_STR);
+    munit_assert_int(l1->type, ==, -RAY_STR);
+    munit_assert_int(l2->type, ==, -RAY_STR);
 
     munit_assert_size(ray_str_len(l0), ==, 5);
     munit_assert_size(ray_str_len(l1), ==, 5);

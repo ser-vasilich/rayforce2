@@ -333,8 +333,8 @@ static bool ray_atom_str_is_sso(const ray_t* s) {
 }
 
 static bool ray_atom_owns_obj(const ray_t* v) {
-    if (v->type == RAY_ATOM_GUID) return v->obj != NULL;
-    if (v->type == RAY_ATOM_STR) return !ray_atom_str_is_sso(v);
+    if (v->type == -RAY_GUID) return v->obj != NULL;
+    if (v->type == -RAY_STR) return !ray_atom_str_is_sso(v);
     return false;
 }
 

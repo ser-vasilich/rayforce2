@@ -106,7 +106,7 @@ static bool is_serializable_type(int8_t t) {
 }
 
 /* --------------------------------------------------------------------------
- * String list detection: RAY_LIST whose elements are all RAY_ATOM_STR
+ * String list detection: RAY_LIST whose elements are all -RAY_STR
  * -------------------------------------------------------------------------- */
 
 static bool is_str_list(ray_t* v) {
@@ -116,7 +116,7 @@ static bool is_str_list(ray_t* v) {
     for (int64_t i = 0; i < v->len; i++) {
         ray_t* elem = slots[i];
         if (!elem || RAY_IS_ERR(elem)) return false;
-        if (elem->type != RAY_ATOM_STR) return false;
+        if (elem->type != -RAY_STR) return false;
     }
     return true;
 }
@@ -188,7 +188,7 @@ static ray_t* col_load_str_list(const uint8_t* ptr, size_t remaining) {
  * Recursive element format:
  *   [1B type]
  *   atoms (type < 0):
- *     RAY_ATOM_STR: [4B len][data bytes]
+ *     -RAY_STR: [4B len][data bytes]
  *     other:       [8B raw value]
  *   vectors with is_serializable_type: [8B len][raw data]
  *   RAY_LIST: [8B count][recursive elements...]
@@ -205,7 +205,7 @@ static ray_err_t col_write_recursive(ray_t* obj, FILE* f) {
 
     if (type < 0) {
         /* Atom */
-        if (type == RAY_ATOM_STR) {
+        if (type == -RAY_STR) {
             const char* sp = ray_str_ptr(obj);
             size_t slen = ray_str_len(obj);
             uint32_t len32 = (uint32_t)slen;
@@ -274,7 +274,7 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
 
     if (type < 0) {
         /* Atom */
-        if (type == RAY_ATOM_STR) {
+        if (type == -RAY_STR) {
             if (*remaining < 4) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
             uint32_t slen;
             memcpy(&slen, *pp, 4);
@@ -420,7 +420,7 @@ ray_err_t ray_col_save(ray_t* vec, const char* path) {
     if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path) >= (int)sizeof(tmp_path))
         return RAY_ERR_IO;
 
-    /* String list: RAY_LIST of RAY_ATOM_STR atoms */
+    /* String list: RAY_LIST of -RAY_STR atoms */
     if (is_str_list(vec)) {
         FILE* f = fopen(tmp_path, "wb");
         if (!f) return RAY_ERR_IO;

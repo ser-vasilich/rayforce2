@@ -48,12 +48,12 @@ static MunitResult test_atom_bool(const void* params, void* fixture) {
     munit_assert_ptr_not_null(t);
     munit_assert_false(RAY_IS_ERR(t));
     munit_assert_true(ray_is_atom(t));
-    munit_assert_int(t->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(t->type, ==, -RAY_BOOL);
     munit_assert_uint(t->b8, ==, 1);
     ray_release(t);
 
     ray_t* f = ray_bool(false);
-    munit_assert_int(f->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(f->type, ==, -RAY_BOOL);
     munit_assert_uint(f->b8, ==, 0);
     ray_release(f);
 
@@ -68,7 +68,7 @@ static MunitResult test_atom_u8(const void* params, void* fixture) {
     ray_t* v = ray_u8(255);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_U8);
+    munit_assert_int(v->type, ==, -RAY_U8);
     munit_assert_uint(v->u8, ==, 255);
     ray_release(v);
 
@@ -83,7 +83,7 @@ static MunitResult test_atom_char(const void* params, void* fixture) {
     ray_t* v = ray_char('Z');
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_CHAR);
+    munit_assert_int(v->type, ==, -RAY_CHAR);
     munit_assert_int(v->c8, ==, 'Z');
     ray_release(v);
 
@@ -98,7 +98,7 @@ static MunitResult test_atom_i16(const void* params, void* fixture) {
     ray_t* v = ray_i16(-1234);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_I16);
+    munit_assert_int(v->type, ==, -RAY_I16);
     munit_assert_int(v->i16, ==, -1234);
     ray_release(v);
 
@@ -113,7 +113,7 @@ static MunitResult test_atom_i32(const void* params, void* fixture) {
     ray_t* v = ray_i32(1000000);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_I32);
+    munit_assert_int(v->type, ==, -RAY_I32);
     munit_assert_int(v->i32, ==, 1000000);
     ray_release(v);
 
@@ -128,7 +128,7 @@ static MunitResult test_atom_i64(const void* params, void* fixture) {
     ray_t* v = ray_i64(9876543210LL);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_I64);
+    munit_assert_int(v->type, ==, -RAY_I64);
     munit_assert_int(v->i64, ==, 9876543210LL);
     ray_release(v);
 
@@ -143,7 +143,7 @@ static MunitResult test_atom_f64(const void* params, void* fixture) {
     ray_t* v = ray_f64(3.14159265358979);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_F64);
+    munit_assert_int(v->type, ==, -RAY_F64);
     munit_assert_double(v->f64, ==, 3.14159265358979);
     ray_release(v);
 
@@ -160,20 +160,20 @@ static MunitResult test_atom_str_sso(const void* params, void* fixture) {
     munit_assert_ptr_not_null(v);
     munit_assert_false(RAY_IS_ERR(v));
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_STR);
+    munit_assert_int(v->type, ==, -RAY_STR);
     munit_assert_uint(v->slen, ==, 5);
     munit_assert_memory_equal(5, v->sdata, "hello");
     ray_release(v);
 
     /* Empty string */
     ray_t* e = ray_str("", 0);
-    munit_assert_int(e->type, ==, RAY_ATOM_STR);
+    munit_assert_int(e->type, ==, -RAY_STR);
     munit_assert_uint(e->slen, ==, 0);
     ray_release(e);
 
     /* Exactly 7 bytes — uses long-string path (no room for NUL in sdata[7]) */
     ray_t* m = ray_str("1234567", 7);
-    munit_assert_int(m->type, ==, RAY_ATOM_STR);
+    munit_assert_int(m->type, ==, -RAY_STR);
     munit_assert_size(ray_str_len(m), ==, 7);
     munit_assert_memory_equal(7, ray_str_ptr(m), "1234567");
     ray_release(m);
@@ -192,7 +192,7 @@ static MunitResult test_atom_str_long(const void* params, void* fixture) {
     munit_assert_ptr_not_null(v);
     munit_assert_false(RAY_IS_ERR(v));
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_STR);
+    munit_assert_int(v->type, ==, -RAY_STR);
 
     /* For long strings, obj points to a CHAR vector */
     ray_t* chars = v->obj;
@@ -220,7 +220,7 @@ static MunitResult test_atom_sym(const void* params, void* fixture) {
     ray_t* v = ray_sym(42);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, RAY_ATOM_SYM);
+    munit_assert_int(v->type, ==, -RAY_SYM);
     munit_assert_int(v->i64, ==, 42);
     ray_release(v);
 

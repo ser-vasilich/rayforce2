@@ -59,7 +59,7 @@ static MunitResult test_parallel_sum(const void* params, void* data) {
 
     ray_t* result = ray_execute(g, sum_op);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, expected);
 
     ray_release(result);
@@ -240,7 +240,7 @@ static MunitResult test_parallel_min_max(const void* params, void* data) {
 
     ray_t* min_result = ray_execute(g, min_op);
     munit_assert_false(RAY_IS_ERR(min_result));
-    munit_assert_int(min_result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(min_result->type, ==, -RAY_F64);
     munit_assert_double_equal(min_result->f64, -50000.0, 6);
 
     ray_release(min_result);
@@ -253,7 +253,7 @@ static MunitResult test_parallel_min_max(const void* params, void* data) {
 
     ray_t* max_result = ray_execute(g, max_op);
     munit_assert_false(RAY_IS_ERR(max_result));
-    munit_assert_int(max_result->type, ==, RAY_ATOM_F64);
+    munit_assert_int(max_result->type, ==, -RAY_F64);
     munit_assert_double_equal(max_result->f64, 49999.0, 6);
 
     ray_release(max_result);
@@ -304,7 +304,7 @@ static MunitResult test_cancel(const void* params, void* data) {
     sum_op = ray_sum(g, scan);
     result = ray_execute(g, sum_op);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     int64_t expected = n * (n + 1) / 2;
     munit_assert_int(result->i64, ==, expected);
 

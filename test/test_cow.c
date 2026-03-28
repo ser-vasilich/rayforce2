@@ -71,7 +71,7 @@ static MunitResult test_cow_sole_owner(const void* params, void* fixture) {
 
     ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    v->type = RAY_ATOM_I64;
+    v->type = -RAY_I64;
     v->i64 = 42;
 
     /* rc=1, sole owner -> cow returns same pointer */
@@ -90,7 +90,7 @@ static MunitResult test_cow_shared(const void* params, void* fixture) {
 
     ray_t* v = ray_alloc(0);
     munit_assert_ptr_not_null(v);
-    v->type = RAY_ATOM_I64;
+    v->type = -RAY_I64;
     v->i64 = 99;
 
     /* retain to rc=2 (shared) */
@@ -110,7 +110,7 @@ static MunitResult test_cow_shared(const void* params, void* fixture) {
     munit_assert_uint(atomic_load_explicit(&v->rc, memory_order_relaxed), ==, 1);
 
     /* Value should be preserved */
-    munit_assert_int(w->type, ==, RAY_ATOM_I64);
+    munit_assert_int(w->type, ==, -RAY_I64);
     munit_assert_int(w->i64, ==, 99);
 
     ray_release(v);

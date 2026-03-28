@@ -195,19 +195,19 @@ static MunitResult test_list_mixed_types(const void* params, void* fixture) {
     munit_assert_int(list->len, ==, 4);
 
     ray_t* g0 = ray_list_get(list, 0);
-    munit_assert_int(g0->type, ==, RAY_ATOM_I64);
+    munit_assert_int(g0->type, ==, -RAY_I64);
     munit_assert_int(g0->i64, ==, 42);
 
     ray_t* g1 = ray_list_get(list, 1);
-    munit_assert_int(g1->type, ==, RAY_ATOM_F64);
+    munit_assert_int(g1->type, ==, -RAY_F64);
     munit_assert_double(g1->f64, ==, 2.718);
 
     ray_t* g2 = ray_list_get(list, 2);
-    munit_assert_int(g2->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(g2->type, ==, -RAY_BOOL);
     munit_assert_uint(g2->b8, ==, 1);
 
     ray_t* g3 = ray_list_get(list, 3);
-    munit_assert_int(g3->type, ==, RAY_ATOM_STR);
+    munit_assert_int(g3->type, ==, -RAY_STR);
 
     ray_release(a);
     ray_release(b);

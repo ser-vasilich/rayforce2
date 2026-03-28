@@ -34,7 +34,7 @@
 ray_t* ray_bool(bool val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_BOOL;
+    v->type = -RAY_BOOL;
     v->b8 = val ? 1 : 0;
     return v;
 }
@@ -42,7 +42,7 @@ ray_t* ray_bool(bool val) {
 ray_t* ray_u8(uint8_t val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_U8;
+    v->type = -RAY_U8;
     v->u8 = val;
     return v;
 }
@@ -50,7 +50,7 @@ ray_t* ray_u8(uint8_t val) {
 ray_t* ray_char(char val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_CHAR;
+    v->type = -RAY_CHAR;
     v->c8 = val;
     return v;
 }
@@ -58,7 +58,7 @@ ray_t* ray_char(char val) {
 ray_t* ray_i16(int16_t val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_I16;
+    v->type = -RAY_I16;
     v->i16 = val;
     return v;
 }
@@ -66,7 +66,7 @@ ray_t* ray_i16(int16_t val) {
 ray_t* ray_i32(int32_t val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_I32;
+    v->type = -RAY_I32;
     v->i32 = val;
     return v;
 }
@@ -74,7 +74,7 @@ ray_t* ray_i32(int32_t val) {
 ray_t* ray_i64(int64_t val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_I64;
+    v->type = -RAY_I64;
     v->i64 = val;
     return v;
 }
@@ -82,7 +82,7 @@ ray_t* ray_i64(int64_t val) {
 ray_t* ray_f64(double val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_F64;
+    v->type = -RAY_F64;
     v->f64 = val;
     return v;
 }
@@ -98,7 +98,7 @@ ray_t* ray_str(const char* s, size_t len) {
          * so 7-byte strings fall through to the long-string path. */
         ray_t* v = ray_alloc(0);
         if (RAY_IS_ERR(v)) return v;
-        v->type = RAY_ATOM_STR;
+        v->type = -RAY_STR;
         v->slen = (uint8_t)len;
         if (len > 0) memcpy(v->sdata, s, len);
         v->sdata[len] = '\0';
@@ -120,7 +120,7 @@ ray_t* ray_str(const char* s, size_t len) {
         ray_free(chars);
         return v;
     }
-    v->type = RAY_ATOM_STR;
+    v->type = -RAY_STR;
     v->obj = chars;
     return v;
 }
@@ -132,7 +132,7 @@ ray_t* ray_str(const char* s, size_t len) {
 ray_t* ray_sym(int64_t id) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
-    v->type = RAY_ATOM_SYM;
+    v->type = -RAY_SYM;
     v->i64 = id;
     return v;
 }

@@ -78,7 +78,7 @@ static MunitResult test_scan_sum(const void* params, void* data) {
     ray_op_t* result_op = ray_sum(g, v1);
     ray_t* result = ray_execute(g, result_op);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->type, ==, RAY_ATOM_I64);
+    munit_assert_int(result->type, ==, -RAY_I64);
     munit_assert_int(result->i64, ==, 550);  /* 10+20+...+100 */
 
     ray_release(result);
@@ -251,7 +251,7 @@ static MunitResult test_optimizer_constant_fold(const void* params, void* data) 
 
     ray_t* out = ray_execute(g, opt);
     munit_assert_false(RAY_IS_ERR(out));
-    munit_assert_int(out->type, ==, RAY_ATOM_I64);
+    munit_assert_int(out->type, ==, -RAY_I64);
     munit_assert_int(out->i64, ==, 11);
 
     ray_release(out);
@@ -269,7 +269,7 @@ static MunitResult test_optimizer_constant_fold(const void* params, void* data) 
 
     ray_t* out_bool = ray_execute(g, opt_bool);
     munit_assert_false(RAY_IS_ERR(out_bool));
-    munit_assert_int(out_bool->type, ==, RAY_ATOM_BOOL);
+    munit_assert_int(out_bool->type, ==, -RAY_BOOL);
     munit_assert_int(out_bool->u8, ==, 1);
     ray_release(out_bool);
     ray_graph_free(g);

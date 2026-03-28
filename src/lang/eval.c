@@ -27,7 +27,7 @@ int  ray_eval_is_interrupted(void)    { return g_eval_interrupted != 0; }
 static ray_t* make_i64(int64_t v) {
     ray_t* obj = ray_alloc(0);
     if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
-    obj->type = RAY_ATOM_I64;
+    obj->type = -RAY_I64;
     obj->i64 = v;
     return obj;
 }
@@ -35,7 +35,7 @@ static ray_t* make_i64(int64_t v) {
 static ray_t* make_f64(double v) {
     ray_t* obj = ray_alloc(0);
     if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
-    obj->type = RAY_ATOM_F64;
+    obj->type = -RAY_F64;
     obj->f64 = v;
     return obj;
 }
@@ -43,22 +43,22 @@ static ray_t* make_f64(double v) {
 static ray_t* make_bool(uint8_t v) {
     ray_t* obj = ray_alloc(0);
     if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
-    obj->type = RAY_ATOM_BOOL;
+    obj->type = -RAY_BOOL;
     obj->b8 = v;
     return obj;
 }
 
 /* Helpers to extract numeric value as double */
 static int is_numeric(ray_t* x) {
-    return x->type == RAY_ATOM_I64 || x->type == RAY_ATOM_F64;
+    return x->type == -RAY_I64 || x->type == -RAY_F64;
 }
 
 static double as_f64(ray_t* x) {
-    return (x->type == RAY_ATOM_F64) ? x->f64 : (double)x->i64;
+    return (x->type == -RAY_F64) ? x->f64 : (double)x->i64;
 }
 
 static int is_float_op(ray_t* a, ray_t* b) {
-    return a->type == RAY_ATOM_F64 || b->type == RAY_ATOM_F64;
+    return a->type == -RAY_F64 || b->type == -RAY_F64;
 }
 
 /* Binary arithmetic */
@@ -91,7 +91,7 @@ ray_t* ray_div_fn(ray_t* a, ray_t* b) {
 }
 
 ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
-    if (a->type != RAY_ATOM_I64 || b->type != RAY_ATOM_I64)
+    if (a->type != -RAY_I64 || b->type != -RAY_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (b->i64 == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     return make_i64(a->i64 % b->i64);
@@ -119,32 +119,32 @@ ray_t* ray_lte(ray_t* a, ray_t* b) {
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
-    if (a->type == RAY_ATOM_BOOL && b->type == RAY_ATOM_BOOL)
+    if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 == b->b8 ? 1 : 0);
-    if (a->type == RAY_ATOM_SYM && b->type == RAY_ATOM_SYM)
+    if (a->type == -RAY_SYM && b->type == -RAY_SYM)
         return make_bool(a->i64 == b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (a->type == RAY_ATOM_I64 && b->type == RAY_ATOM_I64)
+    if (a->type == -RAY_I64 && b->type == -RAY_I64)
         return make_bool(a->i64 == b->i64 ? 1 : 0);
     return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_neq(ray_t* a, ray_t* b) {
-    if (a->type == RAY_ATOM_BOOL && b->type == RAY_ATOM_BOOL)
+    if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 != b->b8 ? 1 : 0);
-    if (a->type == RAY_ATOM_SYM && b->type == RAY_ATOM_SYM)
+    if (a->type == -RAY_SYM && b->type == -RAY_SYM)
         return make_bool(a->i64 != b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (a->type == RAY_ATOM_I64 && b->type == RAY_ATOM_I64)
+    if (a->type == -RAY_I64 && b->type == -RAY_I64)
         return make_bool(a->i64 != b->i64 ? 1 : 0);
     return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
 }
 
 /* Logical — coerce to truthiness (0/nil/false = falsy, else truthy) */
 static inline int is_truthy(ray_t* x) {
-    if (x->type == RAY_ATOM_BOOL) return x->b8;
-    if (x->type == RAY_ATOM_I64)  return x->i64 != 0;
-    if (x->type == RAY_ATOM_F64)  return x->f64 != 0.0;
+    if (x->type == -RAY_BOOL) return x->b8;
+    if (x->type == -RAY_I64)  return x->i64 != 0;
+    if (x->type == -RAY_F64)  return x->f64 != 0.0;
     return 1; /* non-null objects are truthy */
 }
 
@@ -162,8 +162,8 @@ ray_t* ray_not_fn(ray_t* x) {
 }
 
 ray_t* ray_neg_fn(ray_t* x) {
-    if (x->type == RAY_ATOM_I64) return make_i64(-x->i64);
-    if (x->type == RAY_ATOM_F64) return make_f64(-x->f64);
+    if (x->type == -RAY_I64) return make_i64(-x->i64);
+    if (x->type == -RAY_F64) return make_f64(-x->f64);
     return RAY_ERR_PTR(RAY_ERR_TYPE);
 }
 
@@ -310,8 +310,8 @@ ray_t* ray_sum_fn(ray_t* x) {
     double fsum = 0.0;
     int64_t isum = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (elems[i]->type == RAY_ATOM_F64) { has_float = 1; fsum += elems[i]->f64; }
-        else if (elems[i]->type == RAY_ATOM_I64) { isum += elems[i]->i64; fsum += (double)elems[i]->i64; }
+        if (elems[i]->type == -RAY_F64) { has_float = 1; fsum += elems[i]->f64; }
+        else if (elems[i]->type == -RAY_I64) { isum += elems[i]->i64; fsum += (double)elems[i]->i64; }
         else return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
     return has_float ? make_f64(fsum) : make_i64(isum);
@@ -368,14 +368,14 @@ ray_t* ray_min(ray_t* x) {
     if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t** elems = (ray_t**)ray_data(x);
     if (!is_numeric(elems[0])) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    int has_float = elems[0]->type == RAY_ATOM_F64;
+    int has_float = elems[0]->type == -RAY_F64;
     double fmin = as_f64(elems[0]);
-    int64_t imin = elems[0]->type == RAY_ATOM_I64 ? elems[0]->i64 : 0;
+    int64_t imin = elems[0]->type == -RAY_I64 ? elems[0]->i64 : 0;
     for (int64_t i = 1; i < len; i++) {
         if (!is_numeric(elems[i])) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        if (elems[i]->type == RAY_ATOM_F64) has_float = 1;
+        if (elems[i]->type == -RAY_F64) has_float = 1;
         double v = as_f64(elems[i]);
-        if (v < fmin) { fmin = v; imin = elems[i]->type == RAY_ATOM_I64 ? elems[i]->i64 : 0; }
+        if (v < fmin) { fmin = v; imin = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; }
     }
     return has_float ? make_f64(fmin) : make_i64(imin);
 }
@@ -395,14 +395,14 @@ ray_t* ray_max(ray_t* x) {
     if (len == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t** elems = (ray_t**)ray_data(x);
     if (!is_numeric(elems[0])) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    int has_float = elems[0]->type == RAY_ATOM_F64;
+    int has_float = elems[0]->type == -RAY_F64;
     double fmax = as_f64(elems[0]);
-    int64_t imax = elems[0]->type == RAY_ATOM_I64 ? elems[0]->i64 : 0;
+    int64_t imax = elems[0]->type == -RAY_I64 ? elems[0]->i64 : 0;
     for (int64_t i = 1; i < len; i++) {
         if (!is_numeric(elems[i])) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        if (elems[i]->type == RAY_ATOM_F64) has_float = 1;
+        if (elems[i]->type == -RAY_F64) has_float = 1;
         double v = as_f64(elems[i]);
-        if (v > fmax) { fmax = v; imax = elems[i]->type == RAY_ATOM_I64 ? elems[i]->i64 : 0; }
+        if (v > fmax) { fmax = v; imax = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; }
     }
     return has_float ? make_f64(fmax) : make_i64(imax);
 }
@@ -738,7 +738,7 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     /* Count true values */
     int64_t count = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (melems[i]->type == RAY_ATOM_BOOL && melems[i]->b8) count++;
+        if (melems[i]->type == -RAY_BOOL && melems[i]->b8) count++;
     }
 
     ray_t* result = ray_alloc(count * sizeof(ray_t*));
@@ -748,7 +748,7 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
     ray_t** out = (ray_t**)ray_data(result);
     int64_t j = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (melems[i]->type == RAY_ATOM_BOOL && melems[i]->b8) {
+        if (melems[i]->type == -RAY_BOOL && melems[i]->b8) {
             ray_retain(velems[i]);
             out[j++] = velems[i];
         }
@@ -801,10 +801,10 @@ static int atom_eq(ray_t* a, ray_t* b) {
         return 0;
     }
     switch (a->type) {
-    case RAY_ATOM_I64:  return a->i64 == b->i64;
-    case RAY_ATOM_F64:  return a->f64 == b->f64;
-    case RAY_ATOM_BOOL: return a->b8 == b->b8;
-    case RAY_ATOM_SYM:  return a->i64 == b->i64;
+    case -RAY_I64:  return a->i64 == b->i64;
+    case -RAY_F64:  return a->f64 == b->f64;
+    case -RAY_BOOL: return a->b8 == b->b8;
+    case -RAY_SYM:  return a->i64 == b->i64;
     default: return 0;
     }
 }
@@ -946,7 +946,7 @@ ray_t* ray_sect(ray_t* vec1, ray_t* vec2) {
 /* (take vec n) — first n elements (positive) or last |n| elements (negative) */
 ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
-    if (!is_list(vec) || n_obj->type != RAY_ATOM_I64)
+    if (!is_list(vec) || n_obj->type != -RAY_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t len = ray_len(vec);
     int64_t n = n_obj->i64;
@@ -977,7 +977,7 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
 ray_t* ray_at(ray_t* vec, ray_t* idx) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     /* Table column access by symbol key */
-    if (vec->type == RAY_TABLE && idx->type == RAY_ATOM_SYM) {
+    if (vec->type == RAY_TABLE && idx->type == -RAY_SYM) {
         ray_t* col = ray_table_get_col(vec, idx->i64);
         if (!col) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
         /* Convert typed column vector to a Rayfall list */
@@ -998,7 +998,7 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
             } else if (ctype == RAY_SYM) {
                 ray_t* s = ray_alloc(0);
                 if (!s) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
-                s->type = RAY_ATOM_SYM;
+                s->type = -RAY_SYM;
                 s->i64 = ((int64_t*)ray_data(col))[i];
                 out[i] = s;
             } else if (ctype == RAY_STR) {
@@ -1017,7 +1017,7 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
         return result;
     }
 
-    if (!is_list(vec) || idx->type != RAY_ATOM_I64)
+    if (!is_list(vec) || idx->type != -RAY_I64)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t i = idx->i64;
     int64_t len = ray_len(vec);
@@ -1048,7 +1048,7 @@ static void til_fill(void* ctx, uint32_t worker_id, int64_t start, int64_t end) 
 }
 
 ray_t* ray_til(ray_t* x) {
-    if (!ray_is_atom(x) || x->type != RAY_ATOM_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!ray_is_atom(x) || x->type != -RAY_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t n = x->i64;
     if (n < 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     if (n == 0) return ray_vec_new(RAY_I64, 0);
@@ -1111,7 +1111,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
     if (RAY_IS_ERR(tbl)) return tbl;
 
     for (int64_t i = 0; i < ncols; i++) {
-        if (name_elems[i]->type != RAY_ATOM_SYM)
+        if (name_elems[i]->type != -RAY_SYM)
             { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_TYPE); }
         int64_t name_id = name_elems[i]->i64;
 
@@ -1134,15 +1134,15 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
         /* Determine column type from elements (scan for mixed I64/F64 → F64) */
         int8_t col_type = RAY_I64;
         if (nrows > 0) {
-            if (row_elems[0]->type == RAY_ATOM_F64) col_type = RAY_F64;
-            else if (row_elems[0]->type == RAY_ATOM_BOOL) col_type = RAY_BOOL;
-            else if (row_elems[0]->type == RAY_ATOM_SYM) col_type = RAY_SYM;
-            else if (row_elems[0]->type == RAY_ATOM_STR) col_type = RAY_STR;
+            if (row_elems[0]->type == -RAY_F64) col_type = RAY_F64;
+            else if (row_elems[0]->type == -RAY_BOOL) col_type = RAY_BOOL;
+            else if (row_elems[0]->type == -RAY_SYM) col_type = RAY_SYM;
+            else if (row_elems[0]->type == -RAY_STR) col_type = RAY_STR;
         }
         /* Promote I64 → F64 if any element is F64 */
         if (col_type == RAY_I64) {
             for (int64_t j = 0; j < nrows; j++) {
-                if (row_elems[j]->type == RAY_ATOM_F64) { col_type = RAY_F64; break; }
+                if (row_elems[j]->type == -RAY_F64) { col_type = RAY_F64; break; }
             }
         }
 
@@ -1152,7 +1152,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
 
         for (int64_t j = 0; j < nrows; j++) {
             if (col_type == RAY_STR) {
-                if (row_elems[j]->type != RAY_ATOM_STR) {
+                if (row_elems[j]->type != -RAY_STR) {
                     ray_release(col_vec); ray_release(tbl);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
@@ -1162,14 +1162,14 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
             } else {
                 /* Validate each element matches the column type (allow I64→F64 promotion) */
                 int type_ok = (row_elems[j]->type == -col_type);
-                if (!type_ok && col_type == RAY_F64 && row_elems[j]->type == RAY_ATOM_I64) type_ok = 1;
+                if (!type_ok && col_type == RAY_F64 && row_elems[j]->type == -RAY_I64) type_ok = 1;
                 if (!type_ok) {
                     ray_release(col_vec); ray_release(tbl);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 void* val_ptr;
                 double promoted;
-                if (col_type == RAY_F64 && row_elems[j]->type == RAY_ATOM_I64) {
+                if (col_type == RAY_F64 && row_elems[j]->type == -RAY_I64) {
                     promoted = (double)row_elems[j]->i64;
                     val_ptr = &promoted;
                 } else if (col_type == RAY_I64) val_ptr = &row_elems[j]->i64;
@@ -1203,7 +1203,7 @@ ray_t* ray_key(ray_t* x) {
         int64_t name_id = ray_table_col_name(x, i);
         ray_t* sym = ray_alloc(0);
         if (!sym) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
-        sym->type = RAY_ATOM_SYM;
+        sym->type = -RAY_SYM;
         sym->i64 = name_id;
         out[i] = sym;
     }
@@ -1241,7 +1241,7 @@ static ray_t* dict_get(ray_t* dict, const char* key) {
     ray_t** elems = (ray_t**)ray_data(dict);
     int64_t key_id = ray_sym_intern(key, strlen(key));
     for (int64_t i = 0; i + 1 < n; i += 2) {
-        if (elems[i]->type == RAY_ATOM_SYM && elems[i]->i64 == key_id)
+        if (elems[i]->type == -RAY_SYM && elems[i]->i64 == key_id)
             return elems[i + 1];
     }
     return NULL;
@@ -1299,24 +1299,24 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
     if (!expr) return NULL;
 
     /* Atom literal → const node */
-    if (expr->type == RAY_ATOM_I64)
+    if (expr->type == -RAY_I64)
         return ray_const_i64(g, expr->i64);
-    if (expr->type == RAY_ATOM_F64)
+    if (expr->type == -RAY_F64)
         return ray_const_f64(g, expr->f64);
-    if (expr->type == RAY_ATOM_BOOL)
+    if (expr->type == -RAY_BOOL)
         return ray_const_bool(g, expr->b8);
-    if (expr->type == RAY_ATOM_STR) {
+    if (expr->type == -RAY_STR) {
         const char *ptr = ray_str_ptr(expr);
         size_t len = ray_str_len(expr);
         return ray_const_str(g, ptr, len);
     }
 
     /* Symbol literal → const i64 (sym IDs are integer indices) */
-    if (expr->type == RAY_ATOM_SYM && !(expr->attrs & RAY_ATTR_NAME))
+    if (expr->type == -RAY_SYM && !(expr->attrs & RAY_ATTR_NAME))
         return ray_const_i64(g, expr->i64);
 
     /* Name reference → column scan */
-    if (expr->type == RAY_ATOM_SYM && (expr->attrs & RAY_ATTR_NAME)) {
+    if (expr->type == -RAY_SYM && (expr->attrs & RAY_ATTR_NAME)) {
         ray_t* s = ray_sym_str(expr->i64);
         if (!s) return NULL;
         return ray_scan(g, ray_str_ptr(s));
@@ -1330,7 +1330,7 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
         ray_t* head = elems[0];
 
         /* Head must be a name referencing a builtin */
-        if (head->type != RAY_ATOM_SYM) return NULL;
+        if (head->type != -RAY_SYM) return NULL;
         int64_t fn_sym = head->i64;
 
         /* Check for xbar */
@@ -1398,7 +1398,7 @@ static int is_agg_expr(ray_t* expr) {
     int64_t n = ray_len(expr);
     if (n < 2) return 0;
     ray_t** elems = (ray_t**)ray_data(expr);
-    if (elems[0]->type != RAY_ATOM_SYM) return 0;
+    if (elems[0]->type != -RAY_SYM) return 0;
     return resolve_agg_opcode(elems[0]->i64) != 0;
 }
 
@@ -1523,7 +1523,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 
 /* (xbar col bucket) — time/value bucketing: floor(col/bucket)*bucket */
 ray_t* ray_xbar(ray_t* col, ray_t* bucket) {
-    if (col->type == RAY_ATOM_I64 && bucket->type == RAY_ATOM_I64) {
+    if (col->type == -RAY_I64 && bucket->type == -RAY_I64) {
         int64_t a = col->i64, b = bucket->i64;
         if (b == 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
         /* Floor division: truncate toward negative infinity */
@@ -1531,10 +1531,10 @@ ray_t* ray_xbar(ray_t* col, ray_t* bucket) {
         if ((a ^ b) < 0 && q * b != a) q--;
         return make_i64(q * b);
     }
-    if ((col->type == RAY_ATOM_F64 || col->type == RAY_ATOM_I64) &&
-        (bucket->type == RAY_ATOM_F64 || bucket->type == RAY_ATOM_I64)) {
-        double c = col->type == RAY_ATOM_F64 ? col->f64 : (double)col->i64;
-        double b = bucket->type == RAY_ATOM_F64 ? bucket->f64 : (double)bucket->i64;
+    if ((col->type == -RAY_F64 || col->type == -RAY_I64) &&
+        (bucket->type == -RAY_F64 || bucket->type == -RAY_I64)) {
+        double c = col->type == -RAY_F64 ? col->f64 : (double)col->i64;
+        double b = bucket->type == -RAY_F64 ? bucket->f64 : (double)bucket->i64;
         if (b == 0.0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
         /* Floor division for correct negative bucketing */
         double fq = floor(c / b);
@@ -1552,26 +1552,26 @@ ray_t* ray_xbar(ray_t* col, ray_t* bucket) {
 static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
     int8_t ct = col_vec->type;
     if (ct == RAY_I64) {
-        if (atom->type != RAY_ATOM_I64)
+        if (atom->type != -RAY_I64)
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         int64_t v = atom->i64;
         return ray_vec_append(col_vec, &v);
     } else if (ct == RAY_SYM) {
-        if (atom->type != RAY_ATOM_SYM)
+        if (atom->type != -RAY_SYM)
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         int64_t v = atom->i64;
         return ray_vec_append(col_vec, &v);
     } else if (ct == RAY_F64) {
-        if (atom->type != RAY_ATOM_F64 && atom->type != RAY_ATOM_I64)
+        if (atom->type != -RAY_F64 && atom->type != -RAY_I64)
             return RAY_ERR_PTR(RAY_ERR_TYPE);
-        double v = (atom->type == RAY_ATOM_F64) ? atom->f64 : (double)atom->i64;
+        double v = (atom->type == -RAY_F64) ? atom->f64 : (double)atom->i64;
         return ray_vec_append(col_vec, &v);
     } else if (ct == RAY_BOOL) {
-        if (atom->type != RAY_ATOM_BOOL)
+        if (atom->type != -RAY_BOOL)
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         uint8_t v = atom->b8;
         return ray_vec_append(col_vec, &v);
-    } else if (ct == RAY_STR && atom->type == RAY_ATOM_STR) {
+    } else if (ct == RAY_STR && atom->type == -RAY_STR) {
         const char *sptr = ray_str_ptr(atom);
         size_t slen = ray_str_len(atom);
         return ray_str_vec_append(col_vec, sptr, slen);
@@ -1667,14 +1667,14 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 if (expr_vec->type < 0) {
                     /* Type check atom against column type BEFORE broadcast */
                     int ok = (expr_vec->type == -ct);
-                    if (!ok && ct == RAY_F64 && expr_vec->type == RAY_ATOM_I64) ok = 1; /* allow I64→F64 promotion */
+                    if (!ok && ct == RAY_F64 && expr_vec->type == -RAY_I64) ok = 1; /* allow I64→F64 promotion */
                     if (!ok) {
                         ray_release(expr_vec); ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl);
                         return RAY_ERR_PTR(RAY_ERR_TYPE);
                     }
                     ray_t* bcast = ray_vec_new(ct, nrows);
                     if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl); return bcast; }
-                    if (ct == RAY_STR && expr_vec->type == RAY_ATOM_STR) {
+                    if (ct == RAY_STR && expr_vec->type == -RAY_STR) {
                         const char* sp = ray_str_ptr(expr_vec);
                         size_t sl = ray_str_len(expr_vec);
                         for (int64_t r = 0; r < nrows; r++) {
@@ -1684,7 +1684,7 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                     } else {
                         size_t esz = (ct == RAY_BOOL) ? 1 : 8;
                         uint8_t elem[8] = {0};
-                        if (ct == RAY_F64 && expr_vec->type == RAY_ATOM_I64) {
+                        if (ct == RAY_F64 && expr_vec->type == -RAY_I64) {
                             double promoted = (double)expr_vec->i64;
                             memcpy(elem, &promoted, 8);
                         } else {
@@ -1797,14 +1797,14 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 int8_t ct = orig_col->type;
                 /* Type check atom against column type BEFORE broadcast */
                 int ok = (expr_vec->type == -ct);
-                if (!ok && ct == RAY_F64 && expr_vec->type == RAY_ATOM_I64) ok = 1;
+                if (!ok && ct == RAY_F64 && expr_vec->type == -RAY_I64) ok = 1;
                 if (!ok) {
                     ray_release(expr_vec); ray_release(result); ray_release(tbl);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 ray_t* bcast = ray_vec_new(ct, nrows);
                 if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
-                if (ct == RAY_STR && expr_vec->type == RAY_ATOM_STR) {
+                if (ct == RAY_STR && expr_vec->type == -RAY_STR) {
                     const char* sp = ray_str_ptr(expr_vec);
                     size_t sl = ray_str_len(expr_vec);
                     for (int64_t r = 0; r < nrows; r++) {
@@ -1814,7 +1814,7 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 } else {
                     size_t esz = (ct == RAY_BOOL) ? 1 : 8;
                     uint8_t elem[8] = {0};
-                    if (ct == RAY_F64 && expr_vec->type == RAY_ATOM_I64) {
+                    if (ct == RAY_F64 && expr_vec->type == -RAY_I64) {
                         double promoted = (double)expr_vec->i64;
                         memcpy(elem, &promoted, 8);
                     } else {
@@ -1929,7 +1929,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
     ray_t* row = args[2];
 
     if (tbl->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (key_sym->type != RAY_ATOM_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (key_sym->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (!is_list(row)) return RAY_ERR_PTR(RAY_ERR_TYPE);
 
     int64_t ncols = ray_table_ncols(tbl);
@@ -1955,36 +1955,36 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
     ray_t* key_atom = row_elems[key_col_idx];
 
     if (kt == RAY_I64) {
-        if (key_atom->type != RAY_ATOM_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        if (key_atom->type != -RAY_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
         int64_t key_val = key_atom->i64;
         int64_t* kdata = (int64_t*)ray_data(key_col);
         for (int64_t r = 0; r < nrows; r++) {
             if (kdata[r] == key_val) { match_row = r; break; }
         }
     } else if (kt == RAY_SYM) {
-        if (key_atom->type != RAY_ATOM_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        if (key_atom->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
         int64_t key_val = key_atom->i64;
         for (int64_t r = 0; r < nrows; r++) {
             if (ray_read_sym(ray_data(key_col), r, key_col->type, key_col->attrs) == key_val) { match_row = r; break; }
         }
     } else if (kt == RAY_F64) {
-        if (key_atom->type != RAY_ATOM_F64 && key_atom->type != RAY_ATOM_I64)
+        if (key_atom->type != -RAY_F64 && key_atom->type != -RAY_I64)
             return RAY_ERR_PTR(RAY_ERR_TYPE);
-        double needle = (key_atom->type == RAY_ATOM_F64) ? key_atom->f64
+        double needle = (key_atom->type == -RAY_F64) ? key_atom->f64
                                                         : (double)key_atom->i64;
         double* kdata = (double*)ray_data(key_col);
         for (int64_t r = 0; r < nrows; r++) {
             if (kdata[r] == needle) { match_row = r; break; }
         }
     } else if (kt == RAY_BOOL) {
-        if (key_atom->type != RAY_ATOM_BOOL) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        if (key_atom->type != -RAY_BOOL) return RAY_ERR_PTR(RAY_ERR_TYPE);
         uint8_t needle = key_atom->b8;
         uint8_t* kdata = (uint8_t*)ray_data(key_col);
         for (int64_t r = 0; r < nrows; r++) {
             if (kdata[r] == needle) { match_row = r; break; }
         }
     } else if (kt == RAY_STR) {
-        if (key_atom->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        if (key_atom->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
         const char* needle_s = ray_str_ptr(key_atom);
         size_t needle_len = ray_str_len(key_atom);
         for (int64_t r = 0; r < nrows; r++) {
@@ -2088,7 +2088,7 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
 
     ray_op_t* lk[16], *rk[16];
     for (int64_t i = 0; i < nk; i++) {
-        if (key_elems[i]->type != RAY_ATOM_SYM) {
+        if (key_elems[i]->type != -RAY_SYM) {
             ray_graph_free(g);
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         }
@@ -2125,7 +2125,7 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
 
     if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (time_sym->type != RAY_ATOM_SYM)
+    if (time_sym->type != -RAY_SYM)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
 
     uint8_t n_eq = 0;
@@ -2148,7 +2148,7 @@ ray_t* ray_window_join(ray_t** args, int64_t n) {
 
     ray_op_t* eq_ops[16];
     for (uint8_t i = 0; i < n_eq; i++) {
-        if (eq_elems[i]->type != RAY_ATOM_SYM) {
+        if (eq_elems[i]->type != -RAY_SYM) {
             ray_graph_free(g);
             return RAY_ERR_PTR(RAY_ERR_TYPE);
         }
@@ -2180,16 +2180,16 @@ void ray_lang_print(FILE* fp, ray_t* val) {
         val = ray_lazy_materialize(val);
     if (!val || RAY_IS_ERR(val)) { fprintf(fp, "error"); return; }
     switch (val->type) {
-    case RAY_ATOM_I64:  fprintf(fp, "%ld", (long)val->i64); break;
-    case RAY_ATOM_F64:  fprintf(fp, "%g", val->f64); break;
-    case RAY_ATOM_BOOL: fprintf(fp, "%s", val->b8 ? "true" : "false"); break;
-    case RAY_ATOM_SYM: {
+    case -RAY_I64:  fprintf(fp, "%ld", (long)val->i64); break;
+    case -RAY_F64:  fprintf(fp, "%g", val->f64); break;
+    case -RAY_BOOL: fprintf(fp, "%s", val->b8 ? "true" : "false"); break;
+    case -RAY_SYM: {
         ray_t* s = ray_sym_str(val->i64);
         if (s) fprintf(fp, "'%.*s", (int)ray_str_len(s), ray_str_ptr(s));
         else fprintf(fp, "'?");
         break;
     }
-    case RAY_ATOM_STR: {
+    case -RAY_STR: {
         const char* s = ray_str_ptr(val);
         size_t slen = ray_str_len(val);
         fprintf(fp, "%.*s", (int)slen, s);
@@ -2235,7 +2235,7 @@ ray_t* ray_read_csv_fn(ray_t** args, int64_t n) {
     if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* path_obj = args[0];
     const char* path = NULL;
-    if (path_obj->type == RAY_ATOM_STR)
+    if (path_obj->type == -RAY_STR)
         path = ray_str_ptr(path_obj);
     else
         return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -2252,7 +2252,7 @@ ray_t* ray_write_csv_fn(ray_t** args, int64_t n) {
     ray_t* path_obj = args[1];
     if (tbl->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = NULL;
-    if (path_obj->type == RAY_ATOM_STR)
+    if (path_obj->type == -RAY_STR)
         path = ray_str_ptr(path_obj);
     else
         return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -2264,7 +2264,7 @@ ray_t* ray_write_csv_fn(ray_t** args, int64_t n) {
 
 /* (as 'TypeName value) — type cast */
 ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
-    if (type_sym->type != RAY_ATOM_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (type_sym->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* s = ray_sym_str(type_sym->i64);
     if (!s) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     const char* tname = ray_str_ptr(s);
@@ -2272,10 +2272,10 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
 
     /* Cast to I64 */
     if (tlen == 3 && memcmp(tname, "I64", 3) == 0) {
-        if (val->type == RAY_ATOM_I64) { ray_retain(val); return val; }
-        if (val->type == RAY_ATOM_F64) return make_i64((int64_t)val->f64);
-        if (val->type == RAY_ATOM_BOOL) return make_i64(val->b8 ? 1 : 0);
-        if (val->type == RAY_ATOM_STR) {
+        if (val->type == -RAY_I64) { ray_retain(val); return val; }
+        if (val->type == -RAY_F64) return make_i64((int64_t)val->f64);
+        if (val->type == -RAY_BOOL) return make_i64(val->b8 ? 1 : 0);
+        if (val->type == -RAY_STR) {
             const char* sp = ray_str_ptr(val);
             if (!sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             char* end;
@@ -2287,9 +2287,9 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     }
     /* Cast to F64 */
     if (tlen == 3 && memcmp(tname, "F64", 3) == 0) {
-        if (val->type == RAY_ATOM_F64) { ray_retain(val); return val; }
-        if (val->type == RAY_ATOM_I64) return make_f64((double)val->i64);
-        if (val->type == RAY_ATOM_STR) {
+        if (val->type == -RAY_F64) { ray_retain(val); return val; }
+        if (val->type == -RAY_I64) return make_f64((double)val->i64);
+        if (val->type == -RAY_STR) {
             const char* sp = ray_str_ptr(val);
             if (!sp) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             char* end;
@@ -2301,19 +2301,19 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     }
     /* Cast to BOOL */
     if (tlen == 4 && memcmp(tname, "BOOL", 4) == 0) {
-        if (val->type == RAY_ATOM_BOOL) { ray_retain(val); return val; }
-        if (val->type == RAY_ATOM_I64) return make_bool(val->i64 != 0 ? 1 : 0);
+        if (val->type == -RAY_BOOL) { ray_retain(val); return val; }
+        if (val->type == -RAY_I64) return make_bool(val->i64 != 0 ? 1 : 0);
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
     /* Cast to STR */
     if (tlen == 3 && memcmp(tname, "STR", 3) == 0) {
-        if (val->type == RAY_ATOM_STR) { ray_retain(val); return val; }
-        if (val->type == RAY_ATOM_I64) {
+        if (val->type == -RAY_STR) { ray_retain(val); return val; }
+        if (val->type == -RAY_I64) {
             char buf[32];
             int n2 = snprintf(buf, sizeof(buf), "%ld", (long)val->i64);
             return ray_str(buf, (size_t)n2);
         }
-        if (val->type == RAY_ATOM_F64) {
+        if (val->type == -RAY_F64) {
             char buf[32];
             int n2 = snprintf(buf, sizeof(buf), "%g", val->f64);
             return ray_str(buf, (size_t)n2);
@@ -2330,7 +2330,7 @@ ray_t* ray_type_fn(ray_t* val) {
 
 /* (read path) — read a file's contents as a string */
 ray_t* ray_read_file(ray_t* path_obj) {
-    if (path_obj->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (path_obj->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = ray_str_ptr(path_obj);
     if (!path) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     FILE* fp = fopen(path, "rb");
@@ -2353,8 +2353,8 @@ ray_t* ray_read_file(ray_t* path_obj) {
 
 /* (write path content) — write string to a file */
 ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
-    if (path_obj->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (content->type != RAY_ATOM_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (path_obj->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (content->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = ray_str_ptr(path_obj);
     const char* data = ray_str_ptr(content);
     size_t len = ray_str_len(content);
@@ -2373,7 +2373,7 @@ ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
 
 /* (set name value) — bind in global env. Receives unevaluated args. */
 ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
-    if (name_obj->type != RAY_ATOM_SYM)
+    if (name_obj->type != -RAY_SYM)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
     if (RAY_IS_ERR(val)) return val;
@@ -2390,7 +2390,7 @@ ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
 
 /* (let name value) — bind in local scope. Receives unevaluated args. */
 ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
-    if (name_obj->type != RAY_ATOM_SYM)
+    if (name_obj->type != -RAY_SYM)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     ray_t* val = ray_eval(val_expr);
     if (RAY_IS_ERR(val)) return val;
@@ -2413,8 +2413,8 @@ ray_t* ray_cond(ray_t** args, int64_t n) {
         cond = ray_lazy_materialize(cond);
     if (RAY_IS_ERR(cond)) return cond;
     int truthy = 0;
-    if (cond->type == RAY_ATOM_BOOL) truthy = cond->b8;
-    else if (cond->type == RAY_ATOM_I64) truthy = cond->i64 != 0;
+    if (cond->type == -RAY_BOOL) truthy = cond->b8;
+    else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
     else truthy = 1;  /* non-null is truthy */
     ray_release(cond);
     if (truthy) return ray_eval(args[1]);
@@ -2679,8 +2679,8 @@ op_jmpf: {
     ip += 2;
     ray_t *cond = POP();
     int truthy = 0;
-    if (cond->type == RAY_ATOM_BOOL) truthy = cond->b8;
-    else if (cond->type == RAY_ATOM_I64) truthy = cond->i64 != 0;
+    if (cond->type == -RAY_BOOL) truthy = cond->b8;
+    else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
     else truthy = 1;
     ray_release(cond);
     if (!truthy) ip += offset;
@@ -3200,7 +3200,7 @@ ray_t* ray_eval(ray_t* obj) {
     /* Atoms: return themselves (retain) */
     if (ray_is_atom(obj)) {
         /* Name reference: resolve from env */
-        if (obj->type == RAY_ATOM_SYM && (obj->attrs & RAY_ATTR_NAME)) {
+        if (obj->type == -RAY_SYM && (obj->attrs & RAY_ATTR_NAME)) {
             ray_t* val = ray_env_get(obj->i64);
             if (!val) { ret = RAY_ERR_PTR(RAY_ERR_NAME); goto out; }
             ray_retain(val);

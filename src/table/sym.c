@@ -79,7 +79,7 @@ static ray_t* sym_str_arena(ray_arena_t* arena, const char* s, size_t len) {
         /* SSO path: inline in header */
         ray_t* v = ray_arena_alloc(arena, 0);
         if (!v) return NULL;
-        v->type = RAY_ATOM_STR;
+        v->type = -RAY_STR;
         v->slen = (uint8_t)len;
         if (len > 0) memcpy(v->sdata, s, len);
         v->sdata[len] = '\0';
@@ -102,7 +102,7 @@ static ray_t* sym_str_arena(ray_arena_t* arena, const char* s, size_t len) {
     memset(v, 0, 32);
     v->attrs = RAY_ATTR_ARENA;
     atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
-    v->type = RAY_ATOM_STR;
+    v->type = -RAY_STR;
     v->obj = chars;
     return v;
 }
@@ -472,7 +472,7 @@ bool ray_sym_ensure_cap(uint32_t needed) {
 }
 
 /* --------------------------------------------------------------------------
- * ray_sym_save -- serialize symbol table as RAY_LIST of RAY_ATOM_STR
+ * ray_sym_save -- serialize symbol table as RAY_LIST of -RAY_STR
  *
  * Uses ray_col_save (STRL format), file locking for concurrent writers,
  * and fsync + atomic rename for crash safety.  Append-only: skips save
@@ -525,7 +525,7 @@ ray_err_t ray_sym_save(const char* path) {
             ray_t** slots = (ray_t**)ray_data(existing);
             for (int64_t i = 0; i < existing->len; i++) {
                 ray_t* s = slots[i];
-                if (!s || RAY_IS_ERR(s) || s->type != RAY_ATOM_STR) {
+                if (!s || RAY_IS_ERR(s) || s->type != -RAY_STR) {
                     ray_release(existing);
                     ray_file_unlock(lock_fd);
                     ray_file_close(lock_fd);
@@ -591,7 +591,7 @@ ray_err_t ray_sym_save(const char* path) {
     memcpy(snap, g_sym.strings, snap_sz);
     sym_unlock();
 
-    /* Build RAY_LIST of RAY_ATOM_STR from snapshot */
+    /* Build RAY_LIST of -RAY_STR from snapshot */
     ray_t* list = ray_list_new((int64_t)count);
     if (!list || RAY_IS_ERR(list)) {
         ray_free(snap_block);
@@ -704,7 +704,7 @@ ray_err_t ray_sym_load(const char* path) {
         if (err != RAY_OK) { ray_file_close(lock_fd); return err; }
     }
 
-    /* Load the sym file as a RAY_LIST of RAY_ATOM_STR */
+    /* Load the sym file as a RAY_LIST of -RAY_STR */
     ray_t* list = ray_col_load(path);
     if (!list || RAY_IS_ERR(list)) {
         ray_err_t code = RAY_IS_ERR(list) ? RAY_ERR_CODE(list) : RAY_ERR_IO;
@@ -742,7 +742,7 @@ ray_err_t ray_sym_load(const char* path) {
     /* Validate entries [0..already-1] match the persisted prefix */
     for (int64_t i = 0; i < (int64_t)already && i < list->len; i++) {
         ray_t* s = slots[i];
-        if (!s || RAY_IS_ERR(s) || s->type != RAY_ATOM_STR) {
+        if (!s || RAY_IS_ERR(s) || s->type != -RAY_STR) {
             ray_release(list);
             ray_file_unlock(lock_fd);
             ray_file_close(lock_fd);
@@ -765,7 +765,7 @@ ray_err_t ray_sym_load(const char* path) {
      * columns to resolve the wrong strings. */
     for (int64_t i = (int64_t)already; i < list->len; i++) {
         ray_t* s = slots[i];
-        if (!s || RAY_IS_ERR(s) || s->type != RAY_ATOM_STR) {
+        if (!s || RAY_IS_ERR(s) || s->type != -RAY_STR) {
             ray_release(list);
             ray_file_unlock(lock_fd);
             ray_file_close(lock_fd);
