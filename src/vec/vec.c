@@ -22,6 +22,7 @@
  */
 
 #include "vec.h"
+#include "core/platform.h"
 #include "table/sym.h"
 #include "vec/embedding.h"
 #include <string.h>
@@ -527,7 +528,7 @@ static ray_t* str_pool_cow(ray_t* vec) {
     memcpy(new_pool, vec->str_pool, 32 + copy_bytes);
     new_pool->order = saved_order;
     new_pool->mmod  = saved_mmod;
-    atomic_store_explicit(&new_pool->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&new_pool->rc, 1, memory_order_relaxed);
 
     ray_release(vec->str_pool);
     vec->str_pool = new_pool;

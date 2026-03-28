@@ -41,6 +41,7 @@
  */
 
 #include <rayforce.h>
+#include "core/platform.h"
 #include "ops/ops.h"
 #include <stdint.h>
 
@@ -187,7 +188,7 @@ static inline ray_pool_hdr_t* ray_pool_of(ray_t* v) {
         ray_t* hdr_blk = (ray_t*)base;
         if (hdr_blk->order == RAY_ORDER_MIN &&
             hdr_blk->mmod == 0 &&
-            atomic_load_explicit(&hdr_blk->rc,
+            atomic_load_explicit((_Atomic(uint32_t)*)&hdr_blk->rc,
                                  memory_order_relaxed) == 1) {
             if (hdr->pool_order >= RAY_HEAP_POOL_ORDER &&
                 hdr->pool_order <= RAY_HEAP_MAX_ORDER &&

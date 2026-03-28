@@ -29,28 +29,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <assert.h>
-/* MSVC < 17.4 (cl 19.34) does not ship <stdatomic.h>; use Interlocked intrinsics
- * instead. _MSC_VER 1934 corresponds to VS 2022 17.4. */
-#if !defined(_MSC_VER) || _MSC_VER >= 1934
-  #include <stdatomic.h>
-#else
-  #include <windows.h>
-  #define _Atomic(T)                          volatile T
-  #define atomic_store_explicit(p, v, mo)     (*(p) = (v))
-  #define atomic_load_explicit(p, mo)         (*(p))
-  #define atomic_fetch_add_explicit(p, v, mo) _InterlockedExchangeAdd((volatile long*)(p), (long)(v))
-  #define atomic_fetch_sub_explicit(p, v, mo) _InterlockedExchangeAdd((volatile long*)(p), -(long)(v))
-  #define atomic_exchange_explicit(p, v, mo)  _InterlockedExchange((volatile long*)(p), (long)(v))
-  #define atomic_compare_exchange_weak_explicit(p, exp, des, s, f) \
-      (_InterlockedCompareExchange((volatile long*)(p), (long)(des), *(long*)(exp)) == *(long*)(exp))
-  #define atomic_store(p, v)                  (*(p) = (v))
-  #define atomic_thread_fence(mo)             MemoryBarrier()
-  #define memory_order_relaxed 0
-  #define memory_order_acquire 0
-  #define memory_order_release 0
-  #define memory_order_acq_rel 0
-  #define memory_order_seq_cst 0
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -224,7 +202,7 @@ typedef union RAY_ALIGN(32) ray_t {
         uint8_t  order;      /* block order (block size = 2^order) */
         int8_t   type;       /* negative=atom, positive=vector, 0=LIST */
         uint8_t  attrs;      /* attribute flags */
-        _Atomic(uint32_t) rc; /* reference count (0=free) */
+        uint32_t rc;         /* reference count (0=free) */
         union {
             uint8_t  b8;     /* BOOL atom */
             uint8_t  u8;     /* U8 atom */

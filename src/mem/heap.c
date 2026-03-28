@@ -136,7 +136,7 @@ RAY_INLINE void heap_insert_block(ray_heap_t* h, ray_t* blk, uint8_t order) {
     blk->fl_next = first;
     first->fl_prev = blk;
     head->fl_next = blk;
-    atomic_store_explicit(&blk->rc, 0, memory_order_relaxed);  /* free marker */
+    atomic_store_explicit((_Atomic(uint32_t)*)&blk->rc, 0, memory_order_relaxed);  /* free marker */
     blk->order = order;
     h->avail |= (1ULL << order);
 }
@@ -184,7 +184,7 @@ static void heap_coalesce(ray_heap_t* h, ray_t* blk,
         ray_t* buddy = ray_buddy_of(blk, order, pool_base);
         __builtin_prefetch(buddy, 0, 1);
 
-        uint32_t buddy_rc = atomic_load_explicit(&buddy->rc, memory_order_relaxed);
+        uint32_t buddy_rc = atomic_load_explicit((_Atomic(uint32_t)*)&buddy->rc, memory_order_relaxed);
         if (buddy_rc != 0 || buddy->order != order) break;
 
         fl_remove(buddy);
@@ -221,7 +221,7 @@ static bool heap_add_pool(ray_heap_t* h, uint8_t order) {
     memset(hdr_block, 0, BSIZEOF(RAY_ORDER_MIN));
     hdr_block->mmod  = 0;
     hdr_block->order = RAY_ORDER_MIN;
-    atomic_store_explicit(&hdr_block->rc, 1, memory_order_relaxed);  /* sentinel: never free */
+    atomic_store_explicit((_Atomic(uint32_t)*)&hdr_block->rc, 1, memory_order_relaxed);  /* sentinel: never free */
 
     ray_pool_hdr_t* hdr = (ray_pool_hdr_t*)hdr_block;  /* overlay on nullmap */
     hdr->heap_id    = h->id;
@@ -574,7 +574,7 @@ ray_t* ray_alloc(size_t data_size) {
             memset(v, 0, 32);
             v->mmod  = 0;
             v->order = order;
-            atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
+            atomic_store_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_relaxed);
 
             ray_tl_stats.alloc_count++;
             ray_tl_stats.slab_hits++;
@@ -631,7 +631,7 @@ ray_t* ray_alloc(size_t data_size) {
     memset(blk, 0, 32);
     blk->mmod  = 0;
     blk->order = order;
-    atomic_store_explicit(&blk->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&blk->rc, 1, memory_order_relaxed);
 
     ray_tl_stats.alloc_count++;
     ray_tl_stats.bytes_allocated += BSIZEOF(order);
@@ -651,7 +651,7 @@ void ray_free(ray_t* v) {
 
     /* Guard: keep rc=1 while releasing children so buddy coalescing
      * won't merge this block prematurely (it checks buddy_rc==0). */
-    atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_relaxed);
 
     ray_release_owned_refs(v);
 
@@ -698,7 +698,7 @@ void ray_free(ray_t* v) {
              * Blocks freed via ray_release arrive with rc=0; without this,
              * a buddy being freed would see rc==0 and incorrectly merge
              * with the slab-cached block, causing overlapping allocations. */
-            atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
+            atomic_store_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_relaxed);
             h->slabs[idx].stack[h->slabs[idx].count++] = v;
             ray_tl_stats.free_count++;
             ray_tl_stats.bytes_allocated -= block_size;
@@ -758,7 +758,7 @@ ray_t* ray_alloc_copy(ray_t* v) {
     memcpy(copy, v, 32 + data_size);
     copy->mmod  = new_mmod;
     copy->order = new_order;
-    atomic_store_explicit(&copy->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&copy->rc, 1, memory_order_relaxed);
     ray_retain_owned_refs(copy);
     return copy;
 }
@@ -805,7 +805,7 @@ ray_t* ray_scratch_realloc(ray_t* v, size_t new_data_size) {
         memcpy(new_v, v, 32 + copy_data);
         new_v->mmod = new_mmod;
         new_v->order = new_order;
-        atomic_store_explicit(&new_v->rc, 1, memory_order_relaxed);
+        atomic_store_explicit((_Atomic(uint32_t)*)&new_v->rc, 1, memory_order_relaxed);
         /* Ownership transfers via memcpy — no retain needed on new_v.
          * Detach nulls old pointers so ray_free won't double-release. */
         ray_detach_owned_refs(v);

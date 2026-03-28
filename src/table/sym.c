@@ -102,7 +102,7 @@ static ray_t* sym_str_arena(ray_arena_t* arena, const char* s, size_t len) {
     ray_t* v = (ray_t*)((char*)chars + chars_block);
     memset(v, 0, 32);
     v->attrs = RAY_ATTR_ARENA;
-    atomic_store_explicit(&v->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_relaxed);
     v->type = -RAY_STR;
     v->obj = chars;
     return v;

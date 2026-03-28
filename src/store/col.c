@@ -658,7 +658,7 @@ ray_t* ray_col_load(const char* path) {
     vec->attrs &= ~RAY_ATTR_SLICE;
     if (!has_ext_nullmap)
         vec->attrs &= ~RAY_ATTR_NULLMAP_EXT;
-    atomic_store_explicit(&vec->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&vec->rc, 1, memory_order_relaxed);
 
     /* RAY_SYM: validate sym count footer + bounds check */
     if (vec->type == RAY_SYM) {
@@ -766,7 +766,7 @@ ray_t* ray_col_mmap(const char* path) {
     vec->attrs &= ~RAY_ATTR_SLICE;
     if (!has_ext_nullmap)
         vec->attrs &= ~RAY_ATTR_NULLMAP_EXT;
-    atomic_store_explicit(&vec->rc, 1, memory_order_relaxed);
+    atomic_store_explicit((_Atomic(uint32_t)*)&vec->rc, 1, memory_order_relaxed);
 
     return vec;
 }

@@ -34,7 +34,7 @@ void ray_retain(ray_t* v) {
     /* conc-L3: Relaxed ordering is sufficient for retain — the caller already
      * holds a valid reference, so no inter-thread synchronization is needed
      * for the increment itself. Release synchronizes via ray_release's acq_rel. */
-    atomic_fetch_add_explicit(&v->rc, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_relaxed);
 }
 
 /* --------------------------------------------------------------------------
@@ -44,7 +44,7 @@ void ray_retain(ray_t* v) {
 void ray_release(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
     if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, no-op */
-    uint32_t prev = atomic_fetch_sub_explicit(&v->rc, 1, memory_order_acq_rel);
+    uint32_t prev = atomic_fetch_sub_explicit((_Atomic(uint32_t)*)&v->rc, 1, memory_order_acq_rel);
     if (prev == 1) ray_free(v);
 }
 
@@ -58,7 +58,7 @@ ray_t* ray_cow(ray_t* v) {
     /* Caller must hold exclusive logical ownership — no concurrent
        ray_retain/ray_release allowed. The acquire load ensures visibility
        of prior writes by threads that have released their reference. */
-    uint32_t rc = atomic_load_explicit(&v->rc, memory_order_acquire);
+    uint32_t rc = atomic_load_explicit((_Atomic(uint32_t)*)&v->rc, memory_order_acquire);
     if (rc == 1) return v;  /* sole owner -- mutate in place */
     ray_t* copy = ray_alloc_copy(v);
     if (!copy || RAY_IS_ERR(copy)) return copy;
