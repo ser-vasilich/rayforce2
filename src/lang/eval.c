@@ -226,9 +226,9 @@ ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
         if (is_null_atom(b)) return ray_date(INT32_MIN);
         return ray_date(a->i64 - as_i64(b));
     }
-    /* DATE - DATE → i64 (days difference) */
+    /* DATE - DATE → i32 (days difference) */
     if (a->type == -RAY_DATE && b->type == -RAY_DATE)
-        return make_i64(a->i64 - b->i64);
+        return ray_i32((int32_t)(a->i64 - b->i64));
     /* DATE - TIME → TIMESTAMP */
     if (a->type == -RAY_DATE && b->type == -RAY_TIME)
         return ray_timestamp(a->i64 * 86400000000000LL - b->i64 * 1000000LL);
@@ -296,20 +296,45 @@ ray_t* ray_mul_fn(ray_t* a, ray_t* b) {
 
 ray_t* ray_div_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    /* Null propagation — null or zero divisor → null (i64 null) */
-    if (is_null_atom(a) || is_null_atom(b)) return make_i64(INT64_MIN);
+    /* Null propagation — null operand → null matching left operand type */
+    if (is_null_atom(a) || is_null_atom(b)) {
+        /* Division null result type = left operand's null type */
+        if (a->type == -RAY_F64) return make_f64(__builtin_nan(""));
+        if (a->type == -RAY_I32 || a->type == -RAY_DATE || a->type == -RAY_TIME)
+            return ray_i32(INT32_MIN);
+        if (a->type == -RAY_I16) return ray_i16(INT16_MIN);
+        return make_i64(INT64_MIN); /* default: 0Nl */
+    }
+    /* Integer (floor) division — always returns integer.
+     * Float operands are converted to i64 via floor(a/b). */
     if (is_float_op(a, b)) {
         double bv = as_f64(b);
-        if (bv == 0.0) return make_i64(INT64_MIN); /* div by zero → 0Nl */
-        double result = as_f64(a) / bv;
-        /* If result is exactly integer, return i64 */
-        if (result == (double)(int64_t)result && result >= (double)INT64_MIN && result <= (double)INT64_MAX)
+        if (bv == 0.0 || isnan(bv)) {
+            /* Zero divisor: return null matching left operand's type */
+            if (a->type == -RAY_F64) return make_f64(__builtin_nan(""));
+            if (a->type == -RAY_I32) return ray_i32(INT32_MIN);
+            if (a->type == -RAY_I16) return ray_i16(INT16_MIN);
+            return make_i64(INT64_MIN);
+        }
+        double result = floor(as_f64(a) / bv);
+        /* Return type matches LEFT operand */
+        if (a->type == -RAY_F64) return make_f64(result);
+        if (result >= (double)INT64_MIN && result <= (double)INT64_MAX)
             return make_i64((int64_t)result);
-        return make_f64(result);
+        return make_i64(INT64_MIN);
     }
     int64_t bv = as_i64(b);
-    if (bv == 0) return make_i64(INT64_MIN); /* div by zero → 0Nl */
-    return make_i64(as_i64(a) / bv);
+    if (bv == 0) {
+        /* Zero divisor: return null matching left operand's type */
+        if (a->type == -RAY_I32) return ray_i32(INT32_MIN);
+        if (a->type == -RAY_I16) return ray_i16(INT16_MIN);
+        return make_i64(INT64_MIN);
+    }
+    int64_t av = as_i64(a);
+    /* Floor division (toward -inf) */
+    int64_t q = av / bv;
+    if ((av ^ bv) < 0 && q * bv != av) q--;
+    return make_i64(q);
 }
 
 ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
@@ -5742,7 +5767,7 @@ static ray_t* ray_where_fn(ray_t* x) {
 
 /* (group vec) → dict mapping each unique value to its indices */
 static ray_t* ray_group_fn(ray_t* x) {
-    if (!ray_is_vec(x))
+    if (!ray_is_vec(x) && x->type != RAY_LIST)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
     int64_t n = x->len;
     if (n == 0) {
@@ -5764,6 +5789,50 @@ static ray_t* ray_group_fn(ray_t* x) {
     if (RAY_IS_ERR(ivblock)) { ray_free(val_block); return ivblock; }
     idx_vecs = (ray_t**)ray_data(ivblock);
     int64_t ngroups = 0;
+
+    /* For LIST type, use atom_eq-based grouping with stored keys */
+    if (x->type == RAY_LIST) {
+        ray_t** elems = (ray_t**)ray_data(x);
+        /* Store group keys as ray_t* pointers */
+        ray_t* kblock = ray_alloc((size_t)(max_groups * sizeof(ray_t*)));
+        if (RAY_IS_ERR(kblock)) { ray_free(val_block); ray_free(ivblock); return kblock; }
+        ray_t** gkeys = (ray_t**)ray_data(kblock);
+
+        for (int64_t i = 0; i < n; i++) {
+            ray_t* elem = elems[i];
+            int64_t gi = -1;
+            for (int64_t g = 0; g < ngroups; g++) {
+                if (atom_eq(gkeys[g], elem)) { gi = g; break; }
+            }
+            if (gi < 0) {
+                if (ngroups >= max_groups) {
+                    for (int64_t g = 0; g < ngroups; g++) ray_release(idx_vecs[g]);
+                    ray_free(val_block); ray_free(ivblock); ray_free(kblock);
+                    return RAY_ERR_PTR(RAY_ERR_LIMIT);
+                }
+                gi = ngroups++;
+                gkeys[gi] = elem;
+                idx_vecs[gi] = ray_vec_new(RAY_I64, 0);
+            }
+            idx_vecs[gi] = ray_vec_append(idx_vecs[gi], &i);
+        }
+        /* Build dict */
+        ray_t* dict = ray_list_new((int32_t)(ngroups * 2));
+        if (RAY_IS_ERR(dict)) { ray_free(kblock); goto gfail; }
+        dict->attrs |= RAY_ATTR_DICT;
+        for (int64_t g = 0; g < ngroups; g++) {
+            ray_retain(gkeys[g]);
+            dict = ray_list_append(dict, gkeys[g]);
+            ray_release(gkeys[g]);
+            if (RAY_IS_ERR(dict)) { ray_free(kblock); goto gfail; }
+            dict = ray_list_append(dict, idx_vecs[g]);
+            ray_release(idx_vecs[g]);
+            idx_vecs[g] = NULL;
+            if (RAY_IS_ERR(dict)) { ray_free(kblock); goto gfail; }
+        }
+        ray_free(val_block); ray_free(ivblock); ray_free(kblock);
+        return dict;
+    }
 
     for (int64_t i = 0; i < n; i++) {
         int64_t v;
@@ -5790,7 +5859,6 @@ static ray_t* ray_group_fn(ray_t* x) {
             gvals[gi] = v;
             idx_vecs[gi] = ray_vec_new(RAY_I64, 0);
         }
-        /* Append index i to the group's vector */
         idx_vecs[gi] = ray_vec_append(idx_vecs[gi], &i);
     }
 

@@ -3385,7 +3385,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0]"
         "[0 1 0 0 0 0 1 0 0 0 0 1 0 1 0 0]"
         "[0 0 0 1 0 0 0 0 1 0 0 0 0 0 1 0]"
-        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]");
+        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (if (< x y) 1 0))) "
         "(map (fn[x] (map f x l)) l)",
@@ -3404,7 +3404,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 0 1 1 1 1 0 1 1 1 1 0 1 1 1]"
         "[0 0 0 1 1 0 0 0 1 1 0 0 0 0 1 1]"
         "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]"
-        "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]");
+        "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (if (> x y) 1 0))) "
         "(map (fn[x] (map f x l)) l)",
@@ -3423,7 +3423,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]"
         "[1 0 1 0 0 1 0 1 0 0 1 0 1 0 0 0]"
         "[1 1 1 0 0 1 1 1 0 0 1 1 1 1 0 0]"
-        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]");
+        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (== "
         "(enlist x) y))))) (map (fn[x] (map f x l)) l)",
@@ -3442,7 +3442,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0]"
         "[0 1 0 0 0 0 1 0 0 0 0 1 0 1 0 0]"
         "[0 0 0 1 0 0 0 0 1 0 0 0 0 0 1 0]"
-        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]");
+        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (< "
         "(enlist x) y))))) (map (fn[x] (map f x l)) l)",
@@ -3461,7 +3461,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 0 1 1 1 1 0 1 1 1 1 0 1 1 1]"
         "[0 0 0 1 1 0 0 0 1 1 0 0 0 0 1 1]"
         "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]"
-        "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]");
+        "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (> "
         "(enlist x) y))))) (map (fn[x] (map f x l)) l)",
@@ -3480,7 +3480,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]"
         "[1 0 1 0 0 1 0 1 0 0 1 0 1 0 0 0]"
         "[1 1 1 0 0 1 1 1 0 0 1 1 1 1 0 0]"
-        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]");
+        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (!= x "
         "(enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3499,7 +3499,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 0 1 1 1 1 0 1 1 1 1 0 1 1 1]"
         "[1 0 1 1 1 1 0 1 1 1 1 0 1 0 1 1]"
         "[1 1 1 0 1 1 1 1 0 1 1 1 1 1 0 1]"
-        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]");
+        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (<= x "
         "(enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3518,7 +3518,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]"
         "[0 1 0 1 1 0 1 0 1 1 0 1 0 1 1 1]"
         "[0 0 0 1 1 0 0 0 1 1 0 0 0 0 1 1]"
-        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]");
+        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (>= x "
         "(enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3537,7 +3537,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0]"
         "[1 1 1 0 0 1 1 1 0 0 1 1 1 1 0 0]"
         "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]"
-        "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]");
+        "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (!= "
         "(enlist x)(enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3556,7 +3556,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 0 1 1 1 1 0 1 1 1 1 0 1 1 1]"
         "[1 0 1 1 1 1 0 1 1 1 1 0 1 0 1 1]"
         "[1 1 1 0 1 1 1 1 0 1 1 1 1 1 0 1]"
-        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]");
+        "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (<= "
         "(enlist x) (enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3575,7 +3575,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]"
         "[0 1 0 1 1 0 1 0 1 1 0 1 0 1 1 1]"
         "[0 0 0 1 1 0 0 0 1 1 0 0 0 0 1 1]"
-        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1]");
+        "[0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1])");
     ASSERT_EQ(
         "(set l (list -2i 0i 0Ni 1i 2i -2 0 0Nl 1 2 -2.0 -0.0 0Nf 0.0 1.0  2.0)) (set f (fn [x y] (sum (as 'I32 (>= "
         "(enlist x) (enlist y)))))) (map (fn[x] (map f x l)) l)",
@@ -3594,7 +3594,7 @@ static MunitResult test_rf_cmp(const void* params, void* fixture) {
         "[0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0]"
         "[1 1 1 0 0 1 1 1 0 0 1 1 1 1 0 0]"
         "[1 1 1 1 0 1 1 1 1 0 1 1 1 1 1 0]"
-        "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]");
+        "[1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1])");
 
     // Test DATE comparisons
     ASSERT_EQ("(== 2024.01.01 2024.01.01)", "true");

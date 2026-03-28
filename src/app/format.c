@@ -164,12 +164,12 @@ static void fmt_char(fmt_buf_t* b, char val, int full) {
 
 static void fmt_i16(fmt_buf_t* b, int16_t val) {
     if (val == INT16_MIN) { fmt_puts(b, "0Nh"); return; }
-    fmt_printf(b, "%dh", (int)val);
+    fmt_printf(b, "%d", (int)val);
 }
 
 static void fmt_i32(fmt_buf_t* b, int32_t val) {
     if (val == INT32_MIN) { fmt_puts(b, "0Ni"); return; }
-    fmt_printf(b, "%di", (int)val);
+    fmt_printf(b, "%d", (int)val);
 }
 
 static void fmt_i64(fmt_buf_t* b, int64_t val) {
@@ -179,8 +179,14 @@ static void fmt_i64(fmt_buf_t* b, int64_t val) {
 
 static void fmt_f64(fmt_buf_t* b, double val) {
     if (isnan(val)) { fmt_puts(b, "0Nf"); return; }
-    if (val == -0.0 && signbit(val)) {
-        fmt_printf(b, "%.*f", g_precision, 0.0);
+    if (val == -0.0 && signbit(val)) val = 0.0; /* normalize -0.0 */
+    if (val == 0.0) {
+        /* Zero: format as "0.0" (after trailing-zero strip) */
+        char tmp[16];
+        int n = snprintf(tmp, sizeof(tmp), "%.*f", g_precision, 0.0);
+        char* dot = strchr(tmp, '.');
+        if (dot) { char* end = tmp + n - 1; while (end > dot + 1 && *end == '0') end--; n = (int)(end - tmp + 1); }
+        fmt_putn(b, tmp, (int32_t)n);
         return;
     }
     double absval = val < 0 ? -val : val;
