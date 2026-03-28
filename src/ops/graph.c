@@ -1550,3 +1550,65 @@ ray_op_t* ray_hnsw_knn(ray_graph_t* g, ray_hnsw_t* idx,
     g->nodes[ext->base.id] = ext->base;
     return &g->nodes[ext->base.id];
 }
+
+/* --------------------------------------------------------------------------
+ * Lazy DAG handles
+ * -------------------------------------------------------------------------- */
+
+ray_op_t* ray_graph_input_vec(ray_graph_t* g, ray_t* vec) {
+    return ray_const_vec(g, vec);
+}
+
+ray_t* ray_lazy_wrap(ray_graph_t* g, ray_op_t* op) {
+    ray_t* h = ray_alloc(0);
+    if (!h) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    h->type  = RAY_ATOM_LAZY;
+    h->attrs = 0;
+    RAY_LAZY_GRAPH(h) = g;
+    RAY_LAZY_OP(h)    = op;
+    return h;
+}
+
+ray_t* ray_lazy_append(ray_t* lazy, uint16_t opcode) {
+    ray_graph_t* g    = RAY_LAZY_GRAPH(lazy);
+    ray_op_t*    prev = RAY_LAZY_OP(lazy);
+
+    /* Determine output type based on opcode */
+    int8_t out_type;
+    switch (opcode) {
+        case OP_COUNT:
+        case OP_COUNT_DISTINCT:
+            out_type = RAY_I64; break;
+        case OP_AVG:
+        case OP_STDDEV:
+        case OP_STDDEV_POP:
+        case OP_VAR:
+        case OP_VAR_POP:
+            out_type = RAY_F64; break;
+        case OP_SUM:
+        case OP_PROD:
+            out_type = (prev->out_type == RAY_F64) ? RAY_F64 : RAY_I64; break;
+        default:
+            out_type = prev->out_type; break;
+    }
+
+    ray_op_t* op = make_unary(g, opcode, prev, out_type);
+    if (!op) return RAY_ERR_PTR(RAY_ERR_OOM);
+    RAY_LAZY_OP(lazy) = op;
+    return lazy;
+}
+
+ray_t* ray_lazy_materialize(ray_t* val) {
+    if (!ray_is_lazy(val)) return val;
+
+    ray_graph_t* g  = RAY_LAZY_GRAPH(val);
+    ray_op_t*    op = RAY_LAZY_OP(val);
+    ray_t* result   = ray_execute(g, op);
+
+    ray_graph_free(g);
+    /* Clear graph pointer before releasing to prevent double-free in
+     * ray_release_owned_refs */
+    RAY_LAZY_GRAPH(val) = NULL;
+    ray_release(val);
+    return result;
+}
