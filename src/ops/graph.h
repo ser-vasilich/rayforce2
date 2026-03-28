@@ -24,6 +24,6 @@
 #ifndef RAY_GRAPH_H
 #define RAY_GRAPH_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 #endif /* RAY_GRAPH_H */

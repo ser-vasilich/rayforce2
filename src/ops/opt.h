@@ -24,6 +24,6 @@
 #ifndef RAY_OPT_H
 #define RAY_OPT_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 #endif /* RAY_OPT_H */

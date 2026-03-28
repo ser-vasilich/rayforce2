@@ -32,7 +32,7 @@
  * and upstream input pipe references.
  */
 
-#include <rayforce.h>
+#include "ops.h"
 
 /* Allocate and initialize a new pipe (all fields zeroed, spill_fd = -1). */
 ray_pipe_t* ray_pipe_new(void);

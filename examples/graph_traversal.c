@@ -12,6 +12,7 @@
  */
 
 #include <rayforce.h>
+#include "ops/ops.h"
 #include <stdio.h>
 
 int main(void) {

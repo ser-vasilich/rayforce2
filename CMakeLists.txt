@@ -133,7 +133,7 @@ if(RAYFORCE_EXAMPLES)
         get_filename_component(ex_name ${ex_src} NAME_WE)
         add_executable(example_${ex_name} ${ex_src})
         target_link_libraries(example_${ex_name} PRIVATE rayforce_static)
-        target_include_directories(example_${ex_name} PRIVATE include)
+        target_include_directories(example_${ex_name} PRIVATE include src)
         if(NOT MSVC)
             target_link_options(example_${ex_name} PRIVATE
                 $<$<CONFIG:Debug>:-fsanitize=address,undefined>

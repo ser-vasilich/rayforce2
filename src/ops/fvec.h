@@ -24,7 +24,7 @@
 #ifndef RAY_FVEC_H
 #define RAY_FVEC_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 /* Factorization state -- pipeline concept, NOT added to ray_t.
  *

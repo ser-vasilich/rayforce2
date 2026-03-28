@@ -2,6 +2,7 @@
 #include "lang/env.h"
 #include "lang/parse.h"
 #include "io/csv.h"
+#include "ops/ops.h"
 #include "ops/pool.h"
 #include <string.h>
 #include <stdio.h>

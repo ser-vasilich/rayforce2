@@ -24,6 +24,6 @@
 #ifndef RAY_FUSE_H
 #define RAY_FUSE_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 #endif /* RAY_FUSE_H */

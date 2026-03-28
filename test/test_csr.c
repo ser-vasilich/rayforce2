@@ -23,6 +23,7 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "ops/ops.h"
 #include "store/csr.h"
 #include "ops/fvec.h"
 #include <string.h>

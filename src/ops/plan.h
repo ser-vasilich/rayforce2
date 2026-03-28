@@ -24,6 +24,6 @@
 #ifndef RAY_PLAN_H
 #define RAY_PLAN_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 #endif /* RAY_PLAN_H */

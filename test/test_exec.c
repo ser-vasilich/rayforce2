@@ -23,6 +23,7 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "ops/ops.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>

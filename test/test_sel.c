@@ -23,6 +23,7 @@
 
 #include "munit.h"
 #include <rayforce.h>
+#include "ops/ops.h"
 
 static MunitResult test_sel_new(const void* params, void* data) {
     (void)params; (void)data;

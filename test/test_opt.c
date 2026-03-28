@@ -1,5 +1,6 @@
 #include "munit.h"
 #include <rayforce.h>
+#include "ops/ops.h"
 #include <string.h>
 
 /* Helper: create a test table with columns id1(I64), v1(I64), v3(F64) */

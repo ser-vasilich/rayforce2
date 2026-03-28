@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include <rayforce.h>
+#include "ops.h"
 #include <stdio.h>
 
 /* Duplicate of find_ext() from opt.c — kept local for self-containment. */

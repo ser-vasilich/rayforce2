@@ -24,7 +24,6 @@
 #include "fuse.h"
 #include "mem/sys.h"
 #include <string.h>
-#include <rayforce.h>
 
 /* --------------------------------------------------------------------------
  * Fusion pass: merge element-wise chains into single fused nodes

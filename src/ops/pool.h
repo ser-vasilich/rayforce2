@@ -33,7 +33,7 @@
  */
 
 #include "core/platform.h"
-#include <rayforce.h>
+#include "ops.h"
 
 /* Callback: process elements [start, end) with the given worker_id */
 typedef void (*ray_pool_fn)(void* ctx, uint32_t worker_id, int64_t start, int64_t end);

@@ -24,6 +24,6 @@
 #ifndef RAY_EXEC_H
 #define RAY_EXEC_H
 
-#include <rayforce.h>
+#include "ops.h"
 
 #endif /* RAY_EXEC_H */

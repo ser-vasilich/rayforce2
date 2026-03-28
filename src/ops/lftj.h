@@ -24,7 +24,7 @@
 #ifndef RAY_LFTJ_H
 #define RAY_LFTJ_H
 
-#include <rayforce.h>
+#include "ops.h"
 #include "store/csr.h"
 
 /* Trie iterator over sorted CSR adjacency list */
