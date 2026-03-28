@@ -35,7 +35,7 @@ jobs:
           echo "CC=clang-19" >> $GITHUB_ENV
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTEIDE_WERROR=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DRAYFORCE_WERROR=ON
 
       - name: Build
         run: cmake --build build

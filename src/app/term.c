@@ -1,5 +1,7 @@
-#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
-#define _POSIX_C_SOURCE 200112L
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#elif !defined(_WIN32)
+#define _GNU_SOURCE
 #endif
 
 #include "app/term.h"
