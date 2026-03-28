@@ -422,10 +422,10 @@ static void eval_and_print(ray_term_t* term, const char* input,
 static const char* type_label(ray_t* val) {
     if (!val) return "nil";
     switch (val->type) {
-    case RAY_ATOM_UNARY:  return "builtin/1";
-    case RAY_ATOM_BINARY: return "builtin/2";
-    case RAY_ATOM_VARY:   return "builtin/n";
-    case RAY_ATOM_LAMBDA: return "lambda";
+    case RAY_UNARY:  return "builtin/1";
+    case RAY_BINARY: return "builtin/2";
+    case RAY_VARY:   return "builtin/n";
+    case RAY_LAMBDA: return "lambda";
     case RAY_TABLE:       return "table";
     case RAY_LIST:        return "list";
     default:

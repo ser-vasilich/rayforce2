@@ -256,17 +256,17 @@ static void compile_list(compiler_t *c, ray_t *ast) {
 
     if (fn) {
         switch (fn->type) {
-        case RAY_ATOM_UNARY:
+        case RAY_UNARY:
             if (argc == 1) { emit(c, OP_CALL1); return; }
             break;
-        case RAY_ATOM_BINARY:
+        case RAY_BINARY:
             if (argc == 2) { emit(c, OP_CALL2); return; }
             break;
-        case RAY_ATOM_VARY:
+        case RAY_VARY:
             emit(c, OP_CALLN);
             emit(c, (uint8_t)argc);
             return;
-        case RAY_ATOM_LAMBDA:
+        case RAY_LAMBDA:
             emit(c, OP_CALLF);
             emit(c, (uint8_t)argc);
             return;

@@ -342,7 +342,7 @@ static void ray_release_owned_refs(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
 
     if (ray_is_atom(v)) {
-        if (v->type == RAY_ATOM_LAMBDA) {
+        if (v->type == RAY_LAMBDA) {
             /* Lambda stores [params, body, bytecode, constants] in ray_data */
             ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) {
@@ -351,7 +351,7 @@ static void ray_release_owned_refs(ray_t* v) {
             }
             return;
         }
-        if (v->type == RAY_ATOM_LAZY) {
+        if (v->type == RAY_LAZY) {
             ray_graph_t* g = RAY_LAZY_GRAPH(v);
             if (g) {
                 ray_graph_free(g);
@@ -421,7 +421,7 @@ void ray_retain_owned_refs(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
 
     if (ray_is_atom(v)) {
-        if (v->type == RAY_ATOM_LAMBDA) {
+        if (v->type == RAY_LAMBDA) {
             ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) {
                 if (slots[i] && !RAY_IS_ERR(slots[i]))
@@ -430,7 +430,7 @@ void ray_retain_owned_refs(ray_t* v) {
             return;
         }
         /* Lazy handles own their graph uniquely — no retain on copy */
-        if (v->type == RAY_ATOM_LAZY) return;
+        if (v->type == RAY_LAZY) return;
         if (ray_atom_owns_obj(v) && v->obj && !RAY_IS_ERR(v->obj))
             ray_retain(v->obj);
         return;
@@ -492,12 +492,12 @@ static void ray_detach_owned_refs(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
 
     if (ray_is_atom(v)) {
-        if (v->type == RAY_ATOM_LAMBDA) {
+        if (v->type == RAY_LAMBDA) {
             ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) slots[i] = NULL;
             return;
         }
-        if (v->type == RAY_ATOM_LAZY) {
+        if (v->type == RAY_LAZY) {
             RAY_LAZY_GRAPH(v) = NULL;
             RAY_LAZY_OP(v)    = NULL;
             return;

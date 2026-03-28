@@ -204,10 +204,10 @@ ray_t* ray_try(ray_t* expr, ray_t* handler_expr) {
 
     /* Call handler with error value */
     ray_t* handler_result;
-    if (handler->type == RAY_ATOM_LAMBDA) {
+    if (handler->type == RAY_LAMBDA) {
         ray_t* args[1] = { err_val };
         handler_result = call_lambda(handler, args, 1);
-    } else if (handler->type == RAY_ATOM_UNARY) {
+    } else if (handler->type == RAY_UNARY) {
         ray_unary_fn fn = (ray_unary_fn)(uintptr_t)handler->i64;
         handler_result = fn(err_val);
     } else {
@@ -555,11 +555,11 @@ ray_t* ray_dev(ray_t* x) {
 /* Helper: call a function object with 1 arg, returning result.
  * Handles UNARY, BINARY, LAMBDA types. Does not release fn or arg. */
 static ray_t* call_fn1(ray_t* fn, ray_t* arg) {
-    if (fn->type == RAY_ATOM_UNARY) {
+    if (fn->type == RAY_UNARY) {
         ray_unary_fn f = (ray_unary_fn)(uintptr_t)fn->i64;
         return f(arg);
     }
-    if (fn->type == RAY_ATOM_LAMBDA) {
+    if (fn->type == RAY_LAMBDA) {
         ray_t* args[1] = { arg };
         return call_lambda(fn, args, 1);
     }
@@ -568,15 +568,15 @@ static ray_t* call_fn1(ray_t* fn, ray_t* arg) {
 
 /* Helper: call a function object with 2 args. Does not release fn or args. */
 static ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
-    if (fn->type == RAY_ATOM_BINARY) {
+    if (fn->type == RAY_BINARY) {
         ray_binary_fn f = (ray_binary_fn)(uintptr_t)fn->i64;
         return f(a, b);
     }
-    if (fn->type == RAY_ATOM_LAMBDA) {
+    if (fn->type == RAY_LAMBDA) {
         ray_t* args[2] = { a, b };
         return call_lambda(fn, args, 2);
     }
-    if (fn->type == RAY_ATOM_UNARY) {
+    if (fn->type == RAY_UNARY) {
         /* Partial application not supported, just call with first arg */
         ray_unary_fn f = (ray_unary_fn)(uintptr_t)fn->i64;
         return f(a);
@@ -2455,7 +2455,7 @@ ray_t* ray_fn(ray_t** args, int64_t n) {
      * [0] params, [1] body, [2] bytecode, [3] constants, [4] n_locals */
     ray_t* lambda = ray_alloc(5 * sizeof(ray_t*));
     if (!lambda) return RAY_ERR_PTR(RAY_ERR_OOM);
-    lambda->type = RAY_ATOM_LAMBDA;
+    lambda->type = RAY_LAMBDA;
     lambda->attrs = 0;
     lambda->len = 0;
 
@@ -2747,7 +2747,7 @@ op_callf: {
     ray_t *fn_obj = POP();
 
     /* Compiled lambda: push frame, switch to callee bytecode */
-    if (fn_obj->type == RAY_ATOM_LAMBDA) {
+    if (fn_obj->type == RAY_LAMBDA) {
         if (!LAMBDA_IS_COMPILED(fn_obj))
             ray_compile(fn_obj);
 
@@ -2789,22 +2789,22 @@ op_callf: {
     {
         ray_t *result;
         switch (fn_obj->type) {
-        case RAY_ATOM_UNARY:
+        case RAY_UNARY:
             result = ((ray_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
             ray_release(fn_args[0]);
             for (int32_t i = 1; i < n; i++) ray_release(fn_args[i]);
             break;
-        case RAY_ATOM_BINARY:
+        case RAY_BINARY:
             result = ((ray_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
             ray_release(fn_args[0]);
             ray_release(fn_args[1]);
             for (int32_t i = 2; i < n; i++) ray_release(fn_args[i]);
             break;
-        case RAY_ATOM_VARY:
+        case RAY_VARY:
             result = ((ray_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
             for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
             break;
-        case RAY_ATOM_LAMBDA:
+        case RAY_LAMBDA:
             result = call_lambda(fn_obj, fn_args, n);
             for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
             break;
@@ -2829,7 +2829,7 @@ op_calls: {
         fn_args[i] = POP();
     ray_t *fn_obj = POP();
 
-    if (fn_obj->type == RAY_ATOM_LAMBDA) {
+    if (fn_obj->type == RAY_LAMBDA) {
         if (!LAMBDA_IS_COMPILED(fn_obj))
             ray_compile(fn_obj);
 
@@ -2867,18 +2867,18 @@ op_calls: {
     {
         ray_t *result;
         switch (fn_obj->type) {
-        case RAY_ATOM_UNARY:
+        case RAY_UNARY:
             result = ((ray_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
             ray_release(fn_args[0]);
             for (int32_t i = 1; i < n; i++) ray_release(fn_args[i]);
             break;
-        case RAY_ATOM_BINARY:
+        case RAY_BINARY:
             result = ((ray_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
             ray_release(fn_args[0]);
             ray_release(fn_args[1]);
             for (int32_t i = 2; i < n; i++) ray_release(fn_args[i]);
             break;
-        case RAY_ATOM_VARY:
+        case RAY_VARY:
             result = ((ray_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
             for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
             break;
@@ -3245,7 +3245,7 @@ ray_t* ray_eval(ray_t* obj) {
     int64_t n = ray_len(obj);
 
     switch (head->type) {
-        case RAY_ATOM_UNARY: {
+        case RAY_UNARY: {
             if (n < 2) { ray_release(head); ret = RAY_ERR_PTR(RAY_ERR_DOMAIN); goto out; }
             ray_unary_fn fn = (ray_unary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
@@ -3260,7 +3260,7 @@ ray_t* ray_eval(ray_t* obj) {
             ray_release(arg);
             ret = result; goto out;
         }
-        case RAY_ATOM_BINARY: {
+        case RAY_BINARY: {
             if (n < 3) { ray_release(head); ret = RAY_ERR_PTR(RAY_ERR_DOMAIN); goto out; }
             ray_binary_fn fn = (ray_binary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
@@ -3282,7 +3282,7 @@ ray_t* ray_eval(ray_t* obj) {
             ray_release(right);
             ret = result; goto out;
         }
-        case RAY_ATOM_VARY: {
+        case RAY_VARY: {
             ray_vary_fn fn = (ray_vary_fn)(uintptr_t)head->i64;
             if (head->attrs & RAY_FN_SPECIAL_FORM) {
                 ray_release(head);
@@ -3304,7 +3304,7 @@ ray_t* ray_eval(ray_t* obj) {
             for (int64_t i = 0; i < argc; i++) ray_release(args[i]);
             ret = result; goto out;
         }
-        case RAY_ATOM_LAMBDA: {
+        case RAY_LAMBDA: {
             int64_t argc = n - 1;
             if (argc > 64) { ray_release(head); ret = RAY_ERR_PTR(RAY_ERR_DOMAIN); goto out; }
             ray_t* args[64];

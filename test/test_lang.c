@@ -36,7 +36,7 @@ static MunitResult test_fn_unary(const void* params, void* fixture) {
     ray_t* fn = ray_fn_unary("neg", RAY_FN_ATOMIC, dummy_unary);
     munit_assert_ptr_not_null(fn);
     munit_assert_false(RAY_IS_ERR(fn));
-    munit_assert_int(fn->type, ==, RAY_ATOM_UNARY);
+    munit_assert_int(fn->type, ==, RAY_UNARY);
     munit_assert_uint(fn->attrs & RAY_FN_ATOMIC, !=, 0);
     ray_release(fn);
 
@@ -49,7 +49,7 @@ static MunitResult test_fn_binary(const void* params, void* fixture) {
 
     ray_t* fn = ray_fn_binary("+", RAY_FN_ATOMIC, dummy_binary);
     munit_assert_ptr_not_null(fn);
-    munit_assert_int(fn->type, ==, RAY_ATOM_BINARY);
+    munit_assert_int(fn->type, ==, RAY_BINARY);
     ray_release(fn);
 
     return MUNIT_OK;
@@ -61,7 +61,7 @@ static MunitResult test_fn_vary(const void* params, void* fixture) {
 
     ray_t* fn = ray_fn_vary("list", RAY_FN_NONE, dummy_vary);
     munit_assert_ptr_not_null(fn);
-    munit_assert_int(fn->type, ==, RAY_ATOM_VARY);
+    munit_assert_int(fn->type, ==, RAY_VARY);
     ray_release(fn);
 
     return MUNIT_OK;

@@ -31,7 +31,7 @@ enum {
 
 /* ===== Compiled Lambda Layout =====
  *
- * A RAY_ATOM_LAMBDA object with attrs & RAY_FN_COMPILED stores compiled
+ * A RAY_LAMBDA object with attrs & RAY_FN_COMPILED stores compiled
  * bytecode in its data area:
  *
  *   data[0] = ray_t* params_list   (same as interpreted)

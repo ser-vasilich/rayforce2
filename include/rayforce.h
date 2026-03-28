@@ -136,13 +136,6 @@ extern "C" {
 #define RAY_BINARY    102   /* Binary builtin: ray_t* (*)(ray_t*, ray_t*) */
 #define RAY_VARY      103   /* Variadic builtin: ray_t* (*)(ray_t**, int64_t) */
 
-/* Function atom types (negative = atom) */
-#define RAY_ATOM_LAMBDA    (-RAY_LAMBDA)
-#define RAY_ATOM_UNARY     (-RAY_UNARY)
-#define RAY_ATOM_BINARY    (-RAY_BINARY)
-#define RAY_ATOM_VARY      (-RAY_VARY)
-#define RAY_ATOM_LAZY      (-RAY_LAZY)
-
 /* Function attribute flags (stored in attrs byte) */
 #define RAY_FN_NONE          0x00
 #define RAY_FN_LEFT_ATOMIC   0x01  /* auto-map left arg over vectors */
@@ -211,7 +204,7 @@ typedef union ray_t* (*ray_vary_fn)(union ray_t**, int64_t);
  * different meanings depending on the object's type tag.
  *
  *   Bits 0x01-0x03  RAY_SYM vectors:  sym index width (RAY_SYM_W8/W16/W32/W64)
- *   Bits 0x01-0x10  function atoms (RAY_ATOM_UNARY/BINARY/VARY): RAY_FN_* flags
+ *   Bits 0x01-0x10  function objects (RAY_UNARY/BINARY/VARY): RAY_FN_* flags
  *   Bits 0x01-0x02  RAY_LIST atoms:   RAY_ATTR_VECTOR / RAY_ATTR_DICT
  *   Bit  0x10       vectors:         RAY_ATTR_SLICE
  *   Bit  0x20       vectors:         RAY_ATTR_NULLMAP_EXT
@@ -324,7 +317,7 @@ extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];
 
 /* ===== Lazy DAG Handle Accessors =====
  *
- * A lazy handle is a ray_t with type == RAY_ATOM_LAZY.  It stores two
+ * A lazy handle is a ray_t with type == RAY_LAZY.  It stores two
  * pointers in the nullmap region (bytes 0-15), which is unused for atoms:
  *   Bytes 0-7:  ray_graph_t* (owns the graph)
  *   Bytes 8-15: ray_op_t*    (the output node)
@@ -336,14 +329,14 @@ typedef struct ray_op    ray_op_t;
 #define RAY_LAZY_OP(p)    (*(ray_op_t**)(((p)->nullmap) + 8))
 
 static inline bool ray_is_lazy(ray_t* x) {
-    return x && !RAY_IS_ERR(x) && x->type == RAY_ATOM_LAZY;
+    return x && !RAY_IS_ERR(x) && x->type == RAY_LAZY;
 }
 
 /* ===== Accessor Macros ===== */
 
 #define ray_type(v)       ((v)->type)
-#define ray_is_atom(v)    ((v)->type < 0)
-#define ray_is_vec(v)     ((v)->type > 0)
+#define ray_is_atom(v)    ((v)->type < 0 || (v)->type >= RAY_LAMBDA)
+#define ray_is_vec(v)     ((v)->type > 0 && (v)->type < RAY_LAMBDA)
 #define ray_len(v)        ((v)->len)
 static inline void* ray_data_fn(ray_t* v) {
     return RAY_ASSUME_ALIGNED((void*)v->data, 32);

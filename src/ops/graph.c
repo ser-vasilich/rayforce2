@@ -1562,7 +1562,7 @@ ray_op_t* ray_graph_input_vec(ray_graph_t* g, ray_t* vec) {
 ray_t* ray_lazy_wrap(ray_graph_t* g, ray_op_t* op) {
     ray_t* h = ray_alloc(0);
     if (!h) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_OOM); }
-    h->type  = RAY_ATOM_LAZY;
+    h->type  = RAY_LAZY;
     h->attrs = 0;
     RAY_LAZY_GRAPH(h) = g;
     RAY_LAZY_OP(h)    = op;
