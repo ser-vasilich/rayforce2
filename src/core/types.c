@@ -23,7 +23,7 @@
 
 #include "core/types.h"
 
-/* Element sizes indexed by positive type tag. */
+/* Element sizes indexed by positive type tag (data types 0-15). */
 const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {
     /* [RAY_LIST]      =  0 */ 8,   /* pointer-sized (ray_t*) */
     /* [RAY_BOOL]      =  1 */ 1,
@@ -38,13 +38,7 @@ const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {
     /* [RAY_TIME]      = 10 */ 4,
     /* [RAY_TIMESTAMP] = 11 */ 8,
     /* [RAY_GUID]      = 12 */ 16,
-    /* [RAY_TABLE]     = 13 */ 8,   /* pointer-sized (ray_t*) */
-    /*                = 14 */ 0,
-    /*                = 15 */ 0,
-    /* [RAY_SEL]       = 16 */ 0,   /* variable-size layout, no elem_size */
-    /*                = 17 */ 0,
-    /*                = 18 */ 0,
-    /*                = 19 */ 0,
-    /* [RAY_SYM]       = 20 */ 8,   /* W64 default; narrow widths use ray_sym_elem_size */
-    /* [RAY_STR]       = 21 */ 16,  /* sizeof(ray_str_t) */
+    /* [RAY_SYM]       = 13 */ 8,   /* W64 default; narrow widths use ray_sym_elem_size */
+    /* [RAY_STR]       = 14 */ 16,  /* sizeof(ray_str_t) */
+    /* [RAY_SEL]       = 15 */ 0,   /* variable-size layout, no elem_size */
 };

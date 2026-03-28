@@ -48,13 +48,15 @@ extern "C" {
 #define RAY_TIME      10
 #define RAY_TIMESTAMP 11
 #define RAY_GUID      12
-#define RAY_TABLE     13
-
 /* Unified dictionary-encoded string column (adaptive width) */
-#define RAY_SYM       20
+#define RAY_SYM       13
 
 /* Variable-length string column (inline + pool) */
-#define RAY_STR       21
+#define RAY_STR       14
+
+/* Compound types */
+#define RAY_TABLE     98
+#define RAY_DICT      99
 
 /* Function types (Rayforce-compatible) */
 #define RAY_LAMBDA    100   /* User-defined function (compiled body + env) */
@@ -132,7 +134,7 @@ typedef union ray_t {
 
 #define ray_type(v)       ((v)->type)
 #define ray_is_atom(v)    ((v)->type < 0 || (v)->type >= RAY_LAMBDA)
-#define ray_is_vec(v)     ((v)->type > 0 && (v)->type < RAY_LAMBDA)
+#define ray_is_vec(v)     ((v)->type >= RAY_BOOL && (v)->type <= RAY_STR)
 #define ray_len(v)        ((v)->len)
 static inline void* ray_data_fn(ray_t* v) { return (void*)v->data; }
 #define ray_data(v)       ray_data_fn(v)

@@ -65,12 +65,14 @@ static MunitResult test_elem_size_macro(const void* params, void* fixture) {
 static MunitResult test_type_sizes_pointer_types(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    /* LIST and TABLE are pointer-sized (8 bytes) */
+    /* LIST is pointer-sized (8 bytes) */
     munit_assert_uint(ray_type_sizes[RAY_LIST],  ==, 8);
-    munit_assert_uint(ray_type_sizes[RAY_TABLE], ==, 8);
 
     /* SYM default width is 8 (W64) */
     munit_assert_uint(ray_type_sizes[RAY_SYM],   ==, 8);
+
+    /* STR is 16 bytes (ray_str_t) */
+    munit_assert_uint(ray_type_sizes[RAY_STR],   ==, 16);
 
     /* SEL has no fixed element size */
     munit_assert_uint(ray_type_sizes[RAY_SEL],   ==, 0);
