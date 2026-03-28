@@ -1779,7 +1779,8 @@ static void reduce_acc_init(reduce_acc_t* acc) {
         for (int64_t row = start; row < end; row++) { \
             if (has_nulls && (null_bm[row/8] >> (row%8)) & 1) { (acc)->null_count++; continue; } \
             int64_t v = (int64_t)d[row]; \
-            (acc)->sum_i += v; (acc)->sum_sq_i += v * v; (acc)->prod_i *= v; \
+            (acc)->sum_i += v; (acc)->sum_sq_i += v * v; \
+            (acc)->prod_i = (int64_t)((uint64_t)(acc)->prod_i * (uint64_t)v); \
             if (v < (acc)->min_i) (acc)->min_i = v; \
             if (v > (acc)->max_i) (acc)->max_i = v; \
             if (!(acc)->has_first) { (acc)->first_i = v; (acc)->has_first = true; } \
@@ -1822,7 +1823,8 @@ static void reduce_range(ray_t* input, int64_t start, int64_t end,
         for (int64_t row = start; row < end; row++) {
             if (has_nulls && (null_bm[row/8] >> (row%8)) & 1) { acc->null_count++; continue; }
             int64_t v = read_col_i64(base, row, input->type, input->attrs);
-            acc->sum_i += v; acc->sum_sq_i += v * v; acc->prod_i *= v;
+            acc->sum_i += v; acc->sum_sq_i += v * v;
+            acc->prod_i = (int64_t)((uint64_t)acc->prod_i * (uint64_t)v);
             if (v < acc->min_i) acc->min_i = v;
             if (v > acc->max_i) acc->max_i = v;
             if (!acc->has_first) { acc->first_i = v; acc->has_first = true; }
