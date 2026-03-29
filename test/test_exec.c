@@ -1646,20 +1646,21 @@ static MunitResult test_exec_asof_join(const void* params, void* data) {
     /* Should have left cols + bid (time/sym deduplicated) */
     munit_assert_int(ray_table_ncols(result), ==, 4);  /* time, sym, price, bid */
 
-    /* Verify bid values — DuckDB semantics: best right.time <= left.time per partition */
+    /* Verify bid values — DuckDB semantics: best right.time <= left.time per partition.
+     * Output preserves original left-table row order. */
     ray_t* bid_col = ray_table_get_col(result, n_bid);
     munit_assert_ptr_not_null(bid_col);
     double* bid_data = (double*)ray_data(bid_col);
-    /* Sorted output order is by (sym, time): sym=1 rows first, then sym=2 */
-    /* sym=1,t=100: right sym=1,t=90 -> bid=9.5 */
+    /* Original left order: (t=100,s=1), (t=200,s=1), (t=300,s=2), (t=400,s=1), (t=500,s=2) */
+    /* t=100,s=1: right s=1,t=90 -> bid=9.5 */
     munit_assert_double(bid_data[0], ==, 9.5);
-    /* sym=1,t=200: right sym=1,t=150 -> bid=15.0 */
+    /* t=200,s=1: right s=1,t=150 -> bid=15.0 */
     munit_assert_double(bid_data[1], ==, 15.0);
-    /* sym=1,t=400: right sym=1,t=350 -> bid=35.0 */
-    munit_assert_double(bid_data[2], ==, 35.0);
-    /* sym=2,t=300: right sym=2,t=250 -> bid=25.0 */
-    munit_assert_double(bid_data[3], ==, 25.0);
-    /* sym=2,t=500: right sym=2,t=450 -> bid=45.0 */
+    /* t=300,s=2: right s=2,t=250 -> bid=25.0 */
+    munit_assert_double(bid_data[2], ==, 25.0);
+    /* t=400,s=1: right s=1,t=350 -> bid=35.0 */
+    munit_assert_double(bid_data[3], ==, 35.0);
+    /* t=500,s=2: right s=2,t=450 -> bid=45.0 */
     munit_assert_double(bid_data[4], ==, 45.0);
 
     ray_release(result);

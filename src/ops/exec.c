@@ -10033,12 +10033,32 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         eq_syms[k] = ek->sym;
     }
 
-    /* Get time vectors */
+    /* Get time vectors — use int64 representation for comparison.
+     * TIME uses 4-byte i32 (ms), TIMESTAMP uses 8-byte i64 (ns).
+     * We expand to a temporary i64 array for uniform comparison. */
     ray_t* lt_time_vec = ray_table_get_col(left_table, time_sym);
     ray_t* rt_time_vec = ray_table_get_col(right_table, time_sym);
     if (!lt_time_vec || !rt_time_vec) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    int64_t* lt_time = (int64_t*)ray_data(lt_time_vec);
-    int64_t* rt_time = (int64_t*)ray_data(rt_time_vec);
+    int8_t time_type = lt_time_vec->type;
+
+    /* Helper macro to read time value as int64_t regardless of storage type */
+    #define READ_TIME(vec, idx) \
+        ((time_type == RAY_TIME || time_type == RAY_DATE) \
+            ? (int64_t)((int32_t*)ray_data(vec))[(idx)] \
+            : ((int64_t*)ray_data(vec))[(idx)])
+
+    /* Build i64 time arrays for efficient comparison */
+    ray_t* lt_time_hdr = NULL, *rt_time_hdr = NULL;
+    int64_t* lt_time = (int64_t*)scratch_alloc(&lt_time_hdr, (size_t)left_n * sizeof(int64_t));
+    int64_t* rt_time = (int64_t*)scratch_alloc(&rt_time_hdr, (size_t)right_n * sizeof(int64_t));
+    if ((!lt_time && left_n > 0) || (!rt_time && right_n > 0)) {
+        if (lt_time_hdr) scratch_free(lt_time_hdr);
+        if (rt_time_hdr) scratch_free(rt_time_hdr);
+        return RAY_ERR_PTR(RAY_ERR_OOM);
+    }
+    for (int64_t i = 0; i < left_n; i++) lt_time[i] = READ_TIME(lt_time_vec, i);
+    for (int64_t i = 0; i < right_n; i++) rt_time[i] = READ_TIME(rt_time_vec, i);
+    #undef READ_TIME
 
     /* Get eq key vectors */
     int64_t* lt_eq[256], *rt_eq[256];
@@ -10175,13 +10195,25 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         match[lp] = best_ri;
     }
 
+    /* Remap match[] from sorted order to original left-row order.
+     * match[lp] gives the best right row for sorted left position lp.
+     * We need match_orig[li] = best right row for original left row li. */
+    ray_t* mo_hdr = NULL;
+    int64_t* match_orig = (int64_t*)scratch_alloc(&mo_hdr, (size_t)left_n * sizeof(int64_t));
+    if (!match_orig && left_n > 0) {
+        scratch_free(match_hdr); scratch_free(li_hdr); scratch_free(ri_hdr);
+        return RAY_ERR_PTR(RAY_ERR_OOM);
+    }
+    for (int64_t lp = 0; lp < left_n; lp++)
+        match_orig[li_idx[lp]] = match[lp];
+
     /* Count output rows */
     int64_t out_n = 0;
     if (join_type == 1) {
         out_n = left_n;  /* left outer: all left rows */
     } else {
         for (int64_t i = 0; i < left_n; i++)
-            if (match[i] >= 0) out_n++;
+            if (match_orig[i] >= 0) out_n++;
     }
 
     /* Build output table */
@@ -10202,7 +10234,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
 
     ray_t* out = ray_table_new(left_ncols + right_out_count);
 
-    /* Gather left columns */
+    /* Gather left columns — iterate in original row order */
     for (int64_t c = 0; c < left_ncols; c++) {
         int64_t col_name = ray_table_col_name(left_table, c);
         ray_t* src_col = ray_table_get_col_idx(left_table, c);
@@ -10213,9 +10245,8 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         char* src = (char*)ray_data(src_col);
         char* dst = (char*)ray_data(dst_col);
         int64_t wi = 0;
-        for (int64_t lp = 0; lp < left_n; lp++) {
-            if (join_type == 0 && match[lp] < 0) continue;
-            int64_t li = li_idx[lp];
+        for (int64_t li = 0; li < left_n; li++) {
+            if (join_type == 0 && match_orig[li] < 0) continue;
             memcpy(dst + wi * esz, src + li * esz, esz);
             wi++;
         }
@@ -10225,7 +10256,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         ray_release(dst_col);
     }
 
-    /* Gather right columns (excluding key duplicates) */
+    /* Gather right columns (excluding key duplicates) — original left-row order */
     for (int64_t rc = 0; rc < right_out_count; rc++) {
         int64_t cidx = right_out_idx[rc];
         int64_t col_name = ray_table_col_name(right_table, cidx);
@@ -10237,10 +10268,10 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         char* src = (char*)ray_data(src_col);
         char* dst = (char*)ray_data(dst_col);
         int64_t wi = 0;
-        for (int64_t lp = 0; lp < left_n; lp++) {
-            if (join_type == 0 && match[lp] < 0) continue;
-            if (match[lp] >= 0) {
-                memcpy(dst + wi * esz, src + match[lp] * esz, esz);
+        for (int64_t li = 0; li < left_n; li++) {
+            if (join_type == 0 && match_orig[li] < 0) continue;
+            if (match_orig[li] >= 0) {
+                memcpy(dst + wi * esz, src + match_orig[li] * esz, esz);
             } else {
                 memset(dst + wi * esz, 0, esz);  /* NULL fill for left outer */
             }
@@ -10252,9 +10283,12 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
         ray_release(dst_col);
     }
 
+    scratch_free(mo_hdr);
     scratch_free(match_hdr);
     scratch_free(li_hdr);
     scratch_free(ri_hdr);
+    if (lt_time_hdr) scratch_free(lt_time_hdr);
+    if (rt_time_hdr) scratch_free(rt_time_hdr);
     return out;
 }
 

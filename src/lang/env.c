@@ -72,6 +72,9 @@ typedef struct {
 static _Thread_local ray_scope_frame_t scope_stack[SCOPE_CAP];
 static _Thread_local int32_t scope_depth = 0;
 
+int32_t ray_env_scope_depth(void) { return scope_depth; }
+int32_t ray_env_global_count(void) { return g_env.count; }
+
 ray_err_t ray_env_init(void) {
     memset(&g_env, 0, sizeof(g_env));
     scope_depth = 0;
