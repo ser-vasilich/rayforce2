@@ -2727,12 +2727,7 @@ static MunitResult test_rf_take(const void* params, void* fixture) {
     ASSERT_EQ("(set l (guid 4)) (first (take l 5))", "(first l)");
     ASSERT_EQ("(set l (guid 4)) (first (take l -5))", "(last l)");
 
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (take (enum 'sym ['a 'b 'c 'd]) 0h)", "(enum 'sym (take 'a 0))");
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (type (take (enum 'sym ['a 'b 'c 'd]) 0i))", "'ENUM");
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (take (enum 'sym ['a 'b 'c 'd]) 3)", "(enum 'sym ['a 'b 'c])");
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (take (enum 'sym ['a 'b 'c 'd]) -3)", "(enum 'sym ['b 'c 'd])");
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (take (enum 'sym ['a 'b 'c 'd]) 5)", "(enum 'sym ['a 'b 'c 'd 'a])");
-    ASSERT_EQ("(set sym ['a 'b 'c 'd 'e]) (take (enum 'sym ['a 'b 'c 'd]) -5)", "(enum 'sym ['d 'a 'b 'c 'd])");
+    /* enum tests removed — teide uses symbols directly, no enum type */
 
     ASSERT_EQ("(take (list 1h 2i 3 \"4\") 0h)", "(list )");
     ASSERT_EQ("(type (take (list 1h 2i 3 \"4\") 0i))", "'LIST");
@@ -4351,10 +4346,9 @@ static MunitResult test_rf_joins(const void* params, void* fixture) {
 
     // window-join with Enum columns (xasc converts Enum to Symbol)
     ASSERT_EQ(
-        "(set sym ['a 'b])"
-        "(set trades (table [s time price] (list (enum 'sym ['a 'a 'b]) [10:00:01.000 10:00:05.000 10:00:03.000] [100 "
+        "(set trades (table [s time price] (list ['a 'a 'b] [10:00:01.000 10:00:05.000 10:00:03.000] [100 "
         "200 150])))"
-        "(set quotes (table [s time bid] (list (enum 'sym ['a 'a 'a 'b 'b]) [10:00:00.000 10:00:02.000 10:00:04.000 "
+        "(set quotes (table [s time bid] (list ['a 'a 'a 'b 'b] [10:00:00.000 10:00:02.000 10:00:04.000 "
         "10:00:01.000 10:00:04.000] [99 100 101 149 151])))"
         "(set intervals (map-left + [-2000 2000] (at trades 'time)))"
         "(at (window-join [s time] intervals trades quotes {minBid: (min bid)}) 'minBid)",

@@ -2655,23 +2655,31 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     int64_t n = as_i64(n_obj);
     ray_t** elems = (ray_t**)ray_data(vec);
 
-    int64_t start, count;
-    if (n >= 0) {
-        start = 0;
-        count = n < len ? n : len;
-    } else {
-        count = -n < len ? -n : len;
-        start = len - count;
-    }
-
-    ray_t* result = ray_alloc(count * sizeof(ray_t*));
+    int64_t abs_n = n < 0 ? -n : n;
+    /* For dicts, n counts key-value pairs (each pair = 2 elements) */
+    int is_dict = (vec->attrs & RAY_ATTR_DICT) ? 1 : 0;
+    int64_t elem_count = is_dict ? abs_n * 2 : abs_n;
+    if (is_dict) len = len; /* len is already in elements for dict storage */
+    ray_t* result = ray_alloc(elem_count * sizeof(ray_t*));
     if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
-    result->len = count;
+    if (is_dict) result->attrs |= RAY_ATTR_DICT;
+    result->len = elem_count;
     ray_t** out = (ray_t**)ray_data(result);
-    for (int64_t i = 0; i < count; i++) {
-        ray_retain(elems[start + i]);
-        out[i] = elems[start + i];
+    if (len == 0) {
+        result->len = 0;
+    } else if (n >= 0) {
+        for (int64_t i = 0; i < elem_count; i++) {
+            ray_retain(elems[i % len]);
+            out[i] = elems[i % len];
+        }
+    } else {
+        for (int64_t i = 0; i < elem_count; i++) {
+            int64_t si = len - (elem_count - i) % len;
+            if (si == len) si = 0;
+            ray_retain(elems[si]);
+            out[i] = elems[si];
+        }
     }
     if (_bx) ray_release(_bx);
     return result;
@@ -5299,7 +5307,7 @@ static const char* type_sym_name(int8_t type) {
     case RAY_CHAR:      return type < 0 ? "c8" : "C8";
     case RAY_TABLE:     return "TABLE";
     case RAY_DICT:      return "DICT";
-    case RAY_LIST:      return "list";
+    case RAY_LIST:      return "LIST";
     default:            return "?";
     }
 }
