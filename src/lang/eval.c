@@ -497,26 +497,70 @@ static int char_str_cmp(ray_t* a, ray_t* b, int *out) {
 /* Comparison */
 ray_t* ray_gt_fn(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c > 0 ? 1 : 0); }
+    /* Same temporal type: direct comparison */
+    if (is_temporal(a) && a->type == b->type) {
+        if (is_null_atom(a) || is_null_atom(b))
+            return make_bool(is_null_atom(b) && !is_null_atom(a) ? 1 : 0);
+        return make_bool(a->i64 > b->i64 ? 1 : 0);
+    }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int na = is_null_atom(a), nb = is_null_atom(b);
+    if (na && nb) return make_bool(0);       /* null == null → not > */
+    if (na) return make_bool(0);             /* null > X → false */
+    if (nb) return make_bool(1);             /* X > null → true */
     return make_bool(as_f64(a) > as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c < 0 ? 1 : 0); }
+    if (is_temporal(a) && a->type == b->type) {
+        if (is_null_atom(a) || is_null_atom(b))
+            return make_bool(is_null_atom(a) && !is_null_atom(b) ? 1 : 0);
+        return make_bool(a->i64 < b->i64 ? 1 : 0);
+    }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int na = is_null_atom(a), nb = is_null_atom(b);
+    if (na && nb) return make_bool(0);       /* null == null → not < */
+    if (na) return make_bool(1);             /* null < X → true */
+    if (nb) return make_bool(0);             /* X < null → false */
     return make_bool(as_f64(a) < as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_gte(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c >= 0 ? 1 : 0); }
+    if (is_temporal(a) && a->type == b->type) {
+        if (is_null_atom(a) && is_null_atom(b)) return make_bool(1);
+        if (is_null_atom(a)) return make_bool(0);
+        if (is_null_atom(b)) return make_bool(1);
+        return make_bool(a->i64 >= b->i64 ? 1 : 0);
+    }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int na = is_null_atom(a), nb = is_null_atom(b);
+    if (na && nb) return make_bool(1);       /* null == null → >= true */
+    if (na) return make_bool(0);             /* null >= X → false */
+    if (nb) return make_bool(1);             /* X >= null → true */
     return make_bool(as_f64(a) >= as_f64(b) ? 1 : 0);
 }
 
 ray_t* ray_lte(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c <= 0 ? 1 : 0); }
+    if (is_temporal(a) && a->type == b->type) {
+        if (is_null_atom(a) && is_null_atom(b)) return make_bool(1);
+        if (is_null_atom(a)) return make_bool(1);
+        if (is_null_atom(b)) return make_bool(0);
+        return make_bool(a->i64 <= b->i64 ? 1 : 0);
+    }
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    int na = is_null_atom(a), nb = is_null_atom(b);
+    if (na && nb) return make_bool(1);       /* null == null → <= true */
+    if (na) return make_bool(1);             /* null <= X → true */
+    if (nb) return make_bool(0);             /* X <= null → false */
     return make_bool(as_f64(a) <= as_f64(b) ? 1 : 0);
+}
+
+/* Check if comparable (numeric or temporal) */
+static int is_comparable(ray_t* x) {
+    return is_numeric(x) || is_temporal(x);
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
@@ -529,8 +573,11 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
     if (a->type == -RAY_SYM && b->type == -RAY_SYM)
         return make_bool(a->i64 == b->i64 ? 1 : 0);
     /* null == null → true */
-    if (is_numeric(a) && is_numeric(b) && is_null_atom(a) && is_null_atom(b))
+    if (is_comparable(a) && is_comparable(b) && is_null_atom(a) && is_null_atom(b))
         return make_bool(1);
+    /* Same temporal type: compare raw i64/i32 values */
+    if (is_temporal(a) && a->type == b->type)
+        return make_bool(a->i64 == b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b))
         return make_bool(as_f64(a) == as_f64(b) ? 1 : 0);
@@ -545,6 +592,12 @@ ray_t* ray_neq(ray_t* a, ray_t* b) {
     if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 != b->b8 ? 1 : 0);
     if (a->type == -RAY_SYM && b->type == -RAY_SYM)
+        return make_bool(a->i64 != b->i64 ? 1 : 0);
+    /* null != null → false (all nulls are equal) */
+    if (is_comparable(a) && is_comparable(b) && is_null_atom(a) && is_null_atom(b))
+        return make_bool(0);
+    /* Same temporal type */
+    if (is_temporal(a) && a->type == b->type)
         return make_bool(a->i64 != b->i64 ? 1 : 0);
     if (!is_numeric(a) || !is_numeric(b)) return RAY_ERR_PTR(RAY_ERR_TYPE);
     if (is_float_op(a, b))

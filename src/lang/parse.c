@@ -586,9 +586,33 @@ static ray_t* parse_dict(ray_parser_t *p) {
     if (RAY_IS_ERR(list)) return list;
     list->attrs |= RAY_ATTR_DICT;
 
+    ray_t* key;
     skip_ws_and_comments(p);
     while (*p->pos && *p->pos != '}') {
-        /* Parse key: must be a name (alpha start) */
+        /* Parse key: name or string literal */
+        if (*p->pos == '"') {
+            /* String key: parse as string, then intern as symbol */
+            ray_t* str_key = parse_string(p);
+            if (RAY_IS_ERR(str_key)) { ray_release(list); return str_key; }
+            /* Use the string value as the dict key directly */
+            key = str_key;
+            /* Expect colon */
+            skip_ws_and_comments(p);
+            if (*p->pos != ':') { ray_release(key); ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+            p->pos++; /* skip : */
+            skip_ws_and_comments(p);
+            /* Parse value */
+            ray_t* val = parse_expr(p);
+            if (RAY_IS_ERR(val)) { ray_release(key); ray_release(list); return val; }
+            list = ray_list_append(list, key);
+            ray_release(key);
+            if (RAY_IS_ERR(list)) { ray_release(val); return list; }
+            list = ray_list_append(list, val);
+            ray_release(val);
+            if (RAY_IS_ERR(list)) return list;
+            skip_ws_and_comments(p);
+            continue;
+        }
         const char *kstart = p->pos;
         while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT
                || *p->pos == '_' || *p->pos == '-')
@@ -597,7 +621,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
         if (klen == 0) { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
 
         int64_t kid = ray_sym_intern(kstart, klen);
-        ray_t* key = ray_sym(kid);
+        key = ray_sym(kid);
         if (RAY_IS_ERR(key)) { ray_release(list); return key; }
 
         /* Expect colon */
