@@ -1039,145 +1039,93 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     }
 
     /* ══════════════════════════════════════════════════════════════
-     * FAST PATH: direct array operations for typed vectors.
-     * Avoids per-element atom boxing/unboxing overhead.
+     * FAST PATH: direct array loops for typed vector arithmetic.
+     * Builds a DAG and executes through the fused morsel-driven
+     * executor for SIMD-optimized processing.
      * ══════════════════════════════════════════════════════════════ */
-    if (!force_boxed && !e0_null && !e0_bool &&
-        (fn == (ray_binary_fn)ray_add_fn || fn == (ray_binary_fn)ray_sub_fn ||
-         fn == (ray_binary_fn)ray_mul_fn || fn == (ray_binary_fn)ray_div_fn ||
-         fn == (ray_binary_fn)ray_mod_fn)) {
-        /* i64 scalar + i64 vector (or vice versa) */
-        int lv = left_coll && ray_is_vec(left) && left->type == RAY_I64;
-        int rv = right_coll && ray_is_vec(right) && right->type == RAY_I64;
-        int ls = !left_coll && left->type == -RAY_I64;
-        int rs = !right_coll && right->type == -RAY_I64;
+    if (!force_boxed) {
+        typedef ray_op_t* (*dag_binop_ctor)(ray_graph_t*, ray_op_t*, ray_op_t*);
+        dag_binop_ctor dag_ctor = NULL;
+        /* Map eval functions → DAG constructors.
+         * Exclude /, %: eval uses floor-division (→I64), DAG uses IEEE 754 (→F64).
+         * Exclude ==, <, >: eval has special null ordering semantics. */
+        if (fn == (ray_binary_fn)ray_add_fn) dag_ctor = ray_add;
+        else if (fn == (ray_binary_fn)ray_sub_fn) dag_ctor = ray_sub;
+        else if (fn == (ray_binary_fn)ray_mul_fn) dag_ctor = ray_mul;
 
-        if ((ls && rv) || (lv && rs) || (lv && rv)) {
+        if (dag_ctor) {
+            /* Only use DAG for F64 vectors/scalars — IEEE 754 NaN
+             * propagation handles null (NaN) automatically.
+             * I64 vectors cannot use DAG because null (INT64_MIN)
+             * requires explicit per-element null checking. */
+            int lv = left_coll && ray_is_vec(left) && left->type == RAY_F64;
+            int rv = right_coll && ray_is_vec(right) && right->type == RAY_F64;
+            int ls = !left_coll && (left->type == -RAY_F64 || left->type == -RAY_I64);
+            int rs = !right_coll && (right->type == -RAY_F64 || right->type == -RAY_I64);
+            /* At least one operand must be F64 vector */
+            if (!lv && !rv) dag_ctor = NULL;
+
+            if ((lv && rv) || (ls && rv) || (lv && rs)) {
+                ray_graph_t* g = ray_graph_new(NULL);
+                if (g) {
+                    ray_op_t *lop = ls ? ((left->type == -RAY_F64)
+                        ? ray_const_f64(g, left->f64) : ray_const_i64(g, as_i64(left)))
+                        : ray_const_vec(g, left);
+                    ray_op_t *rop = rs ? ((right->type == -RAY_F64)
+                        ? ray_const_f64(g, right->f64) : ray_const_i64(g, as_i64(right)))
+                        : ray_const_vec(g, right);
+                    if (lop && rop) {
+                        ray_op_t* root = dag_ctor(g, lop, rop);
+                        if (root) {
+                            ray_t* result = ray_execute(g, root);
+                            ray_graph_free(g);
+                            if (result && !RAY_IS_ERR(result)) {
+                                ray_release(e0);
+                                return result;
+                            }
+                        } else { ray_graph_free(g); }
+                    } else { ray_graph_free(g); }
+                }
+            }
+        }
+    }
+
+    /* I64 FAST PATH: direct array loops with null propagation */
+    if (!force_boxed && !e0_null &&
+        (fn == (ray_binary_fn)ray_add_fn || fn == (ray_binary_fn)ray_sub_fn ||
+         fn == (ray_binary_fn)ray_mul_fn)) {
+        int lv64 = left_coll && ray_is_vec(left) && left->type == RAY_I64;
+        int rv64 = right_coll && ray_is_vec(right) && right->type == RAY_I64;
+        int ls64 = !left_coll && left->type == -RAY_I64;
+        int rs64 = !right_coll && right->type == -RAY_I64;
+
+        if ((ls64 && rv64) || (lv64 && rs64) || (lv64 && rv64)) {
             ray_t* vec = ray_vec_new(RAY_I64, len);
             if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
             vec->len = len;
             int64_t* dst = (int64_t*)ray_data(vec);
-
-            if (ls && rv) {
-                int64_t sv = left->i64;
-                int64_t* rd = (int64_t*)ray_data(right);
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv + rd[i];
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv - rd[i];
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv * rd[i];
-                else if (fn == (ray_binary_fn)ray_div_fn) {
-                    for (int64_t i = 0; i < len; i++) {
-                        int64_t r = rd[i];
-                        if (r == 0 || r == INT64_MIN) { dst[i] = INT64_MIN; continue; }
-                        int64_t q = sv / r;
-                        if ((sv ^ r) < 0 && q * r != sv) q--;
-                        dst[i] = q;
-                    }
-                } else if (fn == (ray_binary_fn)ray_mod_fn)
-                    for (int64_t i = 0; i < len; i++) { int64_t r = rd[i]; if (r==0) { dst[i]=0; continue; } int64_t m = sv % r; if (m && (m^r)<0) m+=r; dst[i]=m; }
-            } else if (lv && rs) {
-                int64_t* ld = (int64_t*)ray_data(left);
-                int64_t sv = right->i64;
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] + sv;
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] - sv;
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] * sv;
-                else if (fn == (ray_binary_fn)ray_div_fn) {
-                    if (sv == 0) { for (int64_t i = 0; i < len; i++) dst[i] = INT64_MIN; }
-                    else for (int64_t i = 0; i < len; i++) {
-                        int64_t q = ld[i] / sv;
-                        if ((ld[i] ^ sv) < 0 && q * sv != ld[i]) q--;
-                        dst[i] = q;
-                    }
-                } else if (fn == (ray_binary_fn)ray_mod_fn) {
-                    if (sv == 0) { for (int64_t i = 0; i < len; i++) dst[i] = 0; }
-                    else for (int64_t i = 0; i < len; i++) { int64_t m = ld[i] % sv; if (m && (m^sv)<0) m+=sv; dst[i]=m; }
+            int64_t N = INT64_MIN; /* null sentinel */
+            #define I64_OP(op) \
+                if (ls64 && rv64) { \
+                    int64_t sv = left->i64; int64_t* rd = (int64_t*)ray_data(right); \
+                    if (sv == N) { for (int64_t i = 0; i < len; i++) dst[i] = N; } \
+                    else { for (int64_t i = 0; i < len; i++) dst[i] = rd[i] == N ? N : sv op rd[i]; } \
+                } else if (lv64 && rs64) { \
+                    int64_t* ld = (int64_t*)ray_data(left); int64_t sv = right->i64; \
+                    if (sv == N) { for (int64_t i = 0; i < len; i++) dst[i] = N; } \
+                    else { for (int64_t i = 0; i < len; i++) dst[i] = ld[i] == N ? N : ld[i] op sv; } \
+                } else { \
+                    int64_t* ld = (int64_t*)ray_data(left); int64_t* rd = (int64_t*)ray_data(right); \
+                    for (int64_t i = 0; i < len; i++) dst[i] = (ld[i] == N || rd[i] == N) ? N : ld[i] op rd[i]; \
                 }
-            } else { /* lv && rv */
-                int64_t* ld = (int64_t*)ray_data(left);
-                int64_t* rd = (int64_t*)ray_data(right);
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] + rd[i];
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] - rd[i];
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = ld[i] * rd[i];
-                else if (fn == (ray_binary_fn)ray_div_fn)
-                    for (int64_t i = 0; i < len; i++) {
-                        int64_t r = rd[i];
-                        if (r == 0) { dst[i] = INT64_MIN; continue; }
-                        int64_t q = ld[i] / r;
-                        if ((ld[i] ^ r) < 0 && q * r != ld[i]) q--;
-                        dst[i] = q;
-                    }
-                else if (fn == (ray_binary_fn)ray_mod_fn)
-                    for (int64_t i = 0; i < len; i++) { int64_t r = rd[i]; if (r==0) { dst[i]=0; continue; } int64_t m = ld[i] % r; if (m && (m^r)<0) m+=r; dst[i]=m; }
-            }
-            ray_release(e0);
-            return vec;
-        }
-
-        /* f64 scalar + f64/i64 vector (or vice versa) */
-        int lf = !left_coll && (left->type == -RAY_F64 || left->type == -RAY_I64);
-        int rf = !right_coll && (right->type == -RAY_F64 || right->type == -RAY_I64);
-        int lvf = left_coll && ray_is_vec(left) && (left->type == RAY_F64 || left->type == RAY_I64);
-        int rvf = right_coll && ray_is_vec(right) && (right->type == RAY_F64 || right->type == RAY_I64);
-
-        if (out_type == RAY_F64 && ((lf && rvf) || (lvf && rf) || (lvf && rvf))) {
-            ray_t* vec = ray_vec_new(RAY_F64, len);
-            if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
-            vec->len = len;
-            double* dst = (double*)ray_data(vec);
-
-            #define READ_F64(obj, idx) \
-                ((obj)->type == RAY_F64 ? ((double*)ray_data(obj))[(idx)] : (double)((int64_t*)ray_data(obj))[(idx)])
-            #define SCALAR_F64(obj) \
-                ((obj)->type == -RAY_F64 ? (obj)->f64 : (double)(obj)->i64)
-
-            if (lf && rvf) {
-                double sv = SCALAR_F64(left);
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv + READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv - READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = sv * READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_div_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = floor(sv / READ_F64(right, i));
-                else goto slow_path;
-            } else if (lvf && rf) {
-                double sv = SCALAR_F64(right);
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) + sv;
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) - sv;
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) * sv;
-                else if (fn == (ray_binary_fn)ray_div_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = floor(READ_F64(left, i) / sv);
-                else goto slow_path;
-            } else { /* lvf && rvf */
-                if (fn == (ray_binary_fn)ray_add_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) + READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_sub_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) - READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_mul_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = READ_F64(left, i) * READ_F64(right, i);
-                else if (fn == (ray_binary_fn)ray_div_fn)
-                    for (int64_t i = 0; i < len; i++) dst[i] = floor(READ_F64(left, i) / READ_F64(right, i));
-                else goto slow_path;
-            }
-            #undef READ_F64
-            #undef SCALAR_F64
+            if (fn == (ray_binary_fn)ray_add_fn) { I64_OP(+) }
+            else if (fn == (ray_binary_fn)ray_sub_fn) { I64_OP(-) }
+            else { I64_OP(*) }
+            #undef I64_OP
             ray_release(e0);
             return vec;
         }
     }
-slow_path:
 
     /* SLOW PATH: per-element scalar loop (fallback for mixed types, temporal, etc.) */
     if (!force_boxed &&
