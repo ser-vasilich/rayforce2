@@ -9,15 +9,20 @@ int main(int argc, char** argv) {
     ray_lang_init();
 
     int rc = 0;
-    if (argc > 1) {
-        rc = ray_repl_run_file(argv[1]);
-    } else {
+    /* Load script file(s) first, then drop into REPL */
+    for (int i = 1; i < argc; i++) {
+        rc = ray_repl_run_file(argv[i]);
+        if (rc != 0) goto done;
+    }
+    /* Interactive REPL — always, even after loading scripts */
+    {
         ray_repl_t* repl = ray_repl_create();
         if (repl) {
             ray_repl_run(repl);
             ray_repl_destroy(repl);
         }
     }
+done:
 
     ray_lang_destroy();
     ray_sym_destroy();
