@@ -1751,6 +1751,8 @@ static ray_t* call_fn1(ray_t* fn, ray_t* arg) {
 static ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
     if (fn->type == RAY_BINARY) {
         ray_binary_fn f = (ray_binary_fn)(uintptr_t)fn->i64;
+        if ((fn->attrs & RAY_FN_ATOMIC) && (is_collection(a) || is_collection(b)))
+            return atomic_map_binary(f, a, b);
         return f(a, b);
     }
     if (fn->type == RAY_LAMBDA) {
@@ -2812,7 +2814,7 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
     /* For dicts, n counts key-value pairs (each pair = 2 elements) */
     int is_dict = (vec->attrs & RAY_ATTR_DICT) ? 1 : 0;
     int64_t elem_count = is_dict ? abs_n * 2 : abs_n;
-    if (is_dict) len = len; /* len is already in elements for dict storage */
+    (void)is_dict; /* len is already in elements for dict storage */
     ray_t* result = ray_alloc(elem_count * sizeof(ray_t*));
     if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
     result->type = RAY_LIST;
@@ -2845,6 +2847,15 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
     if (vec->type == RAY_TABLE && idx->type == -RAY_SYM) {
         ray_t* col = ray_table_get_col(vec, idx->i64);
         if (!col) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        int8_t ctype = col->type;
+        /* Return typed vectors directly for temporal/GUID types that need
+         * to work with arithmetic and other vector operations.
+         * Other types are converted to boxed lists for backward compat. */
+        if (ctype == RAY_TIME || ctype == RAY_DATE || ctype == RAY_TIMESTAMP ||
+            ctype == RAY_GUID) {
+            ray_retain(col);
+            return col;
+        }
         /* Convert typed column vector to a Rayfall list */
         int64_t nrows = col->len;
         ray_t* result = ray_alloc(nrows * sizeof(ray_t*));
@@ -2852,7 +2863,6 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
         result->type = RAY_LIST;
         result->len = nrows;
         ray_t** out = (ray_t**)ray_data(result);
-        int8_t ctype = col->type;
         for (int64_t i = 0; i < nrows; i++) {
             if (ctype == RAY_I64) {
                 out[i] = make_i64(((int64_t*)ray_data(col))[i]);
@@ -2871,7 +2881,9 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
                 const char *sptr = ray_str_vec_get(col, i, &slen);
                 out[i] = ray_str(sptr ? sptr : "", sptr ? slen : 0);
             } else {
-                out[i] = make_i64(0);
+                /* Fallback: use collection_elem for any other typed vector */
+                int alloc = 0;
+                out[i] = collection_elem(col, i, &alloc);
             }
             if (RAY_IS_ERR(out[i])) {
                 for (int64_t j = 0; j < i; j++) ray_release(out[j]);
@@ -3150,6 +3162,31 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
         /* Convert Rayfall list (or typed vec) to typed column vector */
         ray_t* col_src = col_elems[i];
 
+        /* Single atom → wrap in a 1-element vector */
+        ray_t* atom_wrap = NULL;
+        if (ray_is_atom(col_src) && col_src->type != -RAY_SYM) {
+            int8_t atype = -col_src->type;
+            if (atype == RAY_GUID) {
+                atom_wrap = ray_vec_new(RAY_GUID, 1);
+                if (!RAY_IS_ERR(atom_wrap) && col_src->obj)
+                    memcpy(ray_data(atom_wrap), ray_data(col_src->obj), 16);
+                if (!RAY_IS_ERR(atom_wrap)) atom_wrap->len = 1;
+            } else if (atype == RAY_TIMESTAMP || atype == RAY_I64 || atype == RAY_SYM) {
+                atom_wrap = ray_vec_new(atype, 1);
+                if (!RAY_IS_ERR(atom_wrap)) { ((int64_t*)ray_data(atom_wrap))[0] = col_src->i64; atom_wrap->len = 1; }
+            } else if (atype == RAY_F64) {
+                atom_wrap = ray_vec_new(RAY_F64, 1);
+                if (!RAY_IS_ERR(atom_wrap)) { ((double*)ray_data(atom_wrap))[0] = col_src->f64; atom_wrap->len = 1; }
+            } else if (atype == RAY_DATE || atype == RAY_TIME || atype == RAY_I32) {
+                atom_wrap = ray_vec_new(atype, 1);
+                if (!RAY_IS_ERR(atom_wrap)) { ((int32_t*)ray_data(atom_wrap))[0] = col_src->i32; atom_wrap->len = 1; }
+            } else if (atype == RAY_BOOL) {
+                atom_wrap = ray_vec_new(RAY_BOOL, 1);
+                if (!RAY_IS_ERR(atom_wrap)) { ((uint8_t*)ray_data(atom_wrap))[0] = col_src->b8; atom_wrap->len = 1; }
+            }
+            if (atom_wrap && !RAY_IS_ERR(atom_wrap)) col_src = atom_wrap;
+        }
+
         /* If the column is already a typed vector, use it directly */
         if (ray_is_vec(col_src)) {
             int64_t nrows = ray_len(col_src);
@@ -3181,6 +3218,11 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
             else if (row_elems[0]->type == -RAY_BOOL) col_type = RAY_BOOL;
             else if (row_elems[0]->type == -RAY_SYM) col_type = RAY_SYM;
             else if (row_elems[0]->type == -RAY_STR) col_type = RAY_STR;
+            else if (row_elems[0]->type == -RAY_GUID) col_type = RAY_GUID;
+            else if (row_elems[0]->type == -RAY_TIMESTAMP) col_type = RAY_TIMESTAMP;
+            else if (row_elems[0]->type == -RAY_DATE) col_type = RAY_DATE;
+            else if (row_elems[0]->type == -RAY_TIME) col_type = RAY_TIME;
+            else if (row_elems[0]->type == -RAY_CHAR) col_type = RAY_CHAR;
         }
         /* Promote I64 → F64 if any element is F64 */
         if (col_type == RAY_I64) {
@@ -3203,6 +3245,13 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
                 const char *sptr = ray_str_ptr(row_elems[j]);
                 size_t slen = ray_str_len(row_elems[j]);
                 col_vec = ray_str_vec_append(col_vec, sptr, slen);
+            } else if (col_type == RAY_GUID) {
+                if (row_elems[j]->type != -RAY_GUID || !row_elems[j]->obj) {
+                    ray_release(col_vec); ray_release(tbl);
+                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
+                    return RAY_ERR_PTR(RAY_ERR_TYPE);
+                }
+                col_vec = ray_vec_append(col_vec, ray_data(row_elems[j]->obj));
             } else {
                 /* Validate each element matches the column type (allow I64→F64 promotion) */
                 int type_ok = (row_elems[j]->type == -col_type);
@@ -3220,7 +3269,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
                 } else if (col_type == RAY_I64) val_ptr = &row_elems[j]->i64;
                 else if (col_type == RAY_F64) val_ptr = &row_elems[j]->f64;
                 else if (col_type == RAY_BOOL) val_ptr = &row_elems[j]->b8;
-                else val_ptr = &row_elems[j]->i64; /* SYM stored as i64 */
+                else val_ptr = &row_elems[j]->i64; /* SYM/TIMESTAMP/DATE/TIME stored as i64 */
                 col_vec = ray_vec_append(col_vec, val_ptr);
             }
             if (RAY_IS_ERR(col_vec))
@@ -3680,8 +3729,260 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             }
         }
 
-        if (n_aggs > 0)
+        if (n_aggs > 0) {
             root = ray_group(g, key_ops, n_keys, agg_ops, agg_ins, n_aggs);
+        } else {
+            /* No explicit aggregations — execute WHERE filter via DAG first,
+             * then do eval-level groupby that takes first of each group. */
+            ray_t* filtered_tbl = tbl;
+            if (where_expr) {
+                root = ray_optimize(g, root);
+                ray_t* fres = ray_execute(g, root);
+                ray_graph_free(g); g = NULL;
+                if (!fres || RAY_IS_ERR(fres)) { ray_release(tbl); return fres ? fres : RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+                if (ray_is_lazy(fres)) fres = ray_lazy_materialize(fres);
+                if (!fres || RAY_IS_ERR(fres)) { ray_release(tbl); return fres ? fres : RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+                filtered_tbl = fres;
+            } else {
+                ray_graph_free(g); g = NULL;
+            }
+
+            /* Get group key column — only handle simple column name references.
+             * For computed expressions (xbar etc.), fall through to DAG-based approach. */
+            int64_t key_sym = -1;
+            if (by_expr->type == -RAY_SYM && (by_expr->attrs & RAY_ATTR_NAME))
+                key_sym = by_expr->i64;
+            else if (by_expr->type == RAY_SYM && ray_len(by_expr) == 1)
+                key_sym = ((int64_t*)ray_data(by_expr))[0];
+
+            if (key_sym < 0) {
+                /* Computed group key — evaluate the by expression to get
+                 * a computed key column, then do eval-level groupby. */
+                /* First, evaluate the key expression with column bindings */
+                int64_t tbl_ncols = ray_table_ncols(filtered_tbl);
+                /* Bind table columns as local variables */
+                ray_env_push_scope();
+                for (int64_t c = 0; c < tbl_ncols; c++) {
+                    int64_t cn = ray_table_col_name(filtered_tbl, c);
+                    ray_t* cv = ray_table_get_col_idx(filtered_tbl, c);
+                    ray_env_set_local(cn, cv);
+                }
+                ray_t* computed_key = ray_eval(by_expr);
+                ray_env_pop_scope();
+                if (!computed_key || RAY_IS_ERR(computed_key)) {
+                    if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                    ray_release(tbl);
+                    return computed_key ? computed_key : RAY_ERR_PTR(RAY_ERR_DOMAIN);
+                }
+                /* Group by the computed key */
+                ray_t* groups2 = ray_group_fn(computed_key);
+                if (!groups2 || RAY_IS_ERR(groups2)) {
+                    ray_release(computed_key);
+                    if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                    ray_release(tbl);
+                    return groups2 ? groups2 : RAY_ERR_PTR(RAY_ERR_DOMAIN);
+                }
+                int64_t gn2 = ray_len(groups2);
+                int64_t ng2 = gn2 / 2;
+                if (ng2 == 0) {
+                    /* Empty result */
+                    ray_release(groups2); ray_release(computed_key);
+                    if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                    ray_release(tbl);
+                    return ray_table_new(0);
+                }
+                ray_t** gi2 = (ray_t**)ray_data(groups2);
+                int64_t fi2[256];
+                for (int64_t g2 = 0; g2 < ng2 && g2 < 256; g2++) {
+                    ray_t* il2 = gi2[g2 * 2 + 1];
+                    int alloc2 = 0;
+                    ray_t* i02 = collection_elem(il2, 0, &alloc2);
+                    fi2[g2] = as_i64(i02);
+                    if (alloc2) ray_release(i02);
+                }
+                /* Build result: computed key column + other columns */
+                /* Get computed key name from by_expr */
+                int64_t ckey_name = ray_sym_intern("+", 1); /* default */
+                if (by_expr->type == RAY_LIST && by_expr->len >= 2) {
+                    ray_t** be = (ray_t**)ray_data(by_expr);
+                    if (be[1]->type == -RAY_SYM && (be[1]->attrs & RAY_ATTR_NAME))
+                        ckey_name = be[1]->i64;
+                }
+                ray_t* res2 = ray_table_new(tbl_ncols);
+                /* Add key column first, using ORIGINAL values (not computed) */
+                {
+                    ray_t* orig_key_col = ray_table_get_col(filtered_tbl, ckey_name);
+                    if (orig_key_col) {
+                        ray_t* kv = ray_vec_new(orig_key_col->type, ng2);
+                        for (int64_t g2 = 0; g2 < ng2; g2++) {
+                            int alloc2 = 0;
+                            ray_t* v2 = collection_elem(orig_key_col, fi2[g2], &alloc2);
+                            store_typed_elem(kv, g2, v2);
+                            if (alloc2) ray_release(v2);
+                        }
+                        kv->len = ng2;
+                        res2 = ray_table_add_col(res2, ckey_name, kv);
+                        ray_release(kv);
+                    }
+                }
+                /* Add non-key columns */
+                for (int64_t c = 0; c < tbl_ncols; c++) {
+                    int64_t cn = ray_table_col_name(filtered_tbl, c);
+                    if (cn == ckey_name) continue;
+                    ray_t* sc = ray_table_get_col_idx(filtered_tbl, c);
+                    ray_t* dc = ray_vec_new(sc->type, ng2);
+                    for (int64_t g2 = 0; g2 < ng2; g2++) {
+                        int alloc2 = 0;
+                        ray_t* v2 = collection_elem(sc, fi2[g2], &alloc2);
+                        store_typed_elem(dc, g2, v2);
+                        if (alloc2) ray_release(v2);
+                    }
+                    dc->len = ng2;
+                    res2 = ray_table_add_col(res2, cn, dc);
+                    ray_release(dc);
+                }
+                ray_release(groups2); ray_release(computed_key);
+                if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                ray_release(tbl);
+                return res2;
+            }
+
+            ray_t* key_col = ray_table_get_col(filtered_tbl, key_sym);
+            if (!key_col) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+
+            ray_t* groups = ray_group_fn(key_col);
+            if (!groups || RAY_IS_ERR(groups)) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return groups ? groups : RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+
+            /* groups is a dict: {key_val: [indices ...], ...} */
+            int64_t gn = ray_len(groups);
+            int64_t n_groups = gn / 2;
+            if (n_groups == 0) {
+                /* No groups — return empty table with correct schema */
+                int64_t ncols0 = ray_table_ncols(filtered_tbl);
+                ray_t* empty = ray_table_new(ncols0);
+                if (!RAY_IS_ERR(empty)) {
+                    /* Add key column first */
+                    ray_t* kc0 = ray_table_get_col(filtered_tbl, key_sym);
+                    if (kc0) {
+                        ray_t* ev0 = ray_vec_new(kc0->type, 0);
+                        if (!RAY_IS_ERR(ev0)) { empty = ray_table_add_col(empty, key_sym, ev0); ray_release(ev0); }
+                    }
+                    /* Add other columns */
+                    for (int64_t c = 0; c < ncols0; c++) {
+                        int64_t cn = ray_table_col_name(filtered_tbl, c);
+                        if (cn == key_sym) continue;
+                        ray_t* sc = ray_table_get_col_idx(filtered_tbl, c);
+                        if (sc->type == RAY_LIST || sc->type == RAY_STR) {
+                            ray_t* ev = (sc->type == RAY_STR) ? ray_vec_new(RAY_STR, 0) : ray_list_new(0);
+                            if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
+                        } else {
+                            ray_t* ev = ray_vec_new(sc->type, 0);
+                            if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
+                        }
+                    }
+                }
+                ray_release(groups);
+                if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                ray_release(tbl);
+                return RAY_IS_ERR(empty) ? empty : empty;
+            }
+            if (n_groups < 0) { ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+            ray_t** grp_items = (ray_t**)ray_data(groups);
+
+            /* Collect first index from each group */
+            int64_t first_idx_stack[256];
+            int64_t* first_idx = (n_groups <= 256) ? first_idx_stack :
+                (int64_t*)ray_data(ray_alloc((size_t)n_groups * sizeof(int64_t)));
+            if (!first_idx) { ray_release(groups); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_OOM); }
+            for (int64_t gi = 0; gi < n_groups; gi++) {
+                ray_t* idx_list = grp_items[gi * 2 + 1];
+                if (!idx_list || RAY_IS_ERR(idx_list) || ray_len(idx_list) == 0) {
+                    first_idx[gi] = 0;
+                    continue;
+                }
+                int alloc = 0;
+                ray_t* idx0 = collection_elem(idx_list, 0, &alloc);
+                first_idx[gi] = as_i64(idx0);
+                if (alloc) ray_release(idx0);
+            }
+
+            /* Build result table: key column first, then others */
+            int64_t ncols = ray_table_ncols(filtered_tbl);
+            ray_t* result = ray_table_new(ncols);
+            if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return result; }
+
+            /* Add key column first */
+            ray_t* key_vec_src = ray_table_get_col(filtered_tbl, key_sym);
+            ray_t* key_vec_dst = ray_vec_new(key_vec_src->type, n_groups);
+            if (RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); ray_release(result); return key_vec_dst; }
+            for (int64_t gi = 0; gi < n_groups; gi++) {
+                int alloc = 0;
+                ray_t* val = collection_elem(key_vec_src, first_idx[gi], &alloc);
+                store_typed_elem(key_vec_dst, gi, val);
+                if (alloc) ray_release(val);
+            }
+            key_vec_dst->len = n_groups;
+            result = ray_table_add_col(result, key_sym, key_vec_dst);
+            ray_release(key_vec_dst);
+
+            /* Add non-key columns */
+            for (int64_t c = 0; c < ncols; c++) {
+                int64_t col_name = ray_table_col_name(filtered_tbl, c);
+                if (col_name == key_sym) continue;
+                ray_t* src_col = ray_table_get_col_idx(filtered_tbl, c);
+                int8_t ct = src_col->type;
+
+                if (ct == RAY_STR) {
+                    /* String column: build list of string atoms */
+                    ray_t* dst = ray_alloc(n_groups * sizeof(ray_t*));
+                    if (!dst) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+                    dst->type = RAY_LIST;
+                    dst->len = n_groups;
+                    ray_t** dout = (ray_t**)ray_data(dst);
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        size_t slen = 0;
+                        const char* sp = ray_str_vec_get(src_col, first_idx[gi], &slen);
+                        dout[gi] = ray_str(sp ? sp : "", sp ? slen : 0);
+                    }
+                    result = ray_table_add_col(result, col_name, dst);
+                    ray_release(dst);
+                } else if (ct == RAY_LIST) {
+                    /* List column: pick items */
+                    ray_t* dst = ray_alloc(n_groups * sizeof(ray_t*));
+                    if (!dst) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+                    dst->type = RAY_LIST;
+                    dst->len = n_groups;
+                    ray_t** dout = (ray_t**)ray_data(dst);
+                    ray_t** src_items = (ray_t**)ray_data(src_col);
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        dout[gi] = src_items[first_idx[gi]];
+                        ray_retain(dout[gi]);
+                    }
+                    result = ray_table_add_col(result, col_name, dst);
+                    ray_release(dst);
+                } else {
+                    /* Typed vector: copy elements at first indices */
+                    ray_t* dst = ray_vec_new(ct, n_groups);
+                    if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst; }
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        int alloc = 0;
+                        ray_t* val = collection_elem(src_col, first_idx[gi], &alloc);
+                        store_typed_elem(dst, gi, val);
+                        if (alloc) ray_release(val);
+                    }
+                    dst->len = n_groups;
+                    result = ray_table_add_col(result, col_name, dst);
+                    ray_release(dst);
+                }
+                if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); return result; }
+            }
+
+            if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32));
+            ray_release(groups);
+            if (filtered_tbl != tbl) ray_release(filtered_tbl);
+            ray_release(tbl);
+            return result;
+        }
     } else if (n_out > 0) {
         /* Projection only (no group by) — select specific columns */
         ray_op_t* col_ops[16];
@@ -4298,6 +4599,49 @@ ray_t* ray_update(ray_t** args, int64_t n) {
         if (RAY_IS_ERR(result)) { ray_release(tbl); return result; }
     }
 
+    /* Add NEW columns from dict (columns not already in the table) */
+    for (int64_t d = 0; d + 1 < dict_n; d += 2) {
+        int64_t kid = dict_elems[d]->i64;
+        if (kid == from_id) continue;
+        /* Check if this column already exists */
+        int exists = 0;
+        for (int64_t c = 0; c < ncols; c++) {
+            if (ray_table_col_name(tbl, c) == kid) { exists = 1; break; }
+        }
+        if (exists) continue;
+
+        /* New column: evaluate expression and add */
+        ray_t* update_expr = dict_elems[d + 1];
+        ray_graph_t* ug = ray_graph_new(tbl);
+        ray_op_t* expr_op = compile_expr_dag(ug, update_expr);
+        if (!expr_op) { ray_release(result); ray_release(tbl); ray_graph_free(ug); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        expr_op = ray_optimize(ug, expr_op);
+        ray_t* expr_vec = ray_execute(ug, expr_op);
+        ray_graph_free(ug);
+        if (RAY_IS_ERR(expr_vec)) { ray_release(result); ray_release(tbl); return expr_vec; }
+
+        /* Broadcast scalar to column */
+        if (expr_vec->type < 0) {
+            int64_t nrows = ray_table_nrows(tbl);
+            int8_t ct = -expr_vec->type;
+            ray_t* bcast = ray_vec_new(ct, nrows);
+            if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
+            size_t esz = ray_elem_size(ct);
+            uint8_t elem[8] = {0};
+            memcpy(elem, &expr_vec->i64, esz > 8 ? 8 : esz);
+            for (int64_t r = 0; r < nrows; r++) {
+                bcast = ray_vec_append(bcast, elem);
+                if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
+            }
+            ray_release(expr_vec);
+            expr_vec = bcast;
+        }
+
+        result = ray_table_add_col(result, kid, expr_vec);
+        ray_release(expr_vec);
+        if (RAY_IS_ERR(result)) { ray_release(tbl); return result; }
+    }
+
     /* Store in-place if from: 't */
     if (inplace_sym >= 0 && result && !RAY_IS_ERR(result)) {
         ray_env_set(inplace_sym, result);
@@ -4309,26 +4653,70 @@ ray_t* ray_update(ray_t** args, int64_t n) {
 /* (insert table (list val1 val2 ...)) — append a row to a table */
 ray_t* ray_insert(ray_t** args, int64_t n) {
     if (n < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-    ray_t* tbl = args[0];
-    ray_t* row = args[1];
 
-    /* In-place insert: (insert 't row) — first arg is a symbol (quoted var name) */
+    /* Special form: detect 'sym (quoted symbol for in-place insert) */
     int64_t inplace_sym = -1;
-    if (tbl->type == -RAY_SYM) {
-        inplace_sym = tbl->i64;
+    ray_t* tbl_raw = args[0];
+    ray_t* tbl;
+
+    /* Detect calling convention: already-evaluated args (from upsert) vs raw parse tree */
+    int already_eval = (tbl_raw && tbl_raw->type == RAY_TABLE);
+
+    if (!already_eval && tbl_raw && tbl_raw->type == -RAY_SYM && !(tbl_raw->attrs & RAY_ATTR_NAME)) {
+        /* Quoted symbol 'sym (no ATTR_NAME) — in-place insert */
+        inplace_sym = tbl_raw->i64;
         tbl = ray_env_get(inplace_sym);
         if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_retain(tbl);
+    } else if (already_eval) {
+        tbl = tbl_raw;
+        ray_retain(tbl);
+    } else {
+        tbl = ray_eval(tbl_raw);
+        if (!tbl || RAY_IS_ERR(tbl)) return tbl ? tbl : RAY_ERR_PTR(RAY_ERR_TYPE);
     }
-    if (tbl->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (!is_list(row)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+
+    /* Evaluate the row argument (skip if already evaluated) */
+    ray_t* row = already_eval ? (ray_retain(args[1]), args[1]) : ray_eval(args[1]);
+    if (!row || RAY_IS_ERR(row)) { ray_release(tbl); return row ? row : RAY_ERR_PTR(RAY_ERR_TYPE); }
+    if (tbl->type != RAY_TABLE) { ray_release(tbl); ray_release(row); return RAY_ERR_PTR(RAY_ERR_TYPE); }
 
     int64_t ncols = ray_table_ncols(tbl);
+    ray_t* row_orig = row; /* keep original eval result for cleanup */
+
+    if (!is_list(row) && row->type != RAY_TABLE) { ray_release(tbl); ray_release(row); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+    /* Table row: convert to list of column vectors */
+    ray_t* tbl_row_list = NULL;
+    if (row->type == RAY_TABLE) {
+        int64_t src_ncols = ray_table_ncols(row);
+        if (src_ncols != ncols) { ray_release(tbl); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        tbl_row_list = ray_alloc(ncols * sizeof(ray_t*));
+        if (!tbl_row_list) { ray_release(tbl); ray_release(row_orig); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        tbl_row_list->type = RAY_LIST;
+        tbl_row_list->len = ncols;
+        ray_t** trl = (ray_t**)ray_data(tbl_row_list);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t col_name = ray_table_col_name(tbl, c);
+            ray_t* src_col = ray_table_get_col(row, col_name);
+            if (!src_col) src_col = ray_table_get_col_idx(row, c);
+            if (!src_col) {
+                tbl_row_list->len = 0;
+                ray_free(tbl_row_list);
+                ray_release(tbl); ray_release(row_orig);
+                return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            }
+            trl[c] = src_col;
+            ray_retain(src_col);
+        }
+        row = tbl_row_list;
+    }
 
     /* Dict row: extract values in table column order */
     ray_t* dict_vals = NULL;
     if (row->attrs & RAY_ATTR_DICT) {
         dict_vals = ray_alloc(ncols * sizeof(ray_t*));
-        if (!dict_vals) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (!dict_vals) { ray_release(tbl); ray_release(row_orig); return RAY_ERR_PTR(RAY_ERR_OOM); }
         dict_vals->type = RAY_LIST;
         dict_vals->len = ncols;
         ray_t** dv = (ray_t**)ray_data(dict_vals);
@@ -4344,10 +4732,22 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
                     break;
                 }
             }
-            if (!dv[c]) {
-                /* Missing key — clean up and error */
-                for (int64_t j = 0; j < c; j++) if (dv[j]) ray_release(dv[j]);
+            /* dv[c] may be NULL for missing keys — will insert null
+             * (but only if ALL dict keys exist as table columns) */
+        }
+        /* Verify all dict keys exist as table columns */
+        for (int64_t d = 0; d + 1 < dict_len; d += 2) {
+            if (dict_items[d]->type != -RAY_SYM) continue;
+            int64_t dk = dict_items[d]->i64;
+            int found_in_tbl = 0;
+            for (int64_t c = 0; c < ncols; c++) {
+                if (ray_table_col_name(tbl, c) == dk) { found_in_tbl = 1; break; }
+            }
+            if (!found_in_tbl) {
+                for (int64_t c = 0; c < ncols; c++) if (dv[c]) ray_release(dv[c]);
+                dict_vals->len = 0;
                 ray_free(dict_vals);
+                ray_release(tbl); ray_release(row_orig);
                 return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             }
         }
@@ -4355,7 +4755,12 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
     }
 
     if (ray_len(row) != ncols) {
-        if (dict_vals) { for (int64_t c = 0; c < ncols; c++) ray_release(((ray_t**)ray_data(dict_vals))[c]); ray_free(dict_vals); }
+        if (dict_vals) {
+            for (int64_t c = 0; c < ncols; c++) ray_release(((ray_t**)ray_data(dict_vals))[c]);
+            dict_vals->len = 0;
+            ray_free(dict_vals);
+        }
+        ray_release(tbl); ray_release(row_orig);
         return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     }
 
@@ -4397,7 +4802,16 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
         }
 
         /* Append new row value(s) — atom for single row, vector for multi-row */
-        if (ray_is_atom(row_elems[c])) {
+        if (!row_elems[c]) {
+            /* NULL = null value for this column type */
+            ray_t* null_atom = NULL;
+            if (ct == RAY_I64) null_atom = ray_i64(INT64_MIN);
+            else if (ct == RAY_F64) { double nan_val = NAN; null_atom = ray_f64(nan_val); }
+            else if (ct == RAY_SYM) null_atom = ray_sym(INT64_MIN);
+            else null_atom = ray_i64(0);
+            new_col = append_atom_to_col(new_col, null_atom);
+            ray_release(null_atom);
+        } else if (ray_is_atom(row_elems[c])) {
             new_col = append_atom_to_col(new_col, row_elems[c]);
         } else if (ray_is_vec(row_elems[c]) || row_elems[c]->type == RAY_LIST) {
             ray_t* merged = ray_concat_fn(new_col, row_elems[c]);
@@ -4413,104 +4827,274 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
         if (RAY_IS_ERR(result)) return result;
     }
 
-    /* In-place: store result back to the variable and return it */
-    if (inplace_sym >= 0) {
-        ray_env_set(inplace_sym, result);
-    }
+    /* Cleanup dict_vals, tbl_row_list, and original row */
     if (dict_vals) {
         ray_t** dv = (ray_t**)ray_data(dict_vals);
         for (int64_t c = 0; c < ncols; c++) if (dv[c]) ray_release(dv[c]);
+        dict_vals->len = 0; /* prevent ray_free from double-releasing children */
         ray_free(dict_vals);
+    }
+    if (tbl_row_list) {
+        ray_t** trl = (ray_t**)ray_data(tbl_row_list);
+        for (int64_t c = 0; c < ncols; c++) if (trl[c]) ray_release(trl[c]);
+        tbl_row_list->len = 0;
+        ray_free(tbl_row_list);
+    }
+    ray_release(tbl);
+    ray_release(row_orig);
+
+    /* In-place: update the variable in the env */
+    if (inplace_sym >= 0 && !RAY_IS_ERR(result)) {
+        ray_env_set(inplace_sym, result);
+        ray_retain(result);
+        return result;
     }
     return result;
 }
 
-/* (upsert table key_col (list val1 val2 ...)) — update row if key matches, else insert */
+/* (upsert table key_col (list val1 val2 ...)) — update row if key matches, else insert.
+ * Special form: first arg may be 'sym for in-place, other args are evaluated. */
 ray_t* ray_upsert(ray_t** args, int64_t n) {
     if (n < 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-    ray_t* tbl = args[0];
-    ray_t* key_sym = args[1];
-    ray_t* row = args[2];
 
-    if (tbl->type != RAY_TABLE) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (key_sym->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (!is_list(row)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    /* Detect calling convention: already-evaluated args (from recursive call) vs raw parse tree */
+    int64_t inplace_sym = -1;
+    ray_t* tbl_raw = args[0];
+    int already_eval = (tbl_raw && tbl_raw->type == RAY_TABLE);
+    ray_t* tbl;
+
+    if (!already_eval && tbl_raw && tbl_raw->type == -RAY_SYM && !(tbl_raw->attrs & RAY_ATTR_NAME)) {
+        inplace_sym = tbl_raw->i64;
+        tbl = ray_env_get(inplace_sym);
+        if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        ray_retain(tbl);
+    } else if (already_eval) {
+        tbl = tbl_raw;
+        ray_retain(tbl);
+    } else {
+        tbl = ray_eval(tbl_raw);
+        if (!tbl || RAY_IS_ERR(tbl)) return tbl ? tbl : RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+
+    ray_t* key_sym = already_eval ? (ray_retain(args[1]), args[1]) : ray_eval(args[1]);
+    if (!key_sym || RAY_IS_ERR(key_sym)) { ray_release(tbl); return key_sym ? key_sym : RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+    ray_t* row = already_eval ? (ray_retain(args[2]), args[2]) : ray_eval(args[2]);
+    if (!row || RAY_IS_ERR(row)) { ray_release(tbl); ray_release(key_sym); return row ? row : RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+    if (tbl->type != RAY_TABLE) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    if (!is_list(row) && row->type != RAY_TABLE) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_TYPE); }
 
     int64_t ncols = ray_table_ncols(tbl);
-    if (ray_len(row) != ncols) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+    /* Table row: iterate row-by-row for proper upsert semantics */
+    if (row->type == RAY_TABLE) {
+        int64_t src_ncols = ray_table_ncols(row);
+        int64_t src_nrows = ray_table_nrows(row);
+        if (src_ncols != ncols) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        /* Get source columns */
+        ray_t* src_cols[64];
+        for (int64_t c = 0; c < ncols && c < 64; c++) {
+            int64_t cn = ray_table_col_name(tbl, c);
+            src_cols[c] = ray_table_get_col(row, cn);
+            if (!src_cols[c]) src_cols[c] = ray_table_get_col_idx(row, c);
+        }
+        ray_t* cur_tbl = tbl;
+        ray_retain(cur_tbl);
+        for (int64_t r = 0; r < src_nrows; r++) {
+            ray_t* single = ray_alloc(ncols * sizeof(ray_t*));
+            if (!single) { ray_release(cur_tbl); ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_OOM); }
+            single->type = RAY_LIST;
+            single->len = ncols;
+            ray_t** sr = (ray_t**)ray_data(single);
+            for (int64_t c = 0; c < ncols; c++) {
+                int alloc = 0;
+                sr[c] = src_cols[c] ? collection_elem(src_cols[c], r, &alloc) : NULL;
+                if (!alloc && sr[c]) ray_retain(sr[c]);
+            }
+            ray_t* upsert_args[3] = { cur_tbl, key_sym, single };
+            ray_t* new_tbl = ray_upsert(upsert_args, 3);
+            for (int64_t c = 0; c < ncols; c++) if (sr[c]) ray_release(sr[c]);
+            single->len = 0;
+            ray_free(single);
+            ray_release(cur_tbl);
+            if (RAY_IS_ERR(new_tbl)) { ray_release(tbl); ray_release(key_sym); ray_release(row); return new_tbl; }
+            cur_tbl = new_tbl;
+        }
+        ray_release(tbl);
+        ray_release(key_sym);
+        ray_release(row);
+        if (inplace_sym >= 0 && !RAY_IS_ERR(cur_tbl)) {
+            ray_env_set(inplace_sym, cur_tbl);
+            ray_retain(cur_tbl);
+        }
+        return cur_tbl;
+    }
+
+    /* Dict row: extract values in column order to create a plain list */
+    ray_t* dict_row_list = NULL;
+    if (row->attrs & RAY_ATTR_DICT) {
+        dict_row_list = ray_alloc(ncols * sizeof(ray_t*));
+        if (!dict_row_list) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        dict_row_list->type = RAY_LIST;
+        dict_row_list->len = ncols;
+        ray_t** drl = (ray_t**)ray_data(dict_row_list);
+        ray_t** dict_items = (ray_t**)ray_data(row);
+        int64_t dict_len = ray_len(row);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t col_name = ray_table_col_name(tbl, c);
+            drl[c] = NULL;
+            for (int64_t d = 0; d + 1 < dict_len; d += 2) {
+                if (dict_items[d]->type == -RAY_SYM && dict_items[d]->i64 == col_name) {
+                    drl[c] = dict_items[d + 1];
+                    ray_retain(drl[c]);
+                    break;
+                }
+            }
+            if (!drl[c]) {
+                for (int64_t j = 0; j < c; j++) if (drl[j]) ray_release(drl[j]);
+                dict_row_list->len = 0;
+                ray_free(dict_row_list);
+                ray_release(tbl); ray_release(key_sym); ray_release(row);
+                return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            }
+        }
+        ray_release(row);
+        row = dict_row_list;
+    }
+
+    if (ray_len(row) != ncols) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
 
     ray_t** row_elems = (ray_t**)ray_data(row);
     int64_t nrows = ray_table_nrows(tbl);
 
-    /* Find the key column index */
-    int64_t key_col_idx = -1;
-    for (int64_t c = 0; c < ncols; c++) {
-        if (ray_table_col_name(tbl, c) == key_sym->i64) {
-            key_col_idx = c;
-            break;
-        }
-    }
-    if (key_col_idx < 0) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
-
-    /* Find the row to update by key value */
-    ray_t* key_col = ray_table_get_col_idx(tbl, key_col_idx);
-    int64_t match_row = -1;
-    int8_t kt = key_col->type;
-    ray_t* key_atom = row_elems[key_col_idx];
-
-    if (kt == RAY_I64) {
-        if (key_atom->type != -RAY_I64) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        int64_t key_val = key_atom->i64;
-        int64_t* kdata = (int64_t*)ray_data(key_col);
-        for (int64_t r = 0; r < nrows; r++) {
-            if (kdata[r] == key_val) { match_row = r; break; }
-        }
-    } else if (kt == RAY_SYM) {
-        if (key_atom->type != -RAY_SYM) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        int64_t key_val = key_atom->i64;
-        for (int64_t r = 0; r < nrows; r++) {
-            if (ray_read_sym(ray_data(key_col), r, key_col->type, key_col->attrs) == key_val) { match_row = r; break; }
-        }
-    } else if (kt == RAY_F64) {
-        if (key_atom->type != -RAY_F64 && key_atom->type != -RAY_I64)
-            return RAY_ERR_PTR(RAY_ERR_TYPE);
-        double needle = (key_atom->type == -RAY_F64) ? key_atom->f64
-                                                        : (double)key_atom->i64;
-        double* kdata = (double*)ray_data(key_col);
-        for (int64_t r = 0; r < nrows; r++) {
-            if (kdata[r] == needle) { match_row = r; break; }
-        }
-    } else if (kt == RAY_BOOL) {
-        if (key_atom->type != -RAY_BOOL) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        uint8_t needle = key_atom->b8;
-        uint8_t* kdata = (uint8_t*)ray_data(key_col);
-        for (int64_t r = 0; r < nrows; r++) {
-            if (kdata[r] == needle) { match_row = r; break; }
-        }
-    } else if (kt == RAY_STR) {
-        if (key_atom->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
-        const char* needle_s = ray_str_ptr(key_atom);
-        size_t needle_len = ray_str_len(key_atom);
-        for (int64_t r = 0; r < nrows; r++) {
-            size_t rlen = 0;
-            const char* rs = ray_str_vec_get(key_col, r, &rlen);
-            if (rlen == needle_len && (needle_len == 0 ||
-                (rs && needle_s && memcmp(rs, needle_s, rlen) == 0))) {
-                match_row = r;
+    /* Determine key columns — integer N means "first N columns are keys" */
+    int64_t n_key_cols = 1;
+    int64_t key_col_indices[16];
+    if (key_sym->type == -RAY_SYM) {
+        key_col_indices[0] = -1;
+        for (int64_t c = 0; c < ncols; c++) {
+            if (ray_table_col_name(tbl, c) == key_sym->i64) {
+                key_col_indices[0] = c;
                 break;
             }
         }
+        if (key_col_indices[0] < 0) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+    } else if (key_sym->type == -RAY_I64) {
+        n_key_cols = key_sym->i64;
+        if (n_key_cols <= 0 || n_key_cols > ncols || n_key_cols > 16) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        for (int64_t k = 0; k < n_key_cols; k++) key_col_indices[k] = k;
+    } else {
+        ray_release(tbl); ray_release(key_sym); ray_release(row);
+        return RAY_ERR_PTR(RAY_ERR_TYPE);
+    }
+
+    /* Multi-row upsert: if row values are vectors, iterate row-by-row */
+    ray_t* key_elem = row_elems[key_col_indices[0]];
+    if (ray_is_vec(key_elem) || key_elem->type == RAY_LIST) {
+        int64_t new_nrows = ray_len(key_elem);
+        ray_t* cur_tbl = tbl;
+        ray_retain(cur_tbl);
+        for (int64_t r = 0; r < new_nrows; r++) {
+            /* Build single-row list from multi-row columns */
+            ray_t* single_row = ray_alloc(ncols * sizeof(ray_t*));
+            if (!single_row) { ray_release(cur_tbl); ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_OOM); }
+            single_row->type = RAY_LIST;
+            single_row->len = ncols;
+            ray_t** sr = (ray_t**)ray_data(single_row);
+            for (int64_t c = 0; c < ncols; c++) {
+                int alloc = 0;
+                sr[c] = collection_elem(row_elems[c], r, &alloc);
+                if (!alloc && sr[c]) ray_retain(sr[c]);
+            }
+            /* Upsert single row into current table */
+            ray_t* upsert_args[3] = { cur_tbl, key_sym, single_row };
+            ray_t* new_tbl = ray_upsert(upsert_args, 3);
+            /* Clean up single_row */
+            for (int64_t c = 0; c < ncols; c++) if (sr[c]) ray_release(sr[c]);
+            single_row->len = 0;
+            ray_free(single_row);
+            ray_release(cur_tbl);
+            if (RAY_IS_ERR(new_tbl)) { ray_release(tbl); ray_release(key_sym); ray_release(row); return new_tbl; }
+            cur_tbl = new_tbl;
+        }
+        ray_release(tbl);
+        ray_release(key_sym);
+        ray_release(row);
+        if (inplace_sym >= 0 && !RAY_IS_ERR(cur_tbl)) {
+            ray_env_set(inplace_sym, cur_tbl);
+            ray_retain(cur_tbl);
+        }
+        return cur_tbl;
+    }
+
+    /* Type-check key columns before searching */
+    for (int64_t k = 0; k < n_key_cols; k++) {
+        int64_t kci = key_col_indices[k];
+        ray_t* key_col = ray_table_get_col_idx(tbl, kci);
+        ray_t* key_atom = row_elems[kci];
+        int8_t kt = key_col->type;
+        if (kt == RAY_STR && key_atom->type != -RAY_STR) {
+            ray_release(tbl); ray_release(key_sym); ray_release(row);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        if (kt == RAY_SYM && key_atom->type != -RAY_SYM) {
+            ray_release(tbl); ray_release(key_sym); ray_release(row);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+    }
+
+    /* Find the row to update by composite key match */
+    int64_t match_row = -1;
+    for (int64_t r = 0; r < nrows; r++) {
+        int match = 1;
+        for (int64_t k = 0; k < n_key_cols && match; k++) {
+            int64_t kci = key_col_indices[k];
+            ray_t* key_col = ray_table_get_col_idx(tbl, kci);
+            ray_t* key_atom = row_elems[kci];
+            int8_t kt = key_col->type;
+            if (kt == RAY_F64) {
+                double needle = (key_atom->type == -RAY_F64) ? key_atom->f64 : (double)key_atom->i64;
+                if (((double*)ray_data(key_col))[r] != needle) match = 0;
+            } else if (kt == RAY_SYM) {
+                if (ray_read_sym(ray_data(key_col), r, key_col->type, key_col->attrs) != key_atom->i64) match = 0;
+            } else if (kt == RAY_STR) {
+                const char* ns = ray_str_ptr(key_atom);
+                size_t nl = ray_str_len(key_atom);
+                size_t rl = 0;
+                const char* rs = ray_str_vec_get(key_col, r, &rl);
+                if (rl != nl || (nl > 0 && (!rs || !ns || memcmp(rs, ns, nl) != 0))) match = 0;
+            } else {
+                int64_t needle = elem_as_i64(key_atom);
+                int64_t existing = (kt == RAY_I64 || kt == RAY_TIMESTAMP) ?
+                    ((int64_t*)ray_data(key_col))[r] :
+                    (kt == RAY_I32 || kt == RAY_DATE || kt == RAY_TIME) ?
+                    (int64_t)((int32_t*)ray_data(key_col))[r] :
+                    (kt == RAY_BOOL) ? (int64_t)((uint8_t*)ray_data(key_col))[r] :
+                    ((int64_t*)ray_data(key_col))[r];
+                if (existing != needle) match = 0;
+            }
+        }
+        if (match) { match_row = r; break; }
     }
 
     if (match_row < 0) {
-        /* Key not found — insert: ray_insert expects (table, row) */
+        /* Key not found — insert: pass pre-evaluated args */
         ray_t* insert_args[2] = { tbl, row };
-        return ray_insert(insert_args, 2);
+        ray_t* result = ray_insert(insert_args, 2);
+        ray_release(tbl);
+        ray_release(key_sym);
+        ray_release(row);
+        if (inplace_sym >= 0 && !RAY_IS_ERR(result)) {
+            ray_env_set(inplace_sym, result);
+            ray_retain(result);
+        }
+        return result;
     }
 
     /* Key found — update that row */
     ray_t* result = ray_table_new(ncols);
-    if (RAY_IS_ERR(result)) return result;
+    if (RAY_IS_ERR(result)) { ray_release(tbl); ray_release(key_sym); ray_release(row); return result; }
 
     for (int64_t c = 0; c < ncols; c++) {
         int64_t col_name = ray_table_col_name(tbl, c);
@@ -4518,7 +5102,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
         int8_t ct = orig_col->type;
 
         ray_t* new_col = ray_vec_new(ct, nrows);
-        if (RAY_IS_ERR(new_col)) { ray_release(result); return new_col; }
+        if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(tbl); ray_release(key_sym); ray_release(row); return new_col; }
 
         if (ct == RAY_STR) {
             for (int64_t r = 0; r < nrows; r++) {
@@ -4529,7 +5113,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
                     const char* sp = ray_str_vec_get(orig_col, r, &slen);
                     new_col = ray_str_vec_append(new_col, sp ? sp : "", sp ? slen : 0);
                 }
-                if (RAY_IS_ERR(new_col)) { ray_release(result); return new_col; }
+                if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(tbl); ray_release(key_sym); ray_release(row); return new_col; }
             }
         } else if (ct == RAY_SYM) {
             for (int64_t r = 0; r < nrows; r++) {
@@ -4539,7 +5123,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
                     int64_t sym_val = ray_read_sym(ray_data(orig_col), r, orig_col->type, orig_col->attrs);
                     new_col = ray_vec_append(new_col, &sym_val);
                 }
-                if (RAY_IS_ERR(new_col)) { ray_release(result); return new_col; }
+                if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(tbl); ray_release(key_sym); ray_release(row); return new_col; }
             }
         } else {
             size_t elem_sz = (ct == RAY_BOOL) ? 1 : 8;
@@ -4550,15 +5134,23 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
                 } else {
                     new_col = ray_vec_append(new_col, src + r * elem_sz);
                 }
-                if (RAY_IS_ERR(new_col)) { ray_release(result); return new_col; }
+                if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(tbl); ray_release(key_sym); ray_release(row); return new_col; }
             }
         }
 
         result = ray_table_add_col(result, col_name, new_col);
         ray_release(new_col);
-        if (RAY_IS_ERR(result)) return result;
+        if (RAY_IS_ERR(result)) { ray_release(tbl); ray_release(key_sym); ray_release(row); return result; }
     }
 
+    ray_release(tbl);
+    ray_release(key_sym);
+    ray_release(row);
+
+    if (inplace_sym >= 0 && !RAY_IS_ERR(result)) {
+        ray_env_set(inplace_sym, result);
+        ray_retain(result);
+    }
     return result;
 }
 
@@ -4574,6 +5166,13 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
     ray_t* left_tbl  = args[0];
     ray_t* right_tbl = args[1];
     ray_t* keys      = args[2];
+
+    /* Detect alternative calling convention: (join [keys] t1 t2) */
+    if (left_tbl->type != RAY_TABLE && args[1]->type == RAY_TABLE && args[2]->type == RAY_TABLE) {
+        keys      = args[0];
+        left_tbl  = args[1];
+        right_tbl = args[2];
+    }
 
     if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -4627,10 +5226,178 @@ ray_t* ray_inner_join(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
 ray_t* ray_window_join(ray_t** args, int64_t n) {
     if (n < 4) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
 
-    ray_t* left_tbl  = args[0];
-    ray_t* right_tbl = args[1];
-    ray_t* eq_keys   = args[2];
-    ray_t* time_sym  = args[3];
+    /* Special form: evaluate first 4 args, keep agg dict (args[4]) unevaluated */
+    ray_t* eargs[5];
+    for (int i = 0; i < 4 && i < (int)n; i++) {
+        eargs[i] = ray_eval(args[i]);
+        if (!eargs[i] || RAY_IS_ERR(eargs[i])) {
+            for (int j = 0; j < i; j++) ray_release(eargs[j]);
+            return eargs[i] ? eargs[i] : RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+    }
+    eargs[4] = (n >= 5) ? args[4] : NULL; /* agg dict stays unevaluated */
+
+    /* Detect rayforce calling convention:
+     * (window-join [eq+time keys] intervals left right {agg})
+     * vs teide convention:
+     * (window-join left right [eq-keys] time-sym) */
+    if (n >= 5 && ray_is_vec(eargs[0]) && eargs[0]->type == RAY_SYM &&
+        eargs[2]->type == RAY_TABLE && eargs[3]->type == RAY_TABLE) {
+        /* Rayforce convention: implement at eval level */
+        ray_t* keys_vec = eargs[0];      /* [Sym Time] — equality + time keys */
+        ray_t* intervals = eargs[1];     /* list of [lo hi] time windows */
+        ray_t* left_tbl = eargs[2];      /* trades */
+        ray_t* right_tbl = eargs[3];     /* quotes */
+        ray_t* agg_dict = eargs[4];      /* unevaluated dict */
+
+        int64_t nkeys = ray_len(keys_vec);
+        if (nkeys < 2) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        int64_t* key_ids = (int64_t*)ray_data(keys_vec);
+
+        /* Last key is the time key, rest are equality keys */
+        int64_t time_key = key_ids[nkeys - 1];
+        int64_t n_eq = nkeys - 1;
+
+        int64_t left_nrows = ray_table_nrows(left_tbl);
+        int64_t right_nrows = ray_table_nrows(right_tbl);
+
+        /* Get left time column */
+        ray_t* left_time = ray_table_get_col(left_tbl, time_key);
+        ray_t* right_time = ray_table_get_col(right_tbl, time_key);
+        if (!left_time || !right_time) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+        /* Get equality columns */
+        ray_t* left_eq[16], *right_eq[16];
+        for (int64_t e = 0; e < n_eq && e < 16; e++) {
+            left_eq[e] = ray_table_get_col(left_tbl, key_ids[e]);
+            right_eq[e] = ray_table_get_col(right_tbl, key_ids[e]);
+            if (!left_eq[e] || !right_eq[e]) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        }
+
+        /* Get aggregation info from dict */
+        int64_t agg_result_name = -1;
+        uint16_t agg_op = OP_MIN;
+        int64_t agg_src_col = -1;
+        if (agg_dict && agg_dict->type == RAY_LIST && (agg_dict->attrs & RAY_ATTR_DICT)) {
+            ray_t** ad = (ray_t**)ray_data(agg_dict);
+            int64_t adn = ray_len(agg_dict);
+            if (adn >= 2) {
+                agg_result_name = ad[0]->i64; /* minBid */
+                ray_t* agg_expr = ad[1]; /* (min Bid) */
+                if (agg_expr->type == RAY_LIST && agg_expr->len >= 2) {
+                    ray_t** ae = (ray_t**)ray_data(agg_expr);
+                    if (ae[0]->type == -RAY_SYM && (ae[0]->attrs & RAY_ATTR_NAME))
+                        agg_op = resolve_agg_opcode(ae[0]->i64);
+                    if (ae[1]->type == -RAY_SYM && (ae[1]->attrs & RAY_ATTR_NAME))
+                        agg_src_col = ae[1]->i64;
+                }
+            }
+        }
+
+        ray_t* right_agg_col = (agg_src_col >= 0) ? ray_table_get_col(right_tbl, agg_src_col) : NULL;
+        if (agg_src_col >= 0 && !right_agg_col) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+        /* For each left row, find matching right rows within the time window */
+        /* intervals is a list of [lo, hi] pairs, one per left row */
+        ray_t* result_agg = ray_vec_new(RAY_I64, left_nrows);
+        if (RAY_IS_ERR(result_agg)) return result_agg;
+
+        for (int64_t lr = 0; lr < left_nrows; lr++) {
+            /* Get interval for this left row */
+            int alloc_iv = 0;
+            ray_t* iv = collection_elem(intervals, lr, &alloc_iv);
+            if (!iv || RAY_IS_ERR(iv) || ray_len(iv) < 2) {
+                if (alloc_iv && iv) ray_release(iv);
+                ray_release(result_agg);
+                return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            }
+            int alloc_lo = 0, alloc_hi = 0;
+            ray_t* lo_atom = collection_elem(iv, 0, &alloc_lo);
+            ray_t* hi_atom = collection_elem(iv, 1, &alloc_hi);
+            int64_t lo = as_i64(lo_atom);
+            int64_t hi = as_i64(hi_atom);
+            if (alloc_lo) ray_release(lo_atom);
+            if (alloc_hi) ray_release(hi_atom);
+            if (alloc_iv) ray_release(iv);
+
+            /* Find right rows matching equality keys AND time in [lo, hi] */
+            int64_t best_val_i = INT64_MAX;
+            double best_val_f = 1e300;
+            int found = 0;
+            int is_f64 = (right_agg_col && right_agg_col->type == RAY_F64);
+
+            for (int64_t rr = 0; rr < right_nrows; rr++) {
+                /* Check equality keys */
+                int eq_match = 1;
+                for (int64_t e = 0; e < n_eq && eq_match; e++) {
+                    int64_t lv = (left_eq[e]->type == RAY_SYM) ?
+                        ((int64_t*)ray_data(left_eq[e]))[lr] :
+                        ((int64_t*)ray_data(left_eq[e]))[lr];
+                    int64_t rv = (right_eq[e]->type == RAY_SYM) ?
+                        ((int64_t*)ray_data(right_eq[e]))[rr] :
+                        ((int64_t*)ray_data(right_eq[e]))[rr];
+                    if (lv != rv) eq_match = 0;
+                }
+                if (!eq_match) continue;
+
+                /* Check time window — TIME is i32, TIMESTAMP is i64 */
+                int64_t rt;
+                if (right_time->type == RAY_TIME || right_time->type == RAY_I32 || right_time->type == RAY_DATE)
+                    rt = (int64_t)((int32_t*)ray_data(right_time))[rr];
+                else
+                    rt = ((int64_t*)ray_data(right_time))[rr];
+                if (rt < lo || rt > hi) continue;
+
+                /* Apply aggregation */
+                if (right_agg_col) {
+                    if (is_f64) {
+                        double v = ((double*)ray_data(right_agg_col))[rr];
+                        if (!found || (agg_op == OP_MIN && v < best_val_f) ||
+                            (agg_op == OP_MAX && v > best_val_f))
+                            best_val_f = v;
+                    } else {
+                        int64_t v = ((int64_t*)ray_data(right_agg_col))[rr];
+                        if (!found || (agg_op == OP_MIN && v < best_val_i) ||
+                            (agg_op == OP_MAX && v > best_val_i))
+                            best_val_i = v;
+                    }
+                    found = 1;
+                }
+            }
+
+            /* Store result */
+            if (is_f64) {
+                double v = found ? best_val_f : NAN;
+                result_agg = ray_vec_append(result_agg, &v);
+            } else {
+                int64_t v = found ? best_val_i : INT64_MIN;
+                result_agg = ray_vec_append(result_agg, &v);
+            }
+            if (RAY_IS_ERR(result_agg)) return result_agg;
+        }
+
+        /* Build result table: left table + aggregation column */
+        int64_t ncols = ray_table_ncols(left_tbl);
+        ray_t* result = ray_table_new(ncols + 1);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t cn = ray_table_col_name(left_tbl, c);
+            ray_t* cv = ray_table_get_col_idx(left_tbl, c);
+            ray_retain(cv);
+            result = ray_table_add_col(result, cn, cv);
+            ray_release(cv);
+        }
+        if (agg_result_name >= 0) {
+            result = ray_table_add_col(result, agg_result_name, result_agg);
+        }
+        ray_release(result_agg);
+        for (int i = 0; i < 4; i++) ray_release(eargs[i]);
+        return result;
+    }
+
+    ray_t* left_tbl  = eargs[0];
+    ray_t* right_tbl = eargs[1];
+    ray_t* eq_keys   = eargs[2];
+    ray_t* time_sym  = eargs[3];
 
     if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
         return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -5336,10 +6103,10 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             long long frac = 0;
             /* Try both formats: YYYY-MM-DD and YYYY.MM.DD */
             int parsed = sscanf(sp, "%d-%d-%d", &y, &m, &d);
-            int is_ray_fmt = 0;
+            /* parse date: try YYYY-MM-DD then YYYY.MM.DD */
             if (parsed != 3) {
                 parsed = sscanf(sp, "%d.%d.%d", &y, &m, &d);
-                if (parsed == 3) is_ray_fmt = 1;
+                /* YYYY.MM.DD format */
             }
             if (parsed != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
             /* Parse optional time part */
@@ -7606,14 +8373,14 @@ static void ray_register_builtins(void) {
     /* Query operations */
     register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
     register_vary("update",    RAY_FN_SPECIAL_FORM, ray_update);
-    register_vary("insert",    RAY_FN_NONE, ray_insert);
-    register_vary("upsert",    RAY_FN_NONE, ray_upsert);
+    register_vary("insert",    RAY_FN_SPECIAL_FORM, ray_insert);
+    register_vary("upsert",    RAY_FN_SPECIAL_FORM, ray_upsert);
     register_binary("xbar",    RAY_FN_ATOMIC, ray_xbar);
 
     /* Join operations */
     register_vary("left-join",   RAY_FN_NONE, ray_left_join);
     register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
-    register_vary("window-join", RAY_FN_NONE, ray_window_join);
+    register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);
 
     /* I/O builtins */
