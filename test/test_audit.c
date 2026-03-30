@@ -1131,7 +1131,9 @@ static MunitResult test_join_empty_table(const void* params, void* data) {
  * Category 4: Optimizer correctness tests
  * ----------------------------------------------------------------------- */
 
-/* Integer division by zero: val / 0 → each element should produce 0 → SUM = 0. */
+/* Integer division by zero: val / 0 → each element should produce NaN (F64 null)
+ * because ray_div forces F64 output, and F64 div-by-zero returns NaN.
+ * SUM of all-NaN = NaN. */
 static MunitResult test_const_fold_div_zero(const void* params, void* data) {
     (void)params; (void)data;
     ray_heap_init();
@@ -1145,7 +1147,7 @@ static MunitResult test_const_fold_div_zero(const void* params, void* data) {
 
     ray_t* result = ray_execute(g, s);
     munit_assert_false(RAY_IS_ERR(result));
-    munit_assert_int(result->i64, ==, 0);
+    munit_assert_true(isnan(result->f64));
 
     ray_release(result);
     ray_graph_free(g);

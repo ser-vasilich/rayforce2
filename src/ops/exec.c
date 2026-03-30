@@ -457,8 +457,8 @@ static bool eval_const_numeric_expr(ray_graph_t* g, ray_op_t* op,
             case OP_ADD: r = lv + rv; break;
             case OP_SUB: r = lv - rv; break;
             case OP_MUL: r = lv * rv; break;
-            case OP_DIV: r = rv != 0.0 ? lv / rv : 0.0; break;
-            case OP_MOD: r = rv != 0.0 ? fmod(lv, rv) : 0.0; break;
+            case OP_DIV: r = rv != 0.0 ? lv / rv : NAN; break;
+            case OP_MOD: r = rv != 0.0 ? fmod(lv, rv) : NAN; break;
             case OP_MIN2: r = lv < rv ? lv : rv; break;
             case OP_MAX2: r = lv > rv ? lv : rv; break;
             default: return false;
@@ -471,12 +471,18 @@ static bool eval_const_numeric_expr(ray_graph_t* g, ray_op_t* op,
 
     int64_t r = 0;
     switch (op->opcode) {
-        /* Use uint64_t casts to get defined wrapping on overflow */
-        case OP_ADD: r = (int64_t)((uint64_t)li + (uint64_t)ri); break;
-        case OP_SUB: r = (int64_t)((uint64_t)li - (uint64_t)ri); break;
-        case OP_MUL: r = (int64_t)((uint64_t)li * (uint64_t)ri); break;
-        case OP_DIV: r = (ri != 0 && !(li == INT64_MIN && ri == -1)) ? li / ri : 0; break;
-        case OP_MOD: r = (ri != 0 && !(li == INT64_MIN && ri == -1)) ? li % ri : 0; break;
+        /* Use uint64_t casts to get defined wrapping on overflow; propagate INT64_MIN null */
+        case OP_ADD: r = (li==INT64_MIN||ri==INT64_MIN) ? INT64_MIN : (int64_t)((uint64_t)li + (uint64_t)ri); break;
+        case OP_SUB: r = (li==INT64_MIN||ri==INT64_MIN) ? INT64_MIN : (int64_t)((uint64_t)li - (uint64_t)ri); break;
+        case OP_MUL: r = (li==INT64_MIN||ri==INT64_MIN) ? INT64_MIN : (int64_t)((uint64_t)li * (uint64_t)ri); break;
+        case OP_DIV:
+            if (ri==0||li==INT64_MIN||ri==INT64_MIN) { r = INT64_MIN; }
+            else { r = li/ri; if ((li^ri)<0 && r*ri!=li) r--; }
+            break;
+        case OP_MOD:
+            if (ri==0||li==INT64_MIN||ri==INT64_MIN) { r = INT64_MIN; }
+            else { r = li%ri; if (r && (r^ri)<0) r+=ri; }
+            break;
         case OP_MIN2: r = li < ri ? li : ri; break;
         case OP_MAX2: r = li > ri ? li : ri; break;
         default: return false;
@@ -1017,8 +1023,8 @@ static void expr_exec_binary(uint8_t opcode, int8_t dt, void* dp,
             case OP_ADD: for (int64_t j = 0; j < n; j++) d[j] = a[j] + b[j]; break;
             case OP_SUB: for (int64_t j = 0; j < n; j++) d[j] = a[j] - b[j]; break;
             case OP_MUL: for (int64_t j = 0; j < n; j++) d[j] = a[j] * b[j]; break;
-            case OP_DIV: for (int64_t j = 0; j < n; j++) d[j] = b[j] != 0 ? a[j] / b[j] : 0; break;
-            case OP_MOD: for (int64_t j = 0; j < n; j++) d[j] = b[j] != 0 ? fmod(a[j], b[j]) : 0; break;
+            case OP_DIV: for (int64_t j = 0; j < n; j++) d[j] = b[j] != 0 ? a[j] / b[j] : NAN; break;
+            case OP_MOD: for (int64_t j = 0; j < n; j++) d[j] = b[j] != 0 ? fmod(a[j], b[j]) : NAN; break;
             case OP_MIN2: for (int64_t j = 0; j < n; j++) d[j] = a[j] < b[j] ? a[j] : b[j]; break;
             case OP_MAX2: for (int64_t j = 0; j < n; j++) d[j] = a[j] > b[j] ? a[j] : b[j]; break;
             default: break;
@@ -1028,12 +1034,22 @@ static void expr_exec_binary(uint8_t opcode, int8_t dt, void* dp,
         const int64_t* a = (const int64_t*)ap;
         const int64_t* b = (const int64_t*)bp;
         switch (opcode) {
-            /* Use uint64_t casts to get defined wrapping on overflow */
-            case OP_ADD: for (int64_t j = 0; j < n; j++) d[j] = (int64_t)((uint64_t)a[j] + (uint64_t)b[j]); break;
-            case OP_SUB: for (int64_t j = 0; j < n; j++) d[j] = (int64_t)((uint64_t)a[j] - (uint64_t)b[j]); break;
-            case OP_MUL: for (int64_t j = 0; j < n; j++) d[j] = (int64_t)((uint64_t)a[j] * (uint64_t)b[j]); break;
-            case OP_DIV: for (int64_t j = 0; j < n; j++) d[j] = (b[j] != 0 && !(a[j] == INT64_MIN && b[j] == -1)) ? a[j] / b[j] : 0; break;
-            case OP_MOD: for (int64_t j = 0; j < n; j++) d[j] = (b[j] != 0 && !(a[j] == INT64_MIN && b[j] == -1)) ? a[j] % b[j] : 0; break;
+            /* Use uint64_t casts to get defined wrapping on overflow; propagate INT64_MIN null */
+            case OP_ADD: { int64_t N = INT64_MIN; for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N||b[j]==N) ? N : (int64_t)((uint64_t)a[j] + (uint64_t)b[j]); } break;
+            case OP_SUB: { int64_t N = INT64_MIN; for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N||b[j]==N) ? N : (int64_t)((uint64_t)a[j] - (uint64_t)b[j]); } break;
+            case OP_MUL: { int64_t N = INT64_MIN; for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N||b[j]==N) ? N : (int64_t)((uint64_t)a[j] * (uint64_t)b[j]); } break;
+            case OP_DIV: { int64_t N = INT64_MIN; for (int64_t j = 0; j < n; j++) {
+                if (b[j]==0||a[j]==N||b[j]==N) { d[j]=N; continue; }
+                int64_t q = a[j]/b[j];
+                if ((a[j]^b[j])<0 && q*b[j]!=a[j]) q--;
+                d[j] = q;
+            } } break;
+            case OP_MOD: { int64_t N = INT64_MIN; for (int64_t j = 0; j < n; j++) {
+                if (b[j]==0||a[j]==N||b[j]==N) { d[j]=N; continue; }
+                int64_t m = a[j]%b[j];
+                if (m && (m^b[j])<0) m+=b[j];
+                d[j] = m;
+            } } break;
             case OP_MIN2: for (int64_t j = 0; j < n; j++) d[j] = a[j] < b[j] ? a[j] : b[j]; break;
             case OP_MAX2: for (int64_t j = 0; j < n; j++) d[j] = a[j] > b[j] ? a[j] : b[j]; break;
             default: break;
@@ -1043,25 +1059,30 @@ static void expr_exec_binary(uint8_t opcode, int8_t dt, void* dp,
         if (t1 == RAY_F64) {
             const double* a = (const double*)ap;
             const double* b = (const double*)bp;
+            /* Null-aware F64 comparisons: NaN is null sentinel.
+             * null == null → true, null < non-null → true, non-null > null → true */
+            #define F64_ISNAN(x) ((x) != (x))
             switch (opcode) {
-                case OP_EQ: for (int64_t j = 0; j < n; j++) d[j] = a[j] == b[j]; break;
-                case OP_NE: for (int64_t j = 0; j < n; j++) d[j] = a[j] != b[j]; break;
-                case OP_LT: for (int64_t j = 0; j < n; j++) d[j] = a[j] < b[j]; break;
-                case OP_LE: for (int64_t j = 0; j < n; j++) d[j] = a[j] <= b[j]; break;
-                case OP_GT: for (int64_t j = 0; j < n; j++) d[j] = a[j] > b[j]; break;
-                case OP_GE: for (int64_t j = 0; j < n; j++) d[j] = a[j] >= b[j]; break;
+                case OP_EQ: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 1 : (F64_ISNAN(a[j])||F64_ISNAN(b[j])) ? 0 : a[j]==b[j]; break;
+                case OP_NE: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 0 : (F64_ISNAN(a[j])||F64_ISNAN(b[j])) ? 1 : a[j]!=b[j]; break;
+                case OP_LT: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 0 : F64_ISNAN(a[j]) ? 1 : F64_ISNAN(b[j]) ? 0 : a[j]<b[j]; break;
+                case OP_LE: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 1 : F64_ISNAN(a[j]) ? 1 : F64_ISNAN(b[j]) ? 0 : a[j]<=b[j]; break;
+                case OP_GT: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 0 : F64_ISNAN(b[j]) ? 1 : F64_ISNAN(a[j]) ? 0 : a[j]>b[j]; break;
+                case OP_GE: for (int64_t j = 0; j < n; j++) d[j] = (F64_ISNAN(a[j])&&F64_ISNAN(b[j])) ? 1 : F64_ISNAN(b[j]) ? 1 : F64_ISNAN(a[j]) ? 0 : a[j]>=b[j]; break;
                 default: break;
             }
+            #undef F64_ISNAN
         } else if (t1 == RAY_I64) {
             const int64_t* a = (const int64_t*)ap;
             const int64_t* b = (const int64_t*)bp;
+            int64_t N = INT64_MIN;
             switch (opcode) {
-                case OP_EQ: for (int64_t j = 0; j < n; j++) d[j] = a[j] == b[j]; break;
-                case OP_NE: for (int64_t j = 0; j < n; j++) d[j] = a[j] != b[j]; break;
-                case OP_LT: for (int64_t j = 0; j < n; j++) d[j] = a[j] < b[j]; break;
-                case OP_LE: for (int64_t j = 0; j < n; j++) d[j] = a[j] <= b[j]; break;
-                case OP_GT: for (int64_t j = 0; j < n; j++) d[j] = a[j] > b[j]; break;
-                case OP_GE: for (int64_t j = 0; j < n; j++) d[j] = a[j] >= b[j]; break;
+                case OP_EQ: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 1 : (a[j]==N||b[j]==N) ? 0 : a[j]==b[j]; break;
+                case OP_NE: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 0 : (a[j]==N||b[j]==N) ? 1 : a[j]!=b[j]; break;
+                case OP_LT: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 0 : a[j]==N ? 1 : b[j]==N ? 0 : a[j]<b[j]; break;
+                case OP_LE: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 1 : a[j]==N ? 1 : b[j]==N ? 0 : a[j]<=b[j]; break;
+                case OP_GT: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 0 : b[j]==N ? 1 : a[j]==N ? 0 : a[j]>b[j]; break;
+                case OP_GE: for (int64_t j = 0; j < n; j++) d[j] = (a[j]==N&&b[j]==N) ? 1 : b[j]==N ? 1 : a[j]==N ? 0 : a[j]>=b[j]; break;
                 default: break;
             }
         } else { /* both bool */
@@ -1369,6 +1390,19 @@ static ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input)
             for (int64_t i = 0; i < n; i++) {
                 ((uint8_t*)dst)[i] = !((uint8_t*)m.morsel_ptr)[i];
             }
+        } else if (op->opcode == OP_CAST) {
+            /* CAST from narrow integer types (I32/I16/U8/BOOL) to I64/F64 */
+            for (int64_t i = 0; i < n; i++) {
+                int64_t v = 0;
+                if (in_type == RAY_I32 || in_type == RAY_DATE || in_type == RAY_TIME)
+                    v = (int64_t)((int32_t*)m.morsel_ptr)[i];
+                else if (in_type == RAY_I16)
+                    v = (int64_t)((int16_t*)m.morsel_ptr)[i];
+                else if (in_type == RAY_U8 || in_type == RAY_BOOL)
+                    v = (int64_t)((uint8_t*)m.morsel_ptr)[i];
+                if (out_type == RAY_I64)       ((int64_t*)dst)[i] = v;
+                else if (out_type == RAY_F64)  ((double*)dst)[i] = (double)v;
+            }
         }
 
         out_off += n;
@@ -1565,8 +1599,8 @@ static void binary_range(ray_op_t* op, int8_t out_type,
                 case OP_ADD: r = lv + rv; break;
                 case OP_SUB: r = lv - rv; break;
                 case OP_MUL: r = lv * rv; break;
-                case OP_DIV: r = rv != 0.0 ? lv / rv : 0.0; break;
-                case OP_MOD: r = rv != 0.0 ? fmod(lv, rv) : 0.0; break;
+                case OP_DIV: r = rv != 0.0 ? lv / rv : NAN; break;
+                case OP_MOD: r = rv != 0.0 ? fmod(lv, rv) : NAN; break;
                 case OP_MIN2: r = lv < rv ? lv : rv; break;
                 case OP_MAX2: r = lv > rv ? lv : rv; break;
                 default: r = 0.0; break;
@@ -1574,31 +1608,62 @@ static void binary_range(ray_op_t* op, int8_t out_type,
             ((double*)dst)[i] = r;
         } else if (out_type == RAY_I64) {
             int64_t li = (int64_t)lv, ri = (int64_t)rv;
+            int64_t N = INT64_MIN;
             int64_t r;
             switch (op->opcode) {
-                /* Use uint64_t casts to get defined wrapping on overflow */
-                case OP_ADD: r = (int64_t)((uint64_t)li + (uint64_t)ri); break;
-                case OP_SUB: r = (int64_t)((uint64_t)li - (uint64_t)ri); break;
-                case OP_MUL: r = (int64_t)((uint64_t)li * (uint64_t)ri); break;
-                case OP_DIV: r = (ri != 0 && !(li == INT64_MIN && ri == -1)) ? li / ri : 0; break;
-                case OP_MOD: r = (ri != 0 && !(li == INT64_MIN && ri == -1)) ? li % ri : 0; break;
+                /* Null propagation + uint64_t wrapping for defined overflow */
+                case OP_ADD: r = (li==N||ri==N) ? N : (int64_t)((uint64_t)li + (uint64_t)ri); break;
+                case OP_SUB: r = (li==N||ri==N) ? N : (int64_t)((uint64_t)li - (uint64_t)ri); break;
+                case OP_MUL: r = (li==N||ri==N) ? N : (int64_t)((uint64_t)li * (uint64_t)ri); break;
+                case OP_DIV:
+                    if (ri==0||li==N||ri==N) { r = N; }
+                    else { r = li/ri; if ((li^ri)<0 && r*ri!=li) r--; }
+                    break;
+                case OP_MOD:
+                    if (ri==0||li==N||ri==N) { r = N; }
+                    else { r = li%ri; if (r && (r^ri)<0) r+=ri; }
+                    break;
                 case OP_MIN2: r = li < ri ? li : ri; break;
                 case OP_MAX2: r = li > ri ? li : ri; break;
                 default: r = 0; break;
             }
             ((int64_t*)dst)[i] = r;
         } else if (out_type == RAY_BOOL) {
+            /* Read raw I64 values directly for null-aware comparison
+             * when both operands are I64/I32-family (not F64). */
+            int src_is_i64 = (lp_i64 || lp_i32 || lp_u32 || lp_i16 ||
+                              (l_scalar && lhs->type != -RAY_F64 && lhs->type != RAY_F64)) &&
+                             (rp_i64 || rp_i32 || rp_u32 || rp_i16 ||
+                              (r_scalar && rhs->type != -RAY_F64 && rhs->type != RAY_F64));
+            int64_t N = INT64_MIN;
+            int64_t li64 = (int64_t)lv, ri64 = (int64_t)rv;
             uint8_t r;
-            switch (op->opcode) {
-                case OP_EQ:  r = lv == rv; break;
-                case OP_NE:  r = lv != rv; break;
-                case OP_LT:  r = lv < rv; break;
-                case OP_LE:  r = lv <= rv; break;
-                case OP_GT:  r = lv > rv; break;
-                case OP_GE:  r = lv >= rv; break;
-                case OP_AND: r = (uint8_t)lv && (uint8_t)rv; break;
-                case OP_OR:  r = (uint8_t)lv || (uint8_t)rv; break;
-                default: r = 0; break;
+            if (src_is_i64) {
+                switch (op->opcode) {
+                    case OP_EQ: r = (li64==N&&ri64==N) ? 1 : (li64==N||ri64==N) ? 0 : li64==ri64; break;
+                    case OP_NE: r = (li64==N&&ri64==N) ? 0 : (li64==N||ri64==N) ? 1 : li64!=ri64; break;
+                    case OP_LT: r = (li64==N&&ri64==N) ? 0 : li64==N ? 1 : ri64==N ? 0 : li64<ri64; break;
+                    case OP_LE: r = (li64==N&&ri64==N) ? 1 : li64==N ? 1 : ri64==N ? 0 : li64<=ri64; break;
+                    case OP_GT: r = (li64==N&&ri64==N) ? 0 : ri64==N ? 1 : li64==N ? 0 : li64>ri64; break;
+                    case OP_GE: r = (li64==N&&ri64==N) ? 1 : ri64==N ? 1 : li64==N ? 0 : li64>=ri64; break;
+                    case OP_AND: r = (uint8_t)lv && (uint8_t)rv; break;
+                    case OP_OR:  r = (uint8_t)lv || (uint8_t)rv; break;
+                    default: r = 0; break;
+                }
+            } else {
+                /* Null-aware F64 comparisons: NaN is null sentinel */
+                int ln = (lv != lv), rn = (rv != rv); /* NaN check */
+                switch (op->opcode) {
+                    case OP_EQ:  r = (ln&&rn) ? 1 : (ln||rn) ? 0 : lv==rv; break;
+                    case OP_NE:  r = (ln&&rn) ? 0 : (ln||rn) ? 1 : lv!=rv; break;
+                    case OP_LT:  r = (ln&&rn) ? 0 : ln ? 1 : rn ? 0 : lv<rv; break;
+                    case OP_LE:  r = (ln&&rn) ? 1 : ln ? 1 : rn ? 0 : lv<=rv; break;
+                    case OP_GT:  r = (ln&&rn) ? 0 : rn ? 1 : ln ? 0 : lv>rv; break;
+                    case OP_GE:  r = (ln&&rn) ? 1 : rn ? 1 : ln ? 0 : lv>=rv; break;
+                    case OP_AND: r = (uint8_t)lv && (uint8_t)rv; break;
+                    case OP_OR:  r = (uint8_t)lv || (uint8_t)rv; break;
+                    default: r = 0; break;
+                }
             }
             ((uint8_t*)dst)[i] = r;
         }
