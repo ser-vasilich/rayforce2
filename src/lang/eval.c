@@ -1050,33 +1050,103 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
      * F64/comparison ops route through DAG executor.
      * ══════════════════════════════════════════════════════════════ */
 
-    /* I64 direct loops — zero overhead, null-propagating */
+    /* Direct array loops — all integer types (I64, TIMESTAMP=i64, I32, DATE, TIME=i32, I16, U8) */
     if (!force_boxed && dag_opcode > 0 && dag_opcode <= OP_MOD) {
-        int lv64 = left_coll && ray_is_vec(left) && left->type == RAY_I64;
-        int rv64 = right_coll && ray_is_vec(right) && right->type == RAY_I64;
-        int ls64 = !left_coll && left->type == -RAY_I64;
-        int rs64 = !right_coll && right->type == -RAY_I64;
-        if ((ls64 && rv64) || (lv64 && rs64) || (lv64 && rv64)) {
-            ray_t* vec = ray_vec_new(RAY_I64, len);
+        int8_t ltype = left_coll ? left->type : -(left->type);
+        int8_t rtype = right_coll ? right->type : -(right->type);
+        int esz_l = (ltype == RAY_I64 || ltype == RAY_TIMESTAMP) ? 8 :
+                    (ltype == RAY_I32 || ltype == RAY_DATE || ltype == RAY_TIME) ? 4 :
+                    (ltype == RAY_I16) ? 2 : (ltype == RAY_U8) ? 1 : 0;
+        int esz_r = (rtype == RAY_I64 || rtype == RAY_TIMESTAMP) ? 8 :
+                    (rtype == RAY_I32 || rtype == RAY_DATE || rtype == RAY_TIME) ? 4 :
+                    (rtype == RAY_I16) ? 2 : (rtype == RAY_U8) ? 1 : 0;
+        int lv = left_coll && ray_is_vec(left) && esz_l > 0;
+        int rv = right_coll && ray_is_vec(right) && esz_r > 0;
+        int ls = !left_coll && esz_l > 0;
+        int rs = !right_coll && esz_r > 0;
+
+        /* Cross-type temporal arithmetic (DATE+TIME→TIMESTAMP) needs eval-level
+         * conversion — only use fast path when types are compatible for raw arithmetic */
+        int8_t ltype2 = lv ? left->type : -(left->type);
+        int8_t rtype2 = rv ? right->type : -(right->type);
+        int same_class = (esz_l == esz_r) || /* same storage width */
+                         (ltype2 == RAY_I64 && rtype2 == RAY_I64) || /* both i64 */
+                         (ltype2 == RAY_TIMESTAMP && rtype2 == RAY_TIMESTAMP) ||
+                         /* scalar int + any integer vec is fine (just adds raw values) */
+                         (ls && (rtype2 == ltype2 || ltype2 == RAY_I64)) ||
+                         (rs && (ltype2 == rtype2 || rtype2 == RAY_I64));
+        /* Reject cross-temporal: DATE+TIME, TIMESTAMP+DATE, etc. */
+        int l_temporal = (ltype2==RAY_DATE||ltype2==RAY_TIME||ltype2==RAY_TIMESTAMP);
+        int r_temporal = (rtype2==RAY_DATE||rtype2==RAY_TIME||rtype2==RAY_TIMESTAMP);
+        if (l_temporal && r_temporal && ltype2 != rtype2) same_class = 0;
+
+        if (same_class && ((ls && rv) || (lv && rs) || (lv && rv))) {
+            /* Read elements as i64 regardless of storage width */
+            #define READ_INT(ptr, esz, i) \
+                ((esz)==8 ? ((int64_t*)(ptr))[(i)] : \
+                 (esz)==4 ? (int64_t)((int32_t*)(ptr))[(i)] : \
+                 (esz)==2 ? (int64_t)((int16_t*)(ptr))[(i)] : \
+                            (int64_t)((uint8_t*)(ptr))[(i)])
+            #define SCALAR_INT(obj) \
+                (((obj)->type==-RAY_I64||(obj)->type==-RAY_TIMESTAMP) ? (obj)->i64 : \
+                 ((obj)->type==-RAY_I32||(obj)->type==-RAY_DATE||(obj)->type==-RAY_TIME) ? (int64_t)(obj)->i32 : \
+                 ((obj)->type==-RAY_I16) ? (int64_t)(obj)->i16 : (int64_t)(obj)->u8)
+
+            /* Output type = probed result type (from e0) */
+            ray_t* vec = ray_vec_new(out_type, len);
             if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
             vec->len = len;
-            int64_t* dst = (int64_t*)ray_data(vec);
-            int64_t N = INT64_MIN;
-            int64_t* ld = lv64 ? (int64_t*)ray_data(left) : NULL;
-            int64_t* rd = rv64 ? (int64_t*)ray_data(right) : NULL;
-            int64_t lsv = ls64 ? left->i64 : 0;
-            int64_t rsv = rs64 ? right->i64 : 0;
-            #define L(i) (ld ? ld[i] : lsv)
-            #define R(i) (rd ? rd[i] : rsv)
-            switch (dag_opcode) {
-            case OP_ADD: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a+(uint64_t)b); } break;
-            case OP_SUB: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a-(uint64_t)b); } break;
-            case OP_MUL: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a*(uint64_t)b); } break;
-            case OP_DIV: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); if(b==0||a==N||b==N){dst[i]=N;}else{int64_t q=a/b;if((a^b)<0&&q*b!=a)q--;dst[i]=q;} } break;
-            case OP_MOD: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); if(b==0||a==N||b==N){dst[i]=N;}else{int64_t m=a%b;if(m&&(m^b)<0)m+=b;dst[i]=m;} } break;
+
+            void* ldata = lv ? ray_data(left) : NULL;
+            void* rdata = rv ? ray_data(right) : NULL;
+            int64_t lsv = ls ? SCALAR_INT(left) : 0;
+            int64_t rsv = rs ? SCALAR_INT(right) : 0;
+            /* Null sentinel for the input width */
+            int64_t lnull = (esz_l==8) ? INT64_MIN : (esz_l==4) ? (int64_t)INT32_MIN :
+                            (esz_l==2) ? (int64_t)INT16_MIN : 0;
+            int64_t rnull = (esz_r==8) ? INT64_MIN : (esz_r==4) ? (int64_t)INT32_MIN :
+                            (esz_r==2) ? (int64_t)INT16_MIN : 0;
+            /* Output null sentinel */
+            int out_esz = ray_elem_size(out_type);
+
+            #define LA(i) (ldata ? READ_INT(ldata, esz_l, i) : lsv)
+            #define RA(i) (rdata ? READ_INT(rdata, esz_r, i) : rsv)
+            #define ISNULL_L(v) (ls ? (lsv==lnull) : (v)==lnull)
+            #define ISNULL_R(v) (rs ? (rsv==rnull) : (v)==rnull)
+
+            /* Compute into i64 temp, then store at output width */
+            for (int64_t i = 0; i < len; i++) {
+                int64_t a = LA(i), b = RA(i);
+                int64_t r;
+                int null = ISNULL_L(a) || ISNULL_R(b);
+                if (null) {
+                store_null:
+                    /* Store type-appropriate null */
+                    if (out_esz == 8)      ((int64_t*)ray_data(vec))[i] = INT64_MIN;
+                    else if (out_esz == 4)  ((int32_t*)ray_data(vec))[i] = INT32_MIN;
+                    else if (out_esz == 2)  ((int16_t*)ray_data(vec))[i] = INT16_MIN;
+                    else                    ((uint8_t*)ray_data(vec))[i] = 0;
+                    continue;
+                }
+                switch (dag_opcode) {
+                case OP_ADD: r = (int64_t)((uint64_t)a + (uint64_t)b); break;
+                case OP_SUB: r = (int64_t)((uint64_t)a - (uint64_t)b); break;
+                case OP_MUL: r = (int64_t)((uint64_t)a * (uint64_t)b); break;
+                case OP_DIV: if (b==0) goto store_null; else { r=a/b; if ((a^b)<0 && r*b!=a) r--; } break;
+                case OP_MOD: if (b==0) goto store_null; else { r=a%b; if (r && (r^b)<0) r+=b; } break;
+                default: r = 0; break;
+                }
+                if (out_esz == 8)      ((int64_t*)ray_data(vec))[i] = r;
+                else if (out_esz == 4)  ((int32_t*)ray_data(vec))[i] = (int32_t)r;
+                else if (out_esz == 2)  ((int16_t*)ray_data(vec))[i] = (int16_t)r;
+                else                    ((uint8_t*)ray_data(vec))[i] = (uint8_t)r;
             }
-            #undef L
-            #undef R
+            #undef LA
+            #undef RA
+            #undef ISNULL_L
+            #undef ISNULL_R
+            #undef READ_INT
+            #undef SCALAR_INT
             ray_release(e0);
             return vec;
         }
@@ -1087,13 +1157,16 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
         int is_idiv = (dag_opcode == OP_DIV || dag_opcode == OP_MOD);
         int is_cmp  = (dag_opcode >= OP_EQ && dag_opcode <= OP_GE);
 
-        /* Classify operands: I64/F64 vectors or numeric scalars */
+        /* Classify operands: numeric/temporal vectors or scalars */
         int8_t lt = left_coll ? left->type : -(left->type);
         int8_t rt = right_coll ? right->type : -(right->type);
-        int l_num_vec = left_coll && ray_is_vec(left) && (lt == RAY_F64 || lt == RAY_I64);
-        int r_num_vec = right_coll && ray_is_vec(right) && (rt == RAY_F64 || rt == RAY_I64);
-        int l_num_scalar = !left_coll && is_numeric(left);
-        int r_num_scalar = !right_coll && is_numeric(right);
+        #define IS_NUM_TYPE(t) ((t)==RAY_I64||(t)==RAY_F64||(t)==RAY_I32||(t)==RAY_I16|| \
+                                (t)==RAY_U8||(t)==RAY_DATE||(t)==RAY_TIME||(t)==RAY_TIMESTAMP)
+        int l_num_vec = left_coll && ray_is_vec(left) && IS_NUM_TYPE(lt);
+        int r_num_vec = right_coll && ray_is_vec(right) && IS_NUM_TYPE(rt);
+        int l_num_scalar = !left_coll && IS_NUM_TYPE(lt);
+        int r_num_scalar = !right_coll && IS_NUM_TYPE(rt);
+        #undef IS_NUM_TYPE
 
         int can_dag = (l_num_vec || r_num_vec) &&
                       (l_num_vec || l_num_scalar) && (r_num_vec || r_num_scalar);
@@ -1102,6 +1175,11 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
         if (is_idiv && !(lt == RAY_I64 && rt == RAY_I64)) can_dag = 0;
         /* Comparisons: same-type only (cross-type null sentinels differ) */
         if (is_cmp && lt != rt) can_dag = 0;
+        /* Cross-type temporal: DAG promote() loses type tag (int+TIMESTAMP→I64 not TIMESTAMP) */
+        {   int lt_temp = (lt==RAY_DATE||lt==RAY_TIME||lt==RAY_TIMESTAMP);
+            int rt_temp = (rt==RAY_DATE||rt==RAY_TIME||rt==RAY_TIMESTAMP);
+            if ((lt_temp || rt_temp) && lt != rt) can_dag = 0;
+        }
 
         if (can_dag) {
                 ray_graph_t* g = ray_graph_new(NULL);
