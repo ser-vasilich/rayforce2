@@ -1,0 +1,4 @@
+(map-right (fn [x y] (println "x=% y=%" x y)) 1212 "asd")
+(map-left (fn [x y] (println "x=% y=%" x y)) "asd" 188)
+(map (fn [x y] (println "x=% y=%" x y)) "asd" 188)
+(apply (fn [x y] (println "x=% y=%" x y)) "asd" 188)

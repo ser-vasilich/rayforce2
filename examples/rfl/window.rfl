@@ -1,0 +1,6 @@
+(set trades (table [Sym Time Price] (list [x x x] [12:00:01 12:00:04 12:00:06] [89.17 70.5 80.54])))
+(set quotes (table [Sym Time Size] (list [x x x x x x x x x x] [12:00:00 12:00:01 12:00:02 12:00:03 12:00:04 12:00:05 12:00:06 12:00:07 12:00:08 12:00:09] [928 528 648 914 918 626 577 817 620 698])))
+    
+(set intervals (list [11:59:59 12:00:02 12:00:04] [12:00:03 12:00:06 12:00:08]))
+
+;; (window-join [Sym Time] intervals trades quotes {a: (sum Bid) b: (sum Ask)})

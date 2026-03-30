@@ -1,0 +1,37 @@
+;; Example updating vectors
+(set m (til 10))
+(set n m)
+(alter 'n set 0 100)
+(alter 'n set [4 5] 99)
+(set k (guid 6))
+(alter 'k set [4 5 1] (guid 3))
+
+;; Generic lists
+(set l (list [1 2] "asd" 66))
+(alter 'l set [0 2] 192)
+(alter 'l concat 88)
+(show l)
+(alter 'l remove 1)
+(show l)
+(alter 'l remove [0 2])
+(show l)
+
+;; And tables
+(set t (table [sym price volume tape] (list [aapl vod goog] [102 99 203] [500 400 900] (list "A" "B" "C"))))
+;;(alter 't + [price volume] 12.7)
+
+(set a (table [a b c d] (list (til 10) (til 10) (til 10) (til 10))))
+(set b (table [a b c] (list (+ 8 (til 5)) (+ 8 (til 5)) (+ 10 (til 5)))))
+(upsert a 2 b)
+
+(insert a (list 67 77 8 9))
+
+(set tab (table [sym price volume tape] (list [aapl vod goog aapl aapl vod mod] 
+   [102 99 203 102 103 10 3] [500 400 900 10 30 40 78] (list "A" "B" "C" "D" "E" "F" "G"))))
+
+(update {volume: (+ 1 volume) from: 'tab})
+(update {price: ((fn [x] (+ x 11)) price) from: 'tab where: (== volume 79)})
+(update {price: 0 from: 'tab where: (== volume 79)})
+(update {price: 0 from: 'tab by: sym where: (> volume 400)})
+
+(set d (dict [a b c] (list 'a 'b (dict [d e] [1 2]))))

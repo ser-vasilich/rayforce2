@@ -1,0 +1,1 @@
+(set t (table [sym price volume] (list [aapl vod goog] [102 99 203] [500 400 900])))

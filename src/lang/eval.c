@@ -6,12 +6,14 @@
 #include "ops/pool.h"
 #include "table/sym.h"
 #include "mem/heap.h"
+#include "mem/sys.h"
 #include "app/format.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <signal.h>
+#include <time.h>
 
 /* Maximum recursion depth for ray_eval() to prevent stack overflow */
 #define RAY_EVAL_MAX_DEPTH 512
@@ -864,6 +866,11 @@ static ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
             return ray_guid(gd);
         }
         case RAY_CHAR:      return ray_char(((char*)ray_data(coll))[i]);
+        case RAY_STR: {
+            size_t slen = 0;
+            const char* sp = ray_str_vec_get(coll, i, &slen);
+            return ray_str(sp ? sp : "", sp ? slen : 0);
+        }
         default:            *allocated = 0; return RAY_ERR_PTR(RAY_ERR_TYPE);
     }
 }
@@ -1805,7 +1812,11 @@ ray_t* ray_map(ray_t** args, int64_t n) {
     ray_t* val = args[1];
     ray_t* vec = unbox_vec_arg(args[2], &_bx);
     if (RAY_IS_ERR(vec)) return vec;
-    if (!is_list(vec)) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+    /* If vec is scalar, just call fn(val, vec) once */
+    if (!is_list(vec)) {
+        if (_bx) ray_release(_bx);
+        return call_fn2(fn, val, args[2]);
+    }
     int64_t len = ray_len(vec);
     ray_t* result = ray_alloc(len * sizeof(ray_t*));
     if (!result) { if (_bx) ray_release(_bx); return RAY_ERR_PTR(RAY_ERR_OOM); }
@@ -2039,6 +2050,11 @@ ray_t* ray_apply(ray_t** args, int64_t n) {
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
     ray_t* fn = args[0];
+
+    /* If both args are scalars, just call fn(a, b) once */
+    if (ray_is_atom(args[1]) && ray_is_atom(args[2]))
+        return call_fn2(fn, args[1], args[2]);
+
     ray_t *_bx1 = NULL, *_bx2 = NULL;
     ray_t* vec1 = unbox_vec_arg(args[1], &_bx1);
     if (RAY_IS_ERR(vec1)) return vec1;
@@ -5026,15 +5042,12 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
 
     /* Table row: iterate row-by-row for proper upsert semantics */
     if (row->type == RAY_TABLE) {
-        int64_t src_ncols = ray_table_ncols(row);
         int64_t src_nrows = ray_table_nrows(row);
-        if (src_ncols != ncols) { ray_release(tbl); ray_release(key_sym); ray_release(row); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
-        /* Get source columns */
+        /* Get source columns by matching target column names; missing cols → NULL */
         ray_t* src_cols[64];
         for (int64_t c = 0; c < ncols && c < 64; c++) {
             int64_t cn = ray_table_col_name(tbl, c);
             src_cols[c] = ray_table_get_col(row, cn);
-            if (!src_cols[c]) src_cols[c] = ray_table_get_col_idx(row, c);
         }
         ray_t* cur_tbl = tbl;
         ray_retain(cur_tbl);
@@ -5241,9 +5254,12 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
         ray_t* new_col = ray_vec_new(ct, nrows);
         if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(tbl); ray_release(key_sym); ray_release(row); return new_col; }
 
+        /* If row_elems[c] is NULL (missing column), keep original values */
+        int has_new_val = (row_elems[c] != NULL);
+
         if (ct == RAY_STR) {
             for (int64_t r = 0; r < nrows; r++) {
-                if (r == match_row) {
+                if (r == match_row && has_new_val) {
                     new_col = append_atom_to_col(new_col, row_elems[c]);
                 } else {
                     size_t slen = 0;
@@ -5254,7 +5270,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
             }
         } else if (ct == RAY_SYM) {
             for (int64_t r = 0; r < nrows; r++) {
-                if (r == match_row) {
+                if (r == match_row && has_new_val) {
                     new_col = append_atom_to_col(new_col, row_elems[c]);
                 } else {
                     int64_t sym_val = ray_read_sym(ray_data(orig_col), r, orig_col->type, orig_col->attrs);
@@ -5266,7 +5282,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
             size_t elem_sz = (ct == RAY_BOOL) ? 1 : 8;
             uint8_t* src = (uint8_t*)ray_data(orig_col);
             for (int64_t r = 0; r < nrows; r++) {
-                if (r == match_row) {
+                if (r == match_row && has_new_val) {
                     new_col = append_atom_to_col(new_col, row_elems[c]);
                 } else {
                     new_col = ray_vec_append(new_col, src + r * elem_sz);
@@ -5700,18 +5716,187 @@ void ray_lang_print(FILE* fp, ray_t* val) {
     }
 }
 
-/* (println val1 val2 ...) — print values to stdout, newline at end */
+/* Helper: format string with % placeholders, substituting args.
+ * Returns a heap-allocated char* (caller must ray_sys_free) and sets *out_len.
+ * If fmt has no %, returns NULL (caller falls back to plain print). */
+static char* fmt_interpolate(const char* fmt, size_t flen, ray_t** args, int64_t nargs, int64_t arg_start, size_t* out_len) {
+    /* Quick scan: any % in fmt? */
+    int has_pct = 0;
+    for (size_t i = 0; i < flen; i++) if (fmt[i] == '%') { has_pct = 1; break; }
+    if (!has_pct) return NULL;
+
+    /* Build result in a dynamic buffer */
+    size_t cap = flen + 256;
+    char* buf = ray_sys_alloc(cap);
+    if (!buf) return NULL;
+    size_t pos = 0;
+    int64_t ai = arg_start;
+
+    for (size_t i = 0; i < flen; i++) {
+        if (fmt[i] == '%' && ai < nargs) {
+            /* Format the arg into a temp buffer */
+            char tmp[256];
+            ray_t* a = args[ai++];
+            if (ray_is_lazy(a)) a = ray_lazy_materialize(a);
+            int tlen = 0;
+            if (!a || RAY_IS_ERR(a)) {
+                tlen = snprintf(tmp, sizeof(tmp), "error");
+            } else if (a->type == -RAY_I64) {
+                tlen = snprintf(tmp, sizeof(tmp), "%ld", (long)a->i64);
+            } else if (a->type == -RAY_F64) {
+                tlen = snprintf(tmp, sizeof(tmp), "%g", a->f64);
+            } else if (a->type == -RAY_BOOL) {
+                tlen = snprintf(tmp, sizeof(tmp), "%s", a->b8 ? "true" : "false");
+            } else if (a->type == -RAY_STR) {
+                const char* sp = ray_str_ptr(a);
+                size_t sl = ray_str_len(a);
+                while (pos + sl + 1 > cap) { cap *= 2; buf = ray_sys_realloc(buf, cap); }
+                memcpy(buf + pos, sp, sl);
+                pos += sl;
+                continue;
+            } else if (a->type == -RAY_SYM) {
+                ray_t* ss = ray_sym_str(a->i64);
+                if (ss) {
+                    const char* sp = ray_str_ptr(ss);
+                    size_t sl = ray_str_len(ss);
+                    while (pos + sl + 1 > cap) { cap *= 2; buf = ray_sys_realloc(buf, cap); }
+                    memcpy(buf + pos, sp, sl);
+                    pos += sl;
+                    ray_release(ss);
+                    continue;
+                }
+                tlen = snprintf(tmp, sizeof(tmp), "'?");
+            } else {
+                /* Fall back to ray_fmt */
+                ray_t* formatted = ray_fmt(a, 0);
+                if (formatted && !RAY_IS_ERR(formatted)) {
+                    const char* sp = ray_str_ptr(formatted);
+                    size_t sl = ray_str_len(formatted);
+                    while (pos + sl + 1 > cap) { cap *= 2; buf = ray_sys_realloc(buf, cap); }
+                    memcpy(buf + pos, sp, sl);
+                    pos += sl;
+                    ray_release(formatted);
+                    continue;
+                }
+                if (formatted) ray_release(formatted);
+                tlen = snprintf(tmp, sizeof(tmp), "<type:%d>", a->type);
+            }
+            while (pos + (size_t)tlen + 1 > cap) { cap *= 2; buf = ray_sys_realloc(buf, cap); }
+            memcpy(buf + pos, tmp, (size_t)tlen);
+            pos += (size_t)tlen;
+        } else {
+            if (pos + 2 > cap) { cap *= 2; buf = ray_sys_realloc(buf, cap); }
+            buf[pos++] = fmt[i];
+        }
+    }
+    buf[pos] = '\0';
+    *out_len = pos;
+    return buf;
+}
+
+/* (println val1 val2 ...) — print values to stdout, newline at end.
+ * If first arg is a string with % placeholders, substitutes remaining args. */
 ray_t* ray_println(ray_t** args, int64_t n) {
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
+
+    /* Format string mode: first arg is a string with % placeholders */
+    if (n >= 2 && args[0] && args[0]->type == -RAY_STR) {
+        const char* fmt = ray_str_ptr(args[0]);
+        size_t flen = ray_str_len(args[0]);
+        size_t out_len = 0;
+        char* result = fmt_interpolate(fmt, flen, args, n, 1, &out_len);
+        if (result) {
+            fwrite(result, 1, out_len, stdout);
+            fputc('\n', stdout);
+            fflush(stdout);
+            ray_sys_free(result);
+            return make_i64(0);
+        }
+    }
+
     for (int64_t i = 0; i < n; i++) {
-        /* Materialize lazy handles before printing */
-        if (ray_is_lazy(args[i]))
-            args[i] = ray_lazy_materialize(args[i]);
         if (i > 0) fputc(' ', stdout);
         ray_lang_print(stdout, args[i]);
     }
     fputc('\n', stdout);
     fflush(stdout);
     return make_i64(0);
+}
+
+/* (show val1 val2 ...) — print values to stdout using ray_fmt, newline at end */
+static ray_t* ray_show(ray_t** args, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
+        if (!args[i] || RAY_IS_ERR(args[i])) { fprintf(stdout, "error"); continue; }
+        ray_t* formatted = ray_fmt(args[i], 1);
+        if (formatted && !RAY_IS_ERR(formatted)) {
+            const char* sp = ray_str_ptr(formatted);
+            size_t sl = ray_str_len(formatted);
+            fwrite(sp, 1, sl, stdout);
+            ray_release(formatted);
+        } else {
+            if (formatted) ray_release(formatted);
+            ray_lang_print(stdout, args[i]);
+        }
+    }
+    fputc('\n', stdout);
+    fflush(stdout);
+    return make_i64(0);
+}
+
+/* (format "hello % world %" a b) — string formatting with % placeholders */
+static ray_t* ray_format_fn(ray_t** args, int64_t n) {
+    if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
+    if (!args[0] || args[0]->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    const char* fmt = ray_str_ptr(args[0]);
+    size_t flen = ray_str_len(args[0]);
+    size_t out_len = 0;
+    char* result = fmt_interpolate(fmt, flen, args, n, 1, &out_len);
+    if (result) {
+        ray_t* s = ray_str(result, out_len);
+        ray_sys_free(result);
+        return s;
+    }
+    /* No placeholders: return fmt as-is */
+    ray_retain(args[0]);
+    return args[0];
+}
+
+/* (resolve 'name) — check if name exists in env, return value or null.
+ * SPECIAL_FORM: does not evaluate args. */
+static ray_t* ray_resolve_fn(ray_t** args, int64_t n) {
+    if (n < 1) return NULL;
+    ray_t* name = ray_eval(args[0]);
+    if (!name || RAY_IS_ERR(name)) return NULL;
+    if (name->type != -RAY_SYM) { ray_release(name); return NULL; }
+    ray_t* val = ray_env_get(name->i64);
+    ray_release(name);
+    if (!val) return NULL;
+    ray_retain(val);
+    return val;
+}
+
+/* (timeit expr) — evaluate expression and return time in ms as F64.
+ * SPECIAL_FORM: does not pre-evaluate args. */
+static ray_t* ray_timeit_fn(ray_t** args, int64_t n) {
+    if (n < 1) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    clock_t t0 = clock();
+    ray_t* result = ray_eval(args[0]);
+    clock_t t1 = clock();
+    if (result && !RAY_IS_ERR(result)) ray_release(result);
+    double ms = (double)(t1 - t0) / (double)CLOCKS_PER_SEC * 1000.0;
+    return make_f64(ms);
+}
+
+/* (exit code) — exit the process */
+static ray_t* ray_exit_fn(ray_t* arg) {
+    int code = 0;
+    if (arg && is_numeric(arg)) code = (int)as_i64(arg);
+    exit(code);
+    return NULL; /* unreachable */
 }
 
 /* (read-csv path) — read CSV file, return RAY_TABLE */
@@ -6673,6 +6858,13 @@ static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
 
     if (ray_env_push_scope() != RAY_OK) return RAY_ERR_PTR(RAY_ERR_OOM);
 
+    /* Bind 'self' to the current lambda for recursion */
+    {
+        static int64_t self_sym_id = -1;
+        if (self_sym_id < 0) self_sym_id = ray_sym_intern("self", 4);
+        ray_env_set_local(self_sym_id, lambda);
+    }
+
     int64_t* param_ids = (int64_t*)ray_data(params_list);
     for (int64_t i = 0; i < param_count && i < argc; i++) {
         (void)ray_env_set_local(param_ids[i], call_args[i]);
@@ -6744,6 +6936,17 @@ static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc) {
     for (int64_t i = 0; i < param_count && i < argc; i++) {
         ray_retain(call_args[i]);
         vm.ps[i] = call_args[i];
+    }
+
+    /* Bind 'self' in env so OP_RESOLVE can find it for recursion */
+    int vm_pushed_scope = 0;
+    {
+        static int64_t self_sym_id = -1;
+        if (self_sym_id < 0) self_sym_id = ray_sym_intern("self", 4);
+        if (ray_env_push_scope() == RAY_OK) {
+            ray_env_set_local(self_sym_id, lambda);
+            vm_pushed_scope = 1;
+        }
     }
 
     uint8_t *code = (uint8_t *)ray_data(LAMBDA_BC(lambda));
@@ -7117,6 +7320,7 @@ op_ret: {
         /* Top-level return */
         ray_release(vm.fn);
         __VM = NULL;
+        if (vm_pushed_scope) ray_env_pop_scope();
 #undef vm
         ray_free(vm_block);
         return result;  /* caller owns the POP'd reference */
@@ -7200,6 +7404,7 @@ vm_error: {
     for (int32_t i = 0; i < vm.tp; i++)
         ray_release(vm.ts[i].fn);
     __VM = NULL;
+    if (vm_pushed_scope) ray_env_pop_scope();
 #undef vm
     ray_free(vm_block);
     return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -8089,60 +8294,77 @@ static ray_t* ray_binr_fn(ray_t* sorted, ray_t* val) {
 }
 
 /* (map-left fn fixed vec) → apply fn(fixed, elem) for each elem in vec */
+/* Helper for map-left/map-right: iterate over vec calling fn with two args */
+static ray_t* map_iterate(ray_t* fn, ray_t* fixed, ray_t* vec, int fixed_is_left) {
+    /* If both are scalars, just call once */
+    if (!ray_is_vec(vec) && vec->type != RAY_LIST) {
+        if (fixed_is_left)
+            return call_fn2(fn, fixed, vec);
+        else
+            return call_fn2(fn, vec, fixed);
+    }
+
+    int64_t vn = vec->len;
+    ray_t* stack_results[4096];
+    ray_t** results = stack_results;
+    if (vn > 4096) {
+        results = (ray_t**)ray_sys_alloc((size_t)vn * sizeof(ray_t*));
+        if (!results) return RAY_ERR_PTR(RAY_ERR_OOM);
+    }
+
+    for (int64_t i = 0; i < vn; i++) {
+        int alloc = 0;
+        ray_t* elem = collection_elem(vec, i, &alloc);
+        if (fixed_is_left)
+            results[i] = call_fn2(fn, fixed, elem);
+        else
+            results[i] = call_fn2(fn, elem, fixed);
+        if (alloc) ray_release(elem);
+        if (RAY_IS_ERR(results[i])) {
+            ray_t* err = results[i];
+            for (int64_t j = 0; j < i; j++) ray_release(results[j]);
+            if (results != stack_results) ray_sys_free(results);
+            return err;
+        }
+    }
+    ray_t* out = ray_enlist(results, vn);
+    for (int64_t i = 0; i < vn; i++) ray_release(results[i]);
+    if (results != stack_results) ray_sys_free(results);
+    return out;
+}
+
+/* (map-left fn fixed vec) → apply fn(fixed, elem) for each elem in vec.
+ * If vec is scalar but fixed is a vector, auto-swap (iterate over fixed). */
 static ray_t* ray_map_left(ray_t** args, int64_t n) {
     if (n != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* fn = args[0];
     ray_t* fixed = args[1];
     ray_t* vec = args[2];
-    if (!ray_is_vec(vec) && vec->type != RAY_LIST)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
 
-    int64_t vn = vec->len;
-    ray_t* results[4096];
-    if (vn > 4096) return RAY_ERR_PTR(RAY_ERR_LIMIT);
-
-    for (int64_t i = 0; i < vn; i++) {
-        int alloc = 0;
-        ray_t* elem = collection_elem(vec, i, &alloc);
-        results[i] = call_fn2(fn, fixed, elem);
-        if (alloc) ray_release(elem);
-        if (RAY_IS_ERR(results[i])) {
-            for (int64_t j = 0; j < i; j++) ray_release(results[j]);
-            return results[i];
-        }
+    /* Auto-detect: if vec is scalar but fixed is a vector, swap roles */
+    if (!ray_is_vec(vec) && vec->type != RAY_LIST &&
+        (ray_is_vec(fixed) || fixed->type == RAY_LIST)) {
+        return map_iterate(fn, vec, fixed, 0); /* fn(elem_of_fixed, vec) — but we want fn(fixed=scalar, elem) */
     }
-    /* Build result — enlist handles type detection */
-    ray_t* out = ray_enlist(results, vn);
-    for (int64_t i = 0; i < vn; i++) ray_release(results[i]);
-    return out;
+
+    return map_iterate(fn, fixed, vec, 1); /* fn(fixed, elem) */
 }
 
-/* (map-right fn vec fixed) → apply fn(elem, fixed) for each elem in vec */
+/* (map-right fn vec fixed) → apply fn(elem, fixed) for each elem in vec.
+ * If vec is scalar but fixed is a vector, auto-swap (iterate over fixed). */
 static ray_t* ray_map_right(ray_t** args, int64_t n) {
     if (n != 3) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
     ray_t* fn = args[0];
     ray_t* vec = args[1];
     ray_t* fixed = args[2];
-    if (!ray_is_vec(vec) && vec->type != RAY_LIST)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
 
-    int64_t vn = vec->len;
-    ray_t* results[4096];
-    if (vn > 4096) return RAY_ERR_PTR(RAY_ERR_LIMIT);
-
-    for (int64_t i = 0; i < vn; i++) {
-        int alloc = 0;
-        ray_t* elem = collection_elem(vec, i, &alloc);
-        results[i] = call_fn2(fn, elem, fixed);
-        if (alloc) ray_release(elem);
-        if (RAY_IS_ERR(results[i])) {
-            for (int64_t j = 0; j < i; j++) ray_release(results[j]);
-            return results[i];
-        }
+    /* Auto-detect: if vec is scalar but fixed is a vector, swap roles */
+    if (!ray_is_vec(vec) && vec->type != RAY_LIST &&
+        (ray_is_vec(fixed) || fixed->type == RAY_LIST)) {
+        return map_iterate(fn, vec, fixed, 1); /* fn(vec_scalar, elem_of_fixed) */
     }
-    ray_t* out = ray_enlist(results, vn);
-    for (int64_t i = 0; i < vn; i++) ray_release(results[i]);
-    return out;
+
+    return map_iterate(fn, fixed, vec, 0); /* fn(elem, fixed) */
 }
 
 /* (split str delim) → list of strings */
@@ -8373,22 +8595,83 @@ static ray_t* ray_alter_fn(ray_t** args, int64_t n) {
     size_t olen = ray_str_len(op_name);
 
     if (olen == 3 && memcmp(oname, "set", 3) == 0) {
-        /* (alter 'v set idx val) */
+        /* (alter 'v set idx val) — idx can be scalar or vector of indices */
         ray_release(op_name);
         if (n < 4) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
         ray_t* idx = ray_eval(args[2]);
         if (!idx || RAY_IS_ERR(idx)) { ray_release(name_sym); return idx ? idx : RAY_ERR_PTR(RAY_ERR_TYPE); }
         ray_t* val = ray_eval(args[3]);
         if (!val || RAY_IS_ERR(val)) { ray_release(idx); ray_release(name_sym); return val ? val : RAY_ERR_PTR(RAY_ERR_TYPE); }
-        if (!is_numeric(idx)) { ray_release(idx); ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-        int64_t i = as_i64(idx);
-        ray_release(idx);
-        if (!ray_is_vec(var)) { ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-        if (i < 0 || i >= var->len) { ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_RANGE); }
-        /* COW if shared */
+        if (!ray_is_vec(var) && var->type != RAY_LIST) { ray_release(idx); ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+        /* For LIST types, build a new list with replaced elements */
+        if (var->type == RAY_LIST) {
+            int64_t vlen = ray_len(var);
+            ray_t** elems = (ray_t**)ray_data(var);
+            ray_t* new_list = ray_alloc(vlen * sizeof(ray_t*));
+            if (!new_list) { ray_release(idx); ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_OOM); }
+            new_list->type = RAY_LIST;
+            new_list->len = vlen;
+            if (var->attrs & RAY_ATTR_DICT) new_list->attrs |= RAY_ATTR_DICT;
+            ray_t** out = (ray_t**)ray_data(new_list);
+            for (int64_t i = 0; i < vlen; i++) { ray_retain(elems[i]); out[i] = elems[i]; }
+
+            if (ray_is_atom(idx) && is_numeric(idx)) {
+                int64_t i = as_i64(idx);
+                if (i >= 0 && i < vlen) { ray_release(out[i]); ray_retain(val); out[i] = val; }
+            } else if (ray_is_vec(idx)) {
+                int64_t nidx = idx->len;
+                for (int64_t k = 0; k < nidx; k++) {
+                    int alloc = 0;
+                    ray_t* ie = collection_elem(idx, k, &alloc);
+                    int64_t i = as_i64(ie);
+                    if (alloc) ray_release(ie);
+                    if (i >= 0 && i < vlen) { ray_release(out[i]); ray_retain(val); out[i] = val; }
+                }
+            }
+            ray_release(idx); ray_release(val);
+            ray_env_set(name_sym->i64, new_list);
+            ray_release(name_sym);
+            ray_retain(new_list);
+            return new_list;
+        }
+
+        /* COW if shared (typed vectors only) */
         var = ray_cow(var);
-        if (RAY_IS_ERR(var)) { ray_release(val); ray_release(name_sym); return var; }
-        store_typed_elem(var, i, val);
+        if (RAY_IS_ERR(var)) { ray_release(idx); ray_release(val); ray_release(name_sym); return var; }
+
+        if (ray_is_atom(idx) && is_numeric(idx)) {
+            /* Single index */
+            int64_t i = as_i64(idx);
+            ray_release(idx);
+            if (i < 0 || i >= var->len) { ray_release(val); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+            store_typed_elem(var, i, val);
+        } else if (ray_is_vec(idx)) {
+            /* Vector of indices — set each to val.
+             * If val is a vector of same length, set pairwise.
+             * If val is scalar or shorter, broadcast. */
+            int64_t nidx = idx->len;
+            int val_is_vec = ray_is_vec(val) && val->len == nidx;
+            for (int64_t k = 0; k < nidx; k++) {
+                int alloc = 0;
+                ray_t* ie = collection_elem(idx, k, &alloc);
+                int64_t i = as_i64(ie);
+                if (alloc) ray_release(ie);
+                if (i < 0 || i >= var->len) continue;
+                if (val_is_vec) {
+                    int va = 0;
+                    ray_t* ve = collection_elem(val, k, &va);
+                    store_typed_elem(var, i, ve);
+                    if (va) ray_release(ve);
+                } else {
+                    store_typed_elem(var, i, val);
+                }
+            }
+            ray_release(idx);
+        } else {
+            ray_release(idx); ray_release(val); ray_release(name_sym);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
         ray_release(val);
         ray_env_set(name_sym->i64, var);
         ray_release(name_sym);
@@ -8408,6 +8691,69 @@ static ray_t* ray_alter_fn(ray_t** args, int64_t n) {
         ray_release(name_sym);
         ray_retain(new_vec);
         return new_vec;
+    }
+    if (olen == 6 && memcmp(oname, "remove", 6) == 0) {
+        /* (alter 'v remove idx) — remove element(s) at index/indices */
+        ray_release(op_name);
+        if (n < 3) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
+        ray_t* idx = ray_eval(args[2]);
+        if (!idx || RAY_IS_ERR(idx)) { ray_release(name_sym); return idx ? idx : RAY_ERR_PTR(RAY_ERR_TYPE); }
+
+        if (!var || var->type != RAY_LIST) {
+            ray_release(idx); ray_release(name_sym);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+
+        int64_t vlen = ray_len(var);
+        ray_t** elems = (ray_t**)ray_data(var);
+
+        /* Build a set of indices to remove */
+        int64_t remove_idx[256];
+        int64_t nremove = 0;
+        if (ray_is_atom(idx) && is_numeric(idx)) {
+            remove_idx[0] = as_i64(idx);
+            nremove = 1;
+        } else if (ray_is_vec(idx)) {
+            nremove = idx->len;
+            if (nremove > 256) { ray_release(idx); ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_LIMIT); }
+            for (int64_t i = 0; i < nremove; i++) {
+                int alloc = 0;
+                ray_t* e = collection_elem(idx, i, &alloc);
+                remove_idx[i] = as_i64(e);
+                if (alloc) ray_release(e);
+            }
+        } else {
+            ray_release(idx); ray_release(name_sym);
+            return RAY_ERR_PTR(RAY_ERR_TYPE);
+        }
+        ray_release(idx);
+
+        /* Build new list without the removed indices */
+        int64_t new_len = vlen;
+        for (int64_t i = 0; i < nremove; i++)
+            if (remove_idx[i] >= 0 && remove_idx[i] < vlen) new_len--;
+
+        ray_t* new_list = ray_alloc(new_len * sizeof(ray_t*));
+        if (!new_list) { ray_release(name_sym); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        new_list->type = RAY_LIST;
+        new_list->len = new_len;
+        if (var->attrs & RAY_ATTR_DICT) new_list->attrs |= RAY_ATTR_DICT;
+        ray_t** out = (ray_t**)ray_data(new_list);
+        int64_t j = 0;
+        for (int64_t i = 0; i < vlen; i++) {
+            int skip = 0;
+            for (int64_t k = 0; k < nremove; k++)
+                if (remove_idx[k] == i) { skip = 1; break; }
+            if (!skip) {
+                ray_retain(elems[i]);
+                out[j++] = elems[i];
+            }
+        }
+        new_list->len = j;
+        ray_env_set(name_sym->i64, new_list);
+        ray_release(name_sym);
+        ray_retain(new_list);
+        return new_list;
     }
     ray_release(op_name);
     ray_release(name_sym);
@@ -8523,12 +8869,17 @@ static void ray_register_builtins(void) {
 
     /* I/O builtins */
     register_vary("println",    RAY_FN_NONE, ray_println);
+    register_vary("show",       RAY_FN_NONE, ray_show);
+    register_vary("format",     RAY_FN_NONE, ray_format_fn);
     register_vary("read-csv",   RAY_FN_NONE, ray_read_csv_fn);
     register_vary("write-csv",  RAY_FN_NONE, ray_write_csv_fn);
     register_binary("as",       RAY_FN_NONE, ray_cast_fn);
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
     register_unary("read",      RAY_FN_NONE, ray_read_file);
     register_binary("write",    RAY_FN_NONE, ray_write_file);
+    register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
+    register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
+    register_vary("timeit",     RAY_FN_SPECIAL_FORM, ray_timeit_fn);
 
     /* Additional builtins (ported from rayforce) */
     register_vary("enlist",     RAY_FN_NONE, ray_enlist);

@@ -1,0 +1,10 @@
+(set n 10)
+
+(set x (table [a b c d] 
+    (list (take (list "aaaaaa" "bbbbbbbbbb" "cc" "dd") n) (take [I J K] n) (til n) (til n))))
+
+(set y (table [a b c d e] 
+    (list (take (list "aa" "bb" "cc" "dd" "ee") n) (take [I J K] n) (til n) (til n) (til n))))
+
+;; (left-join [a] x y)
+;; (left-join [a b] x y)

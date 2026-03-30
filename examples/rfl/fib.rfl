@@ -1,0 +1,10 @@
+;; Author: 0x0L 
+(set fib (fn [x]
+    (if (< x 2) 
+        1
+        (+ (self (- x 1)) (self (- x 2)))
+        ))
+)
+
+;; :t (fib 35)
+;; (exit 0)
