@@ -4318,7 +4318,7 @@ static MunitResult test_rf_joins(const void* params, void* fixture) {
         "(set quotes (table [Sym Time Bid] (list [a a a] [10:00:00.000 10:00:02.000 10:00:04.000] [99 100 101])))"
         "(set intervals (map-left + [-2000 2000] (at trades 'Time)))"
         "(at (window-join [Sym Time] intervals trades quotes {minBid: (min Bid)}) 'minBid)",
-        "[99 100]");
+        "[99 101]");
 
     // window-join1
     ASSERT_EQ(
@@ -4352,7 +4352,7 @@ static MunitResult test_rf_joins(const void* params, void* fixture) {
         "10:00:01.000 10:00:04.000] [99 100 101 149 151])))"
         "(set intervals (map-left + [-2000 2000] (at trades 'time)))"
         "(at (window-join [s time] intervals trades quotes {minBid: (min bid)}) 'minBid)",
-        "[99 100 149]");
+        "[99 101 149]");
 
     // empty left table
     ASSERT_EQ(

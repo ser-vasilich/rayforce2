@@ -3435,9 +3435,10 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
         return ray_const_str(g, ptr, len);
     }
 
-    /* Symbol literal → const i64 (sym IDs are integer indices) */
+    /* Symbol literal → cannot compile to DAG (no const SYM node type).
+     * Return NULL to trigger eval-level fallback. */
     if (expr->type == -RAY_SYM && !(expr->attrs & RAY_ATTR_NAME))
-        return ray_const_i64(g, expr->i64);
+        return NULL;
 
     /* Name reference → column scan */
     if (expr->type == -RAY_SYM && (expr->attrs & RAY_ATTR_NAME)) {
@@ -8517,6 +8518,7 @@ static void ray_register_builtins(void) {
     register_vary("left-join",   RAY_FN_NONE, ray_left_join);
     register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
     register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join);
+    register_vary("window-join1", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);
 
     /* I/O builtins */
