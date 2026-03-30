@@ -8927,6 +8927,15 @@ static void register_binary(const char* name, uint8_t attrs, ray_binary_fn fn) {
     ray_release(obj);
 }
 
+/* Register binary with a DAG opcode for vectorized execution */
+static void register_binary_op(const char* name, uint8_t attrs, ray_binary_fn fn, uint16_t opcode) {
+    int64_t sym = ray_sym_intern(name, strlen(name));
+    ray_t* obj = ray_fn_binary(name, attrs, fn);
+    RAY_FN_SET_OPCODE(obj, opcode);
+    ray_env_set(sym, obj);
+    ray_release(obj);
+}
+
 static void register_unary(const char* name, uint8_t attrs, ray_unary_fn fn) {
     int64_t sym = ray_sym_intern(name, strlen(name));
     ray_t* obj = ray_fn_unary(name, attrs, fn);
@@ -8942,17 +8951,17 @@ static void register_vary(const char* name, uint8_t attrs, ray_vary_fn fn) {
 }
 
 static void ray_register_builtins(void) {
-    register_binary("+",   RAY_FN_ATOMIC, ray_add_fn);
-    register_binary("-",   RAY_FN_ATOMIC, ray_sub_fn);
-    register_binary("*",   RAY_FN_ATOMIC, ray_mul_fn);
-    register_binary("/",   RAY_FN_ATOMIC, ray_div_fn);
-    register_binary("%",   RAY_FN_ATOMIC, ray_mod_fn);
-    register_binary(">",   RAY_FN_ATOMIC, ray_gt_fn);
-    register_binary("<",   RAY_FN_ATOMIC, ray_lt_fn);
-    register_binary(">=",  RAY_FN_ATOMIC, ray_gte);
-    register_binary("<=",  RAY_FN_ATOMIC, ray_lte);
-    register_binary("==",  RAY_FN_ATOMIC, ray_eq_fn);
-    register_binary("!=",  RAY_FN_ATOMIC, ray_neq);
+    register_binary_op("+",   RAY_FN_ATOMIC, ray_add_fn, OP_ADD);
+    register_binary_op("-",   RAY_FN_ATOMIC, ray_sub_fn, OP_SUB);
+    register_binary_op("*",   RAY_FN_ATOMIC, ray_mul_fn, OP_MUL);
+    register_binary_op("/",   RAY_FN_ATOMIC, ray_div_fn, OP_DIV);
+    register_binary_op("%",   RAY_FN_ATOMIC, ray_mod_fn, OP_MOD);
+    register_binary_op(">",   RAY_FN_ATOMIC, ray_gt_fn,  OP_GT);
+    register_binary_op("<",   RAY_FN_ATOMIC, ray_lt_fn,  OP_LT);
+    register_binary_op(">=",  RAY_FN_ATOMIC, ray_gte,    OP_GE);
+    register_binary_op("<=",  RAY_FN_ATOMIC, ray_lte,    OP_LE);
+    register_binary_op("==",  RAY_FN_ATOMIC, ray_eq_fn,  OP_EQ);
+    register_binary_op("!=",  RAY_FN_ATOMIC, ray_neq,    OP_NE);
     register_binary("and", RAY_FN_NONE,   ray_and_fn);
     register_binary("or",  RAY_FN_NONE,   ray_or_fn);
     register_unary("not",  RAY_FN_NONE,   ray_not_fn);
