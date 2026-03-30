@@ -4473,10 +4473,31 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 if (expr_vec->type < 0) {
                     /* Type check atom against column type BEFORE broadcast */
                     int ok = (expr_vec->type == -ct);
-                    if (!ok && ct == RAY_F64 && expr_vec->type == -RAY_I64) ok = 1; /* allow I64→F64 promotion */
+                    if (!ok && ct == RAY_F64 && expr_vec->type == -RAY_I64) ok = 1;
+                    if (!ok && ct == RAY_LIST && expr_vec->type == -RAY_SYM) ok = 1;
+                    if (!ok && ct == RAY_SYM && expr_vec->type == -RAY_SYM) ok = 1;
                     if (!ok) {
                         ray_release(expr_vec); ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl);
                         return RAY_ERR_PTR(RAY_ERR_TYPE);
+                    }
+                    /* SYM atom to LIST column: build boxed list, merge with mask */
+                    if (ct == RAY_LIST && expr_vec->type == -RAY_SYM) {
+                        ray_free(new_col);
+                        ray_t* new_list = ray_list_new((int32_t)nrows);
+                        if (RAY_IS_ERR(new_list)) { ray_release(expr_vec); ray_release(result); ray_release(mask_vec); ray_release(tbl); return new_list; }
+                        ray_t** orig_elems = (ray_t**)ray_data(orig_col);
+                        for (int64_t r = 0; r < nrows; r++) {
+                            ray_t* elem = mask[r] ? expr_vec : orig_elems[r];
+                            ray_retain(elem);
+                            new_list = ray_list_append(new_list, elem);
+                            ray_release(elem);
+                            if (RAY_IS_ERR(new_list)) { ray_release(expr_vec); ray_release(result); ray_release(mask_vec); ray_release(tbl); return new_list; }
+                        }
+                        ray_release(expr_vec);
+                        result = ray_table_add_col(result, col_name, new_list);
+                        ray_release(new_list);
+                        if (RAY_IS_ERR(result)) { ray_release(mask_vec); ray_release(tbl); return result; }
+                        continue;
                     }
                     ray_t* bcast = ray_vec_new(ct, nrows);
                     if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl); return bcast; }
@@ -4592,13 +4613,31 @@ ray_t* ray_update(ray_t** args, int64_t n) {
             result = ray_table_add_col(result, col_name, orig_col);
             ray_release(orig_col);
         } else {
-            ray_graph_t* ug = ray_graph_new(tbl);
-            ray_op_t* expr_op = compile_expr_dag(ug, update_expr);
-            if (!expr_op) { ray_release(result); ray_release(tbl); ray_graph_free(ug); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
-            expr_op = ray_optimize(ug, expr_op);
-            ray_t* expr_vec = ray_execute(ug, expr_op);
-            ray_graph_free(ug);
-            if (RAY_IS_ERR(expr_vec)) { ray_release(result); ray_release(tbl); return expr_vec; }
+            ray_t* expr_vec = NULL;
+            {
+                ray_graph_t* ug = ray_graph_new(tbl);
+                if (ug) {
+                    ray_op_t* expr_op = compile_expr_dag(ug, update_expr);
+                    if (expr_op) {
+                        expr_op = ray_optimize(ug, expr_op);
+                        expr_vec = ray_execute(ug, expr_op);
+                    }
+                    ray_graph_free(ug);
+                }
+            }
+            if (!expr_vec || RAY_IS_ERR(expr_vec)) {
+                /* Fallback: eval with column bindings */
+                int64_t ncols_f = ray_table_ncols(tbl);
+                ray_env_push_scope();
+                for (int64_t cf = 0; cf < ncols_f; cf++) {
+                    int64_t cn = ray_table_col_name(tbl, cf);
+                    ray_t* colf = ray_table_get_col_idx(tbl, cf);
+                    ray_env_set(cn, colf);
+                }
+                expr_vec = ray_eval(update_expr);
+                ray_env_pop_scope();
+            }
+            if (!expr_vec || RAY_IS_ERR(expr_vec)) { ray_release(result); ray_release(tbl); return expr_vec ? expr_vec : RAY_ERR_PTR(RAY_ERR_TYPE); }
 
             /* Broadcast scalar atom to full column vector if needed */
             if (expr_vec->type < 0) {
@@ -4607,9 +4646,25 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 /* Type check atom against column type BEFORE broadcast */
                 int ok = (expr_vec->type == -ct);
                 if (!ok && ct == RAY_F64 && expr_vec->type == -RAY_I64) ok = 1;
+                /* SYM atom → LIST column (LIST of SYM atoms) */
+                if (!ok && ct == RAY_LIST && expr_vec->type == -RAY_SYM) ok = 1;
                 if (!ok) {
                     ray_release(expr_vec); ray_release(result); ray_release(tbl);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
+                }
+                /* SYM atom to LIST column: broadcast as boxed list */
+                if (ct == RAY_LIST && expr_vec->type == -RAY_SYM) {
+                    ray_t* bcast = ray_list_new((int32_t)nrows);
+                    if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
+                    for (int64_t r = 0; r < nrows; r++) {
+                        ray_retain(expr_vec);
+                        bcast = ray_list_append(bcast, expr_vec);
+                        ray_release(expr_vec);
+                        if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
+                    }
+                    ray_release(expr_vec);
+                    expr_vec = bcast;
+                    goto no_where_add_col;
                 }
                 ray_t* bcast = ray_vec_new(ct, nrows);
                 if (RAY_IS_ERR(bcast)) { ray_release(expr_vec); ray_release(result); ray_release(tbl); return bcast; }
@@ -4653,17 +4708,27 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 expr_vec = promoted;
             }
 
-            /* No-WHERE update: allow numeric type promotion (I64→F64).
-             * Reject incompatible types (e.g., STR→I64). */
-            if (expr_vec->type != orig_col->type) {
-                int is_numeric_promo = (orig_col->type == RAY_I64 || orig_col->type == RAY_I32 || orig_col->type == RAY_F64) &&
-                                       (expr_vec->type == RAY_I64 || expr_vec->type == RAY_I32 || expr_vec->type == RAY_F64);
-                if (!is_numeric_promo) {
+            /* No-WHERE update: allow type change for same-category types.
+             * Atoms (type<0) will be broadcast later, check after broadcast.
+             * For vectors, check now: only numeric promotions or same type.
+             * Also allow SYM/LIST interop (columns may be stored as LIST). */
+            if (expr_vec->type > 0 && expr_vec->type != orig_col->type) {
+                int is_ok = 0;
+                /* Numeric promotions */
+                if ((orig_col->type == RAY_I64 || orig_col->type == RAY_I32 || orig_col->type == RAY_F64) &&
+                    (expr_vec->type == RAY_I64 || expr_vec->type == RAY_I32 || expr_vec->type == RAY_F64))
+                    is_ok = 1;
+                /* SYM/LIST interop */
+                if ((orig_col->type == RAY_SYM || orig_col->type == RAY_LIST) &&
+                    (expr_vec->type == RAY_SYM || expr_vec->type == RAY_LIST))
+                    is_ok = 1;
+                if (!is_ok) {
                     ray_release(expr_vec); ray_release(result); ray_release(tbl);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
             }
 
+no_where_add_col:
             result = ray_table_add_col(result, col_name, expr_vec);
             ray_release(expr_vec);
         }
