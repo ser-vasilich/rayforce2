@@ -4342,16 +4342,31 @@ ray_t* ray_update(ray_t** args, int64_t n) {
     uint8_t* mask = NULL;
 
     if (where_expr) {
-        /* Evaluate the predicate as a DAG to get a boolean mask vector */
+        /* Try DAG compilation first, fall back to eval-level */
+        ray_t* mask_vec = NULL;
         ray_graph_t* g = ray_graph_new(tbl);
-        if (!g) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_OOM); }
-        ray_op_t* pred = compile_expr_dag(g, where_expr);
-        if (!pred) { ray_graph_free(g); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
-        pred = ray_optimize(g, pred);
-        ray_t* mask_vec = ray_execute(g, pred);
-        ray_graph_free(g);
-
-        if (RAY_IS_ERR(mask_vec)) { ray_release(tbl); return mask_vec; }
+        if (g) {
+            ray_op_t* pred = compile_expr_dag(g, where_expr);
+            if (pred) {
+                pred = ray_optimize(g, pred);
+                mask_vec = ray_execute(g, pred);
+            }
+            ray_graph_free(g);
+        }
+        /* Fallback: eval-level predicate evaluation */
+        if (!mask_vec || RAY_IS_ERR(mask_vec)) {
+            /* Bind column names to column vectors in env, then eval */
+            int64_t ncols2 = ray_table_ncols(tbl);
+            ray_env_push_scope();
+            for (int64_t c = 0; c < ncols2; c++) {
+                int64_t cn = ray_table_col_name(tbl, c);
+                ray_t* col = ray_table_get_col_idx(tbl, c);
+                ray_env_set(cn, col);
+            }
+            mask_vec = ray_eval(where_expr);
+            ray_env_pop_scope();
+        }
+        if (!mask_vec || RAY_IS_ERR(mask_vec)) { ray_release(tbl); return mask_vec ? mask_vec : RAY_ERR_PTR(RAY_ERR_TYPE); }
         if (mask_vec->type != RAY_BOOL || mask_vec->len != nrows) {
             ray_release(mask_vec);
             ray_release(tbl);
@@ -4393,15 +4408,66 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 ray_t* new_col = ray_vec_new(ct, nrows);
                 if (RAY_IS_ERR(new_col)) { ray_release(result); ray_release(mask_vec); ray_release(tbl); return new_col; }
 
-                /* Evaluate expression via DAG */
-                ray_graph_t* ug = ray_graph_new(tbl);
-                ray_op_t* expr_op = compile_expr_dag(ug, update_expr);
-                if (!expr_op) { ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl); ray_graph_free(ug); return RAY_ERR_PTR(RAY_ERR_DOMAIN); }
-                expr_op = ray_optimize(ug, expr_op);
-                ray_t* expr_vec = ray_execute(ug, expr_op);
-                ray_graph_free(ug);
+                /* Evaluate expression via DAG, fallback to eval-level */
+                ray_t* expr_vec = NULL;
+                {
+                    ray_graph_t* ug = ray_graph_new(tbl);
+                    if (ug) {
+                        ray_op_t* expr_op = compile_expr_dag(ug, update_expr);
+                        if (expr_op) {
+                            expr_op = ray_optimize(ug, expr_op);
+                            expr_vec = ray_execute(ug, expr_op);
+                        }
+                        ray_graph_free(ug);
+                    }
+                }
+                if (!expr_vec || RAY_IS_ERR(expr_vec)) {
+                    /* Fallback: eval with column bindings */
+                    int64_t ncols_e = ray_table_ncols(tbl);
+                    ray_env_push_scope();
+                    for (int64_t c2 = 0; c2 < ncols_e; c2++) {
+                        int64_t cn = ray_table_col_name(tbl, c2);
+                        ray_t* col2 = ray_table_get_col_idx(tbl, c2);
+                        ray_env_set(cn, col2);
+                    }
+                    expr_vec = ray_eval(update_expr);
+                    ray_env_pop_scope();
+                }
+                if (!expr_vec || RAY_IS_ERR(expr_vec)) { ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl); return expr_vec ? expr_vec : RAY_ERR_PTR(RAY_ERR_TYPE); }
 
-                if (RAY_IS_ERR(expr_vec)) { ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl); return expr_vec; }
+                /* WHERE update: expression result replaces ONLY masked rows.
+                 * When type differs (e.g., I64 col, F64 expr from (* col 1.1)),
+                 * keep original column type and cast expr results.
+                 * Only numeric promotions are allowed — STR↔numeric is a type error. */
+                int8_t expr_type = (expr_vec->type < 0) ? -expr_vec->type : expr_vec->type;
+                if (expr_type != ct && expr_type > 0 && ray_is_vec(expr_vec)) {
+                    /* Only allow numeric promotions (I64↔F64, I32↔F64) */
+                    int is_numeric_promo = (ct == RAY_I64 || ct == RAY_I32 || ct == RAY_F64) &&
+                                           (expr_type == RAY_I64 || expr_type == RAY_I32 || expr_type == RAY_F64);
+                    if (!is_numeric_promo) {
+                        ray_release(expr_vec); ray_release(new_col); ray_release(result); ray_release(mask_vec); ray_release(tbl);
+                        return RAY_ERR_PTR(RAY_ERR_TYPE);
+                    }
+                    /* Copy original column values first */
+                    int esz = ray_elem_size(ct);
+                    memcpy(ray_data(new_col), ray_data(orig_col), (size_t)(nrows * esz));
+                    new_col->len = nrows;
+                    /* Overlay masked rows with type conversion */
+                    for (int64_t r = 0; r < nrows; r++) {
+                        if (!mask[r]) continue;
+                        if (ct == RAY_I64 && expr_type == RAY_F64)
+                            ((int64_t*)ray_data(new_col))[r] = (int64_t)((double*)ray_data(expr_vec))[r];
+                        else if (ct == RAY_I32 && expr_type == RAY_F64)
+                            ((int32_t*)ray_data(new_col))[r] = (int32_t)((double*)ray_data(expr_vec))[r];
+                        else if (ct == RAY_F64 && expr_type == RAY_I64)
+                            ((double*)ray_data(new_col))[r] = (double)((int64_t*)ray_data(expr_vec))[r];
+                    }
+                    ray_release(expr_vec);
+                    result = ray_table_add_col(result, col_name, new_col);
+                    ray_release(new_col);
+                    if (RAY_IS_ERR(result)) { ray_release(mask_vec); ray_release(tbl); return result; }
+                    continue;
+                }
 
                 /* Broadcast scalar atom to full column vector if needed */
                 if (expr_vec->type < 0) {
@@ -4587,10 +4653,15 @@ ray_t* ray_update(ray_t** args, int64_t n) {
                 expr_vec = promoted;
             }
 
-            /* Type check: expr_vec must match original column type */
+            /* No-WHERE update: allow numeric type promotion (I64→F64).
+             * Reject incompatible types (e.g., STR→I64). */
             if (expr_vec->type != orig_col->type) {
-                ray_release(expr_vec); ray_release(result); ray_release(tbl);
-                return RAY_ERR_PTR(RAY_ERR_TYPE);
+                int is_numeric_promo = (orig_col->type == RAY_I64 || orig_col->type == RAY_I32 || orig_col->type == RAY_F64) &&
+                                       (expr_vec->type == RAY_I64 || expr_vec->type == RAY_I32 || expr_vec->type == RAY_F64);
+                if (!is_numeric_promo) {
+                    ray_release(expr_vec); ray_release(result); ray_release(tbl);
+                    return RAY_ERR_PTR(RAY_ERR_TYPE);
+                }
             }
 
             result = ray_table_add_col(result, col_name, expr_vec);
