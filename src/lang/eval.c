@@ -1190,8 +1190,7 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
                         if (left->type == -RAY_F64)
                             lop = ray_const_f64(g, left->f64);
                         else {
-                            /* Map narrow null sentinels to I64 null (INT64_MIN) */
-                            int64_t sv = is_null_atom(left) ? INT64_MIN : as_i64(left);
+                            int64_t sv = as_i64(left);
                             lop = ray_const_i64(g, sv);
                         }
                     } else {
@@ -1203,8 +1202,7 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
                         if (right->type == -RAY_F64)
                             rop = ray_const_f64(g, right->f64);
                         else {
-                            /* Map narrow null sentinels to I64 null (INT64_MIN) */
-                            int64_t sv = is_null_atom(right) ? INT64_MIN : as_i64(right);
+                            int64_t sv = as_i64(right);
                             rop = ray_const_i64(g, sv);
                         }
                     } else {
