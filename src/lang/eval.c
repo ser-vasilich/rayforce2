@@ -950,7 +950,13 @@ static int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
 /* Map a binary function element-wise over collections.
  * Both args can be collections (zip-map) or one scalar (broadcast).
  * Produces typed vectors when output is numeric/bool, boxed lists otherwise. */
+static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, ray_t* right);
+
 static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
+    return atomic_map_binary_op(fn, 0, left, right);
+}
+
+static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, ray_t* right) {
     int left_coll = is_collection(left);
     int right_coll = is_collection(right);
 
@@ -1039,114 +1045,65 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     }
 
     /* ══════════════════════════════════════════════════════════════
-     * FAST PATH: direct array loops and DAG executor for numeric
-     * vector arithmetic.  I64 add/sub/mul use direct loops for
-     * maximum throughput; all other ops route through the DAG.
+     * FAST PATH: opcode-driven vectorized execution.
+     * I64 ops use direct array loops (lowest overhead).
+     * F64/comparison ops route through DAG executor.
      * ══════════════════════════════════════════════════════════════ */
 
-    /* I64 direct loop fast path: add, sub, mul, div, mod with null propagation.
-     * Avoids DAG overhead for the most common case. */
-    if (!force_boxed && !e0_null) {
-        int is_arith = (fn == (ray_binary_fn)ray_add_fn || fn == (ray_binary_fn)ray_sub_fn ||
-                        fn == (ray_binary_fn)ray_mul_fn || fn == (ray_binary_fn)ray_div_fn ||
-                        fn == (ray_binary_fn)ray_mod_fn);
-        if (is_arith) {
-            int lv64 = left_coll && ray_is_vec(left) && left->type == RAY_I64;
-            int rv64 = right_coll && ray_is_vec(right) && right->type == RAY_I64;
-            int ls64 = !left_coll && left->type == -RAY_I64;
-            int rs64 = !right_coll && right->type == -RAY_I64;
-
-            if ((ls64 && rv64) || (lv64 && rs64) || (lv64 && rv64)) {
-                ray_t* vec = ray_vec_new(RAY_I64, len);
-                if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
-                vec->len = len;
-                int64_t* dst = (int64_t*)ray_data(vec);
-                int64_t N = INT64_MIN; /* null sentinel */
-                #define I64_ARITH(body) \
-                    if (ls64 && rv64) { \
-                        int64_t sv = left->i64; int64_t* rd = (int64_t*)ray_data(right); \
-                        if (sv == N) { for (int64_t i = 0; i < len; i++) dst[i] = N; } \
-                        else { for (int64_t i = 0; i < len; i++) { int64_t a=sv, b=rd[i]; body } } \
-                    } else if (lv64 && rs64) { \
-                        int64_t* ld = (int64_t*)ray_data(left); int64_t sv = right->i64; \
-                        if (sv == N) { for (int64_t i = 0; i < len; i++) dst[i] = N; } \
-                        else { for (int64_t i = 0; i < len; i++) { int64_t a=ld[i], b=sv; body } } \
-                    } else { \
-                        int64_t* ld = (int64_t*)ray_data(left); int64_t* rd = (int64_t*)ray_data(right); \
-                        for (int64_t i = 0; i < len; i++) { int64_t a=ld[i], b=rd[i]; body } \
-                    }
-                if (fn == (ray_binary_fn)ray_add_fn) {
-                    I64_ARITH(dst[i] = (a==N||b==N) ? N : (int64_t)((uint64_t)a+(uint64_t)b);)
-                } else if (fn == (ray_binary_fn)ray_sub_fn) {
-                    I64_ARITH(dst[i] = (a==N||b==N) ? N : (int64_t)((uint64_t)a-(uint64_t)b);)
-                } else if (fn == (ray_binary_fn)ray_mul_fn) {
-                    I64_ARITH(dst[i] = (a==N||b==N) ? N : (int64_t)((uint64_t)a*(uint64_t)b);)
-                } else if (fn == (ray_binary_fn)ray_div_fn) {
-                    I64_ARITH(
-                        if (b==0||a==N||b==N) { dst[i]=N; }
-                        else { int64_t q=a/b; if ((a^b)<0 && q*b!=a) q--; dst[i]=q; }
-                    )
-                } else { /* mod */
-                    I64_ARITH(
-                        if (b==0||a==N||b==N) { dst[i]=N; }
-                        else { int64_t m=a%b; if (m && (m^b)<0) m+=b; dst[i]=m; }
-                    )
-                }
-                #undef I64_ARITH
-                ray_release(e0);
-                return vec;
+    /* I64 direct loops — zero overhead, null-propagating */
+    if (!force_boxed && dag_opcode > 0 && dag_opcode <= OP_MOD) {
+        int lv64 = left_coll && ray_is_vec(left) && left->type == RAY_I64;
+        int rv64 = right_coll && ray_is_vec(right) && right->type == RAY_I64;
+        int ls64 = !left_coll && left->type == -RAY_I64;
+        int rs64 = !right_coll && right->type == -RAY_I64;
+        if ((ls64 && rv64) || (lv64 && rs64) || (lv64 && rv64)) {
+            ray_t* vec = ray_vec_new(RAY_I64, len);
+            if (RAY_IS_ERR(vec)) { ray_release(e0); return vec; }
+            vec->len = len;
+            int64_t* dst = (int64_t*)ray_data(vec);
+            int64_t N = INT64_MIN;
+            int64_t* ld = lv64 ? (int64_t*)ray_data(left) : NULL;
+            int64_t* rd = rv64 ? (int64_t*)ray_data(right) : NULL;
+            int64_t lsv = ls64 ? left->i64 : 0;
+            int64_t rsv = rs64 ? right->i64 : 0;
+            #define L(i) (ld ? ld[i] : lsv)
+            #define R(i) (rd ? rd[i] : rsv)
+            switch (dag_opcode) {
+            case OP_ADD: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a+(uint64_t)b); } break;
+            case OP_SUB: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a-(uint64_t)b); } break;
+            case OP_MUL: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); dst[i]=(a==N||b==N)?N:(int64_t)((uint64_t)a*(uint64_t)b); } break;
+            case OP_DIV: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); if(b==0||a==N||b==N){dst[i]=N;}else{int64_t q=a/b;if((a^b)<0&&q*b!=a)q--;dst[i]=q;} } break;
+            case OP_MOD: for (int64_t i=0;i<len;i++) { int64_t a=L(i),b=R(i); if(b==0||a==N||b==N){dst[i]=N;}else{int64_t m=a%b;if(m&&(m^b)<0)m+=b;dst[i]=m;} } break;
             }
+            #undef L
+            #undef R
+            ray_release(e0);
+            return vec;
         }
     }
 
-    /* DAG fast path: route remaining numeric ops through the fused morsel-driven
-     * executor. Covers: F64 add/sub/mul, I64 div/mod, same-type comparisons. */
-    if (!force_boxed) {
-        typedef ray_op_t* (*dag_binop_ctor)(ray_graph_t*, ray_op_t*, ray_op_t*);
-        dag_binop_ctor dag_ctor = NULL;
-        int is_idiv = 0; /* integer floor-division: override out_type to I64 */
-        int is_cmp = 0;  /* comparison op: cross-type null requires same-type operands */
+    /* DAG executor — for F64 and comparisons */
+    if (!force_boxed && dag_opcode > 0) {
+        int is_idiv = (dag_opcode == OP_DIV || dag_opcode == OP_MOD);
+        int is_cmp  = (dag_opcode >= OP_EQ && dag_opcode <= OP_GE);
 
-        /* Map eval functions → DAG constructors */
-        if      (fn == (ray_binary_fn)ray_add_fn) dag_ctor = ray_add;
-        else if (fn == (ray_binary_fn)ray_sub_fn) dag_ctor = ray_sub;
-        else if (fn == (ray_binary_fn)ray_mul_fn) dag_ctor = ray_mul;
-        else if (fn == (ray_binary_fn)ray_div_fn) { dag_ctor = ray_div; is_idiv = 1; }
-        else if (fn == (ray_binary_fn)ray_mod_fn) { dag_ctor = ray_mod; is_idiv = 1; }
-        else if (fn == (ray_binary_fn)ray_eq_fn)  { dag_ctor = ray_eq;  is_cmp = 1; }
-        else if (fn == (ray_binary_fn)ray_neq)    { dag_ctor = ray_ne;  is_cmp = 1; }
-        else if (fn == (ray_binary_fn)ray_lt_fn)  { dag_ctor = ray_lt;  is_cmp = 1; }
-        else if (fn == (ray_binary_fn)ray_lte)    { dag_ctor = ray_le;  is_cmp = 1; }
-        else if (fn == (ray_binary_fn)ray_gt_fn)  { dag_ctor = ray_gt;  is_cmp = 1; }
-        else if (fn == (ray_binary_fn)ray_gte)    { dag_ctor = ray_ge;  is_cmp = 1; }
+        /* Classify operands: I64/F64 vectors or numeric scalars */
+        int8_t lt = left_coll ? left->type : -(left->type);
+        int8_t rt = right_coll ? right->type : -(right->type);
+        int l_num_vec = left_coll && ray_is_vec(left) && (lt == RAY_F64 || lt == RAY_I64);
+        int r_num_vec = right_coll && ray_is_vec(right) && (rt == RAY_F64 || rt == RAY_I64);
+        int l_num_scalar = !left_coll && is_numeric(left);
+        int r_num_scalar = !right_coll && is_numeric(right);
 
-        if (dag_ctor) {
-            /* Classify operands: F64/I64 vectors or numeric scalars.
-             * Narrow integer vectors (I32/I16/U8) are excluded — their null
-             * sentinels (INT32_MIN, INT16_MIN) don't survive I64 promotion. */
-            int8_t lt = left_coll ? left->type : -(left->type);
-            int8_t rt = right_coll ? right->type : -(right->type);
-            int l_num_vec = left_coll && ray_is_vec(left) && (lt == RAY_F64 || lt == RAY_I64);
-            int r_num_vec = right_coll && ray_is_vec(right) && (rt == RAY_F64 || rt == RAY_I64);
-            int l_num_scalar = !left_coll && is_numeric(left);
-            int r_num_scalar = !right_coll && is_numeric(right);
+        int can_dag = (l_num_vec || r_num_vec) &&
+                      (l_num_vec || l_num_scalar) && (r_num_vec || r_num_scalar);
 
-            /* At least one operand must be an F64 or I64 vector */
-            int can_dag = (l_num_vec || r_num_vec) &&
-                          (l_num_vec || l_num_scalar) && (r_num_vec || r_num_scalar);
+        /* Div/mod: only I64×I64 (executor has floor-div semantics for I64) */
+        if (is_idiv && !(lt == RAY_I64 && rt == RAY_I64)) can_dag = 0;
+        /* Comparisons: same-type only (cross-type null sentinels differ) */
+        if (is_cmp && lt != rt) can_dag = 0;
 
-            /* Div/mod: Rayfall always does floor-division with type-preserving
-             * null output, but DAG does IEEE 754 (F64) or I64 only.
-             * Only route through DAG when both operands are I64 type,
-             * so the executor uses the I64 floor-div path and output type matches. */
-            if (is_idiv && !(lt == RAY_I64 && rt == RAY_I64)) can_dag = 0;
-
-            /* Comparisons: cross-type null semantics (I64 null == F64 null → true)
-             * require same-type operands in the DAG, because null sentinels
-             * differ between types (INT64_MIN vs NaN). */
-            if (is_cmp && lt != rt) can_dag = 0;
-
-            if (can_dag) {
+        if (can_dag) {
                 ray_graph_t* g = ray_graph_new(NULL);
                 if (g) {
                     /* Build left operand node */
@@ -1176,10 +1133,10 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
                         rop = ray_const_vec(g, right);
                     }
                     if (lop && rop) {
-                        ray_op_t* root = dag_ctor(g, lop, rop);
+                        ray_op_t* root = ray_binop(g, dag_opcode, lop, rop);
                         if (root) {
-                            /* For integer floor-division: ray_div forces F64 output,
-                             * override to I64 so executor uses floor-div with null prop */
+                            /* For integer floor-division: ray_binop sets F64 output
+                             * for OP_DIV; override to I64 for floor-div with null prop */
                             if (is_idiv) root->out_type = RAY_I64;
                             ray_t* result = ray_execute(g, root);
                             ray_graph_free(g);
@@ -1192,8 +1149,6 @@ static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
                 }
             }
         }
-    }
-
     /* SLOW PATH: per-element scalar loop (fallback for mixed types, temporal, etc.) */
     if (!force_boxed &&
         (out_type == RAY_I64 || out_type == RAY_F64 || out_type == RAY_I32 ||
@@ -7231,7 +7186,7 @@ op_call2: {
     ray_binary_fn fn = (ray_binary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
     if ((fn_obj->attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
-        result = atomic_map_binary(fn, left, right);
+        result = atomic_map_binary_op(fn, RAY_FN_OPCODE(fn_obj), left, right);
     else
         result = fn(left, right);
     ray_release(left);
@@ -9226,10 +9181,11 @@ ray_t* ray_eval(ray_t* obj) {
                 if (right) ray_release(right);
                 ret = RAY_ERR_PTR(RAY_ERR_TYPE); goto out;
             }
+            uint16_t fn_opcode = RAY_FN_OPCODE(head);
             ray_release(head);
             ray_t* result;
             if ((fn_attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
-                result = atomic_map_binary(fn, left, right);
+                result = atomic_map_binary_op(fn, fn_opcode, left, right);
             else
                 result = fn(left, right);
             ray_release(left);

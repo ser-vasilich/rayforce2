@@ -437,6 +437,21 @@ ray_op_t* ray_cast(ray_graph_t* g, ray_op_t* a, int8_t target_type) {
  * Binary element-wise ops
  * -------------------------------------------------------------------------- */
 
+/* Generic binary op constructor — opcode-driven, no switch/case needed by caller */
+ray_op_t* ray_binop(ray_graph_t* g, uint16_t opcode, ray_op_t* a, ray_op_t* b) {
+    int8_t out;
+    switch (opcode) {
+    case OP_EQ: case OP_NE: case OP_LT: case OP_LE:
+    case OP_GT: case OP_GE: case OP_AND: case OP_OR:
+        out = RAY_BOOL; break;
+    case OP_DIV:
+        out = RAY_F64; break;
+    default:
+        out = promote(a->out_type, b->out_type); break;
+    }
+    return make_binary(g, opcode, a, b, out);
+}
+
 ray_op_t* ray_add(ray_graph_t* g, ray_op_t* a, ray_op_t* b) { return make_binary(g, OP_ADD, a, b, promote(a->out_type, b->out_type)); }
 ray_op_t* ray_sub(ray_graph_t* g, ray_op_t* a, ray_op_t* b) { return make_binary(g, OP_SUB, a, b, promote(a->out_type, b->out_type)); }
 ray_op_t* ray_mul(ray_graph_t* g, ray_op_t* a, ray_op_t* b) { return make_binary(g, OP_MUL, a, b, promote(a->out_type, b->out_type)); }
