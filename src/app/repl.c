@@ -118,11 +118,13 @@ static void print_banner(void) {
     int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
 
     fprintf(stdout,
-        "Rayforce %s (%s, %s)\n"
-        "%s | %d cores | %" PRId64 " MB RAM\n"
-        "Apache-2.0 license | type :? for help\n\n",
-        RAYFORCE_VERSION, RAYFORCE_GIT_COMMIT, RAYFORCE_BUILD_DATE,
-        cpu, ncores, mem_mb);
+        "TeideDB: %s %s\n"
+        "  %s %"PRId64"(MB) %d core(s)\n"
+        "  Using %d cores(s)\n"
+        "  Apache-2.0 license | type :? for help\n",
+        RAYFORCE_VERSION, RAYFORCE_BUILD_DATE,
+        cpu, mem_mb, ncores,
+        ncores);
 }
 
 #define PIPE_BUF_SIZE 4096
