@@ -135,12 +135,14 @@ static const char* try_parse_time(const char* start, int32_t *ms_out) {
     /* HH */
     if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;
     int hh = (c[0] - '0') * 10 + (c[1] - '0'); c += 2;
-    if (*c != ':') return NULL; c++;
+    if (*c != ':') return NULL;
+    c++;
 
     /* MM */
     if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;
     int mm = (c[0] - '0') * 10 + (c[1] - '0'); c += 2;
-    if (*c != ':') return NULL; c++;
+    if (*c != ':') return NULL;
+    c++;
 
     /* SS */
     if (!(c[0] >= '0' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9')) return NULL;

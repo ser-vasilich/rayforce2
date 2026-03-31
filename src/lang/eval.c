@@ -3465,7 +3465,8 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
             if (col_type == RAY_STR) {
                 if (row_elems[j]->type != -RAY_STR) {
                     ray_release(col_vec); ray_release(tbl);
-                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
+                    if (_bxn) ray_release(_bxn);
+                    if (_bxc) ray_release(_bxc);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 const char *sptr = ray_str_ptr(row_elems[j]);
@@ -3474,7 +3475,8 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
             } else if (col_type == RAY_GUID) {
                 if (row_elems[j]->type != -RAY_GUID || !row_elems[j]->obj) {
                     ray_release(col_vec); ray_release(tbl);
-                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
+                    if (_bxn) ray_release(_bxn);
+                    if (_bxc) ray_release(_bxc);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 col_vec = ray_vec_append(col_vec, ray_data(row_elems[j]->obj));
@@ -3484,7 +3486,8 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
                 if (!type_ok && col_type == RAY_F64 && row_elems[j]->type == -RAY_I64) type_ok = 1;
                 if (!type_ok) {
                     ray_release(col_vec); ray_release(tbl);
-                    if (_bxn) ray_release(_bxn); if (_bxc) ray_release(_bxc);
+                    if (_bxn) ray_release(_bxn);
+                    if (_bxc) ray_release(_bxc);
                     return RAY_ERR_PTR(RAY_ERR_TYPE);
                 }
                 void* val_ptr;
