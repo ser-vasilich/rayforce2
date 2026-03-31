@@ -1533,6 +1533,21 @@ static MunitResult test_verb_sum_var(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* Regression: binary op on boxed list with nested vector used to segfault
+ * in release mode because the raw atom fn received a vector argument. */
+static MunitResult test_atomic_map_nested_vec(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* scalar + list containing a vector → recursive auto-map */
+    ASSERT_EQ("(+ 1 (list 1 2 (til 5)))", "(list 2 3 [1 2 3 4 5])");
+    /* scalar + list containing only atoms (homogeneous) */
+    ASSERT_EQ("(+ 1 (list 1 2 3))", "[2 3 4]");
+    /* scalar + list with nested list */
+    ASSERT_EQ("(+ 10 (list 1 (list 2 3)))", "(list 11 (list 12 13))");
+    /* type error still propagated for incompatible element */
+    ASSERT_ER("(+ 1 (list 1 2 \"s\"))", "type");
+    return MUNIT_OK;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * Ported rayforce lang tests (41 functions, ~3800 assertions)
  * ═══════════════════════════════════════════════════════════════ */
@@ -1632,6 +1647,7 @@ static MunitTest lang_tests[] = {
     { "/verb/dev_til",         test_verb_dev_til,         lang_setup, lang_teardown, 0, NULL },
     { "/verb/if_sum",          test_verb_if_sum,          lang_setup, lang_teardown, 0, NULL },
     { "/verb/sum_var",         test_verb_sum_var,         lang_setup, lang_teardown, 0, NULL },
+    { "/atomic_map_nested_vec", test_atomic_map_nested_vec, lang_setup, lang_teardown, 0, NULL },
     /* Ported rayforce lang tests */
     { "/rf/map",                   test_rf_map,           lang_setup, lang_teardown, 0, NULL },
     { "/rf/basic",                 test_rf_basic,         lang_setup, lang_teardown, 0, NULL },

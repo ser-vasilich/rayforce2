@@ -24,17 +24,22 @@
 #include "cow.h"
 #include "heap.h"
 
+/* Thread-local flag: when false (default), refcount uses plain inc/dec.
+ * The thread pool sets this to true before dispatching parallel work.
+ * Mirrors rayforce 1's VM->rc_sync fast path. */
+RAY_TLS bool ray_rc_sync = false;
+
 /* --------------------------------------------------------------------------
  * ray_retain
  * -------------------------------------------------------------------------- */
 
 void ray_retain(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
-    if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, no-op */
-    /* conc-L3: Relaxed ordering is sufficient for retain — the caller already
-     * holds a valid reference, so no inter-thread synchronization is needed
-     * for the increment itself. Release synchronizes via ray_release's acq_rel. */
-    ray_atomic_inc(&v->rc);
+    if (v->attrs & RAY_ATTR_ARENA) return;
+    if (RAY_LIKELY(!ray_rc_sync))
+        v->rc++;
+    else
+        ray_atomic_inc(&v->rc);
 }
 
 /* --------------------------------------------------------------------------
@@ -43,8 +48,13 @@ void ray_retain(ray_t* v) {
 
 void ray_release(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return;
-    if (v->attrs & RAY_ATTR_ARENA) return;  /* arena-owned, no-op */
-    uint32_t prev = ray_atomic_dec(&v->rc);
+    if (v->attrs & RAY_ATTR_ARENA) return;
+    uint32_t prev;
+    if (RAY_LIKELY(!ray_rc_sync)) {
+        prev = v->rc--;
+    } else {
+        prev = ray_atomic_dec(&v->rc);
+    }
     if (prev == 1) ray_free(v);
 }
 
@@ -55,10 +65,7 @@ void ray_release(ray_t* v) {
 ray_t* ray_cow(ray_t* v) {
     if (!v || RAY_IS_ERR(v)) return v;
     if (v->attrs & RAY_ATTR_ARENA) return v;  /* arena-owned, no-op */
-    /* Caller must hold exclusive logical ownership — no concurrent
-       ray_retain/ray_release allowed. The acquire load ensures visibility
-       of prior writes by threads that have released their reference. */
-    uint32_t rc = ray_atomic_load(&v->rc);
+    uint32_t rc = RAY_LIKELY(!ray_rc_sync) ? v->rc : ray_atomic_load(&v->rc);
     if (rc == 1) return v;  /* sole owner -- mutate in place */
     ray_t* copy = ray_alloc_copy(v);
     if (!copy || RAY_IS_ERR(copy)) return copy;

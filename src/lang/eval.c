@@ -37,6 +37,12 @@
 #include <math.h>
 #include <signal.h>
 #include <time.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 /* Maximum recursion depth for ray_eval() to prevent stack overflow */
 #define RAY_EVAL_MAX_DEPTH 512
@@ -1001,8 +1007,14 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
     int la0 = 0, ra0 = 0;
     ray_t* a0 = left_coll  ? collection_elem(left, 0, &la0)  : left;
     ray_t* b0 = right_coll ? collection_elem(right, 0, &ra0) : right;
-    ray_t* e0 = (RAY_IS_ERR(a0) || RAY_IS_ERR(b0))
-               ? RAY_ERR_PTR(RAY_ERR_TYPE) : fn(a0, b0);
+    ray_t* e0;
+    if (RAY_IS_ERR(a0) || RAY_IS_ERR(b0)) {
+        e0 = RAY_ERR_PTR(RAY_ERR_TYPE);
+    } else if (is_collection(a0) || is_collection(b0)) {
+        e0 = atomic_map_binary(fn, a0, b0);
+    } else {
+        e0 = fn(a0, b0);
+    }
     if (la0) ray_release(a0);
     if (ra0) ray_release(b0);
     if (RAY_IS_ERR(e0)) return e0;
@@ -1311,8 +1323,15 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
         int la = 0, ra = 0;
         ray_t* a = left_coll  ? collection_elem(left, i, &la)  : left;
         ray_t* b = right_coll ? collection_elem(right, i, &ra) : right;
-        ray_t* elem = (RAY_IS_ERR(a) || RAY_IS_ERR(b))
-                     ? RAY_ERR_PTR(RAY_ERR_TYPE) : fn(a, b);
+        ray_t* elem;
+        if (RAY_IS_ERR(a) || RAY_IS_ERR(b)) {
+            elem = RAY_ERR_PTR(RAY_ERR_TYPE);
+        } else if (is_collection(a) || is_collection(b)) {
+            /* Recursive auto-map when list element is itself a collection */
+            elem = atomic_map_binary(fn, a, b);
+        } else {
+            elem = fn(a, b);
+        }
         if (la) ray_release(a);
         if (ra) ray_release(b);
         if (RAY_IS_ERR(elem)) {
@@ -1409,10 +1428,10 @@ ray_t* ray_sum_fn(ray_t* x) {
         if (x->type == RAY_I32) {
             int64_t n = x->len;
             int32_t* d = (int32_t*)ray_data(x);
-            int32_t sum = 0;
+            int64_t sum = 0;
             for (int64_t i = 0; i < n; i++)
                 if (d[i] != INT32_MIN) sum += d[i];
-            return make_i32(sum);
+            return make_i32((int32_t)sum);
         }
         if (x->type == RAY_I16 || x->type == RAY_U8) {
             /* i16/u8 sum promotes to i64 to avoid overflow */
@@ -6911,6 +6930,51 @@ ray_t* ray_read_file(ray_t* path_obj) {
     return result;
 }
 
+/* (load path) — read and evaluate a Rayfall script file via mmap */
+ray_t* ray_load_file(ray_t* path_obj) {
+    if (path_obj->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    const char* path = ray_str_ptr(path_obj);
+    if (!path) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+
+#if defined(_WIN32)
+    /* Windows: fall back to fread */
+    FILE* fp = fopen(path, "r");
+    if (!fp) return RAY_ERR_PTR(RAY_ERR_IO);
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz < 0) { fclose(fp); return RAY_ERR_PTR(RAY_ERR_IO); }
+    if (sz == 0) { fclose(fp); return ray_i64(0); }
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) { fclose(fp); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    size_t rd = fread(buf, 1, (size_t)sz, fp);
+    fclose(fp);
+    buf[rd] = '\0';
+    ray_t* result = ray_eval_str(buf);
+    free(buf);
+    return result;
+#else
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return RAY_ERR_PTR(RAY_ERR_IO);
+    struct stat st;
+    if (fstat(fd, &st) < 0 || st.st_size < 0) { close(fd); return RAY_ERR_PTR(RAY_ERR_IO); }
+    size_t sz = (size_t)st.st_size;
+    if (sz == 0) { close(fd); return ray_i64(0); }
+    char* map = (char*)mmap(NULL, sz, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return RAY_ERR_PTR(RAY_ERR_IO);
+    /* Copy to NUL-terminated buffer — mmap region may not have a trailing NUL */
+    char* buf = (char*)malloc(sz + 1);
+    if (!buf) { munmap(map, sz); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    memcpy(buf, map, sz);
+    buf[sz] = '\0';
+    munmap(map, sz);
+    ray_t* result = ray_eval_str(buf);
+    free(buf);
+    return result;
+#endif
+}
+
 /* (write path content) — write string to a file */
 ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
     if (path_obj->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
@@ -7151,24 +7215,13 @@ static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc) {
         vm.ps[i] = call_args[i];
     }
 
-    /* Bind 'self' in env so OP_RESOLVE can find it for recursion */
-    int vm_pushed_scope = 0;
-    {
-        static int64_t self_sym_id = -1;
-        if (self_sym_id < 0) self_sym_id = ray_sym_intern("self", 4);
-        if (ray_env_push_scope() == RAY_OK) {
-            ray_env_set_local(self_sym_id, lambda);
-            vm_pushed_scope = 1;
-        }
-    }
-
     uint8_t *code = (uint8_t *)ray_data(LAMBDA_BC(lambda));
     ray_t **cpool = (ray_t **)ray_data(LAMBDA_CONSTS(lambda));
     int32_t ip = 0;
 
 #define DISPATCH() goto *dispatch[code[ip++]]
-#define PUSH(v)    do { if (vm.sp >= VM_STACK_SIZE) goto vm_error; vm.ps[vm.sp++] = (v); } while(0)
-#define POP()      ({ if (vm.sp <= vm.fp + n_locals) goto vm_error; vm.ps[--vm.sp]; })
+#define PUSH(v)    (vm.ps[vm.sp++] = (v))
+#define POP()      (vm.ps[--vm.sp])
 #define PEEK()     (vm.ps[vm.sp - 1])
 #define LOCAL(s)   (vm.ps[vm.fp + (s)])
 
@@ -7270,7 +7323,7 @@ op_call1: {
     ray_t *fn_obj = POP();
     ray_unary_fn fn = (ray_unary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && is_collection(arg))
+    if ((fn_obj->attrs & RAY_FN_ATOMIC) && arg->type >= 0)
         result = atomic_map_unary(fn, arg);
     else
         result = fn(arg);
@@ -7287,7 +7340,9 @@ op_call2: {
     ray_t *fn_obj = POP();
     ray_binary_fn fn = (ray_binary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && (is_collection(left) || is_collection(right)))
+    /* Fast path: atoms have negative type — skip collection check entirely.
+     * Only call is_collection when at least one arg has type >= 0 (vector/list). */
+    if ((fn_obj->attrs & RAY_FN_ATOMIC) && (left->type >= 0 || right->type >= 0))
         result = atomic_map_binary_op(fn, RAY_FN_OPCODE(fn_obj), left, right);
     else
         result = fn(left, right);
@@ -7399,77 +7454,28 @@ op_callf: {
 }
 
 op_calls: {
-    /* Tail call: reuse current frame (no return stack push) */
-    uint8_t n = code[ip++];
-    if (n > 64) goto vm_error;
-    ray_t *fn_args[64];
-    for (int32_t i = n - 1; i >= 0; i--)
-        fn_args[i] = POP();
-    ray_t *fn_obj = POP();
+    /* Self-recursive call — lean path matching rayforce 1.
+     * No fn object on stack. Args are already at sp-argc..sp.
+     * Push return frame, set fp so args become locals, extend for extra locals. */
+    uint8_t argc = code[ip++];
 
-    if (fn_obj->type == RAY_LAMBDA) {
-        if (!LAMBDA_IS_COMPILED(fn_obj))
-            ray_compile(fn_obj);
+    /* Stack overflow guard */
+    if (RAY_UNLIKELY(vm.rp >= VM_STACK_SIZE)) goto vm_error;
+    if (RAY_UNLIKELY(vm.sp + n_locals >= VM_STACK_SIZE)) goto vm_error;
 
-        if (LAMBDA_IS_COMPILED(fn_obj)) {
-            /* Clean up current frame locals */
-            for (int32_t i = 0; i < n_locals; i++)
-                if (LOCAL(i)) { ray_release(LOCAL(i)); LOCAL(i) = NULL; }
+    /* Push return frame (fn=NULL signals self-call to OP_RET) */
+    vm.rs[vm.rp++] = (vm_ctx_t){ .fn = NULL, .fp = vm.fp, .ip = ip };
 
-            /* Reuse frame: reset sp to fp, don't push return context */
-            vm.sp = vm.fp;
-            ray_release(vm.fn);
-            vm.fn = fn_obj;  /* takes ownership */
-            int32_t callee_locals = LAMBDA_NLOCALS(fn_obj);
-            if (vm.sp + callee_locals >= VM_STACK_SIZE) goto vm_error;
-            vm.sp += callee_locals;
-            n_locals = callee_locals;
+    /* Args on stack become the new frame's first locals.
+     * Compiler guarantees argc == param count, so argc <= n_locals. */
+    vm.fp = vm.sp - argc;
 
-            int64_t pcnt = ray_len(LAMBDA_PARAMS(fn_obj));
-            int64_t bind = pcnt < n ? pcnt : n;
-            for (int64_t i = 0; i < bind; i++)
-                LOCAL(i) = fn_args[i];
-            for (int32_t i = (int32_t)bind; i < callee_locals; i++)
-                LOCAL(i) = NULL;
-            for (int64_t i = bind; i < n; i++)
-                ray_release(fn_args[i]);
+    /* Extend stack for extra locals beyond params (let bindings etc.) */
+    for (int32_t i = argc; i < n_locals; i++)
+        vm.ps[vm.sp++] = NULL;
 
-            code = (uint8_t *)ray_data(LAMBDA_BC(fn_obj));
-            cpool = (ray_t **)ray_data(LAMBDA_CONSTS(fn_obj));
-            ip = 0;
-            DISPATCH();
-        }
-    }
-
-    /* Fallback: same as CALLF non-lambda path */
-    {
-        ray_t *result;
-        switch (fn_obj->type) {
-        case RAY_UNARY:
-            result = ((ray_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
-            ray_release(fn_args[0]);
-            for (int32_t i = 1; i < n; i++) ray_release(fn_args[i]);
-            break;
-        case RAY_BINARY:
-            result = ((ray_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
-            ray_release(fn_args[0]);
-            ray_release(fn_args[1]);
-            for (int32_t i = 2; i < n; i++) ray_release(fn_args[i]);
-            break;
-        case RAY_VARY:
-            result = ((ray_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
-            for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
-            break;
-        default:
-            result = call_lambda(fn_obj, fn_args, n);
-            for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
-            break;
-        }
-        ray_release(fn_obj);
-        if (RAY_IS_ERR(result)) goto vm_error;
-        PUSH(result);
-        DISPATCH();
-    }
+    ip = 0;
+    DISPATCH();
 }
 
 op_calld: {
@@ -7533,7 +7539,6 @@ op_ret: {
         /* Top-level return */
         ray_release(vm.fn);
         __VM = NULL;
-        if (vm_pushed_scope) ray_env_pop_scope();
 #undef vm
         ray_free(vm_block);
         return result;  /* caller owns the POP'd reference */
@@ -7541,14 +7546,18 @@ op_ret: {
     }
 
     /* Pop return frame */
-    ray_release(vm.fn);
     vm.rp--;
-    vm.fn = vm.rs[vm.rp].fn;
     vm.fp = vm.rs[vm.rp].fp;
     ip = vm.rs[vm.rp].ip;
-    code = (uint8_t *)ray_data(LAMBDA_BC(vm.fn));
-    cpool = (ray_t **)ray_data(LAMBDA_CONSTS(vm.fn));
-    n_locals = LAMBDA_NLOCALS(vm.fn);
+    if (vm.rs[vm.rp].fn) {
+        /* Normal call: restore caller's function */
+        ray_release(vm.fn);
+        vm.fn = vm.rs[vm.rp].fn;
+        code = (uint8_t *)ray_data(LAMBDA_BC(vm.fn));
+        cpool = (ray_t **)ray_data(LAMBDA_CONSTS(vm.fn));
+        n_locals = LAMBDA_NLOCALS(vm.fn);
+    }
+    /* Self-call (fn==NULL): vm.fn/code/cpool/n_locals are already correct */
     PUSH(result);
     DISPATCH();
 }
@@ -7613,11 +7622,10 @@ vm_error: {
         if (vm.ps[i]) ray_release(vm.ps[i]);
     ray_release(vm.fn);
     for (int32_t i = 0; i < vm.rp; i++)
-        ray_release(vm.rs[i].fn);
+        if (vm.rs[i].fn) ray_release(vm.rs[i].fn);
     for (int32_t i = 0; i < vm.tp; i++)
         ray_release(vm.ts[i].fn);
     __VM = NULL;
-    if (vm_pushed_scope) ray_env_pop_scope();
 #undef vm
     ray_free(vm_block);
     return RAY_ERR_PTR(RAY_ERR_DOMAIN);
@@ -9099,6 +9107,7 @@ static void ray_register_builtins(void) {
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
     register_unary("read",      RAY_FN_NONE, ray_read_file);
     register_binary("write",    RAY_FN_NONE, ray_write_file);
+    register_unary("load",      RAY_FN_NONE, ray_load_file);
     register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
     register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
     register_vary("timeit",     RAY_FN_SPECIAL_FORM, ray_timeit_fn);

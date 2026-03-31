@@ -22,6 +22,7 @@
  */
 
 #include "heap.h"
+#include "cow.h"
 #include "sys.h"
 #include "core/platform.h"
 #include "table/sym.h"
@@ -38,6 +39,9 @@ _Static_assert(sizeof(ray_pool_hdr_t) <= 16,
  * -------------------------------------------------------------------------- */
 RAY_TLS ray_heap_t*     ray_tl_heap  = NULL;
 RAY_TLS ray_mem_stats_t ray_tl_stats;
+
+/* Stats tracking — always enabled (plain integer ops, negligible vs atomics) */
+#define RAY_STAT(x) (x)
 
 /* --------------------------------------------------------------------------
  * Bitmap-based heap ID allocator (atomic CAS, reusable IDs)
@@ -571,16 +575,23 @@ ray_t* ray_alloc(size_t data_size) {
         if (RAY_LIKELY(h->slabs[idx].count > 0)) {
             ray_t* v = h->slabs[idx].stack[--h->slabs[idx].count];
 
-            memset(v, 0, 32);
-            v->mmod  = 0;
+            /* Zero header fields without full memset (hot path).
+             * order + rc are set below; type/len/attrs/mmod must be 0. */
+            v->type = 0;
+            v->len  = 0;
+            v->attrs = 0;
+            v->mmod = 0;
             v->order = order;
-            ray_atomic_store(&v->rc, 1);
+            if (RAY_UNLIKELY(ray_rc_sync))
+                ray_atomic_store(&v->rc, 1);
+            else
+                v->rc = 1;
 
-            ray_tl_stats.alloc_count++;
-            ray_tl_stats.slab_hits++;
-            ray_tl_stats.bytes_allocated += BSIZEOF(order);
-            if (ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes)
-                ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated;
+            RAY_STAT(ray_tl_stats.alloc_count++);
+            RAY_STAT(ray_tl_stats.slab_hits++);
+            RAY_STAT(ray_tl_stats.bytes_allocated += BSIZEOF(order));
+            RAY_STAT(ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes
+                ? ray_tl_stats.bytes_allocated : ray_tl_stats.peak_bytes);
             return v;
         }
     }
@@ -631,12 +642,15 @@ ray_t* ray_alloc(size_t data_size) {
     memset(blk, 0, 32);
     blk->mmod  = 0;
     blk->order = order;
-    ray_atomic_store(&blk->rc, 1);
+    if (RAY_UNLIKELY(ray_rc_sync))
+        ray_atomic_store(&blk->rc, 1);
+    else
+        blk->rc = 1;
 
-    ray_tl_stats.alloc_count++;
-    ray_tl_stats.bytes_allocated += BSIZEOF(order);
-    if (ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes)
-        ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated;
+    RAY_STAT(ray_tl_stats.alloc_count++);
+    RAY_STAT(ray_tl_stats.bytes_allocated += BSIZEOF(order));
+    RAY_STAT(ray_tl_stats.peak_bytes = ray_tl_stats.bytes_allocated > ray_tl_stats.peak_bytes
+        ? ray_tl_stats.bytes_allocated : ray_tl_stats.peak_bytes);
 
     return blk;
 }
@@ -668,7 +682,7 @@ void ray_free(ray_t* v) {
         } else {
             ray_vm_unmap_file(v, 4096);
         }
-        ray_tl_stats.free_count++;
+        RAY_STAT(ray_tl_stats.free_count++);
         return;
     }
 
@@ -697,11 +711,12 @@ void ray_free(ray_t* v) {
             /* Mark rc=1 so buddy coalescing skips slab-cached blocks.
              * Blocks freed via ray_release arrive with rc=0; without this,
              * a buddy being freed would see rc==0 and incorrectly merge
-             * with the slab-cached block, causing overlapping allocations. */
+             * with the slab-cached block, causing overlapping allocations.
+             * Must be atomic: buddy coalescing on another thread reads rc. */
             ray_atomic_store(&v->rc, 1);
             h->slabs[idx].stack[h->slabs[idx].count++] = v;
-            ray_tl_stats.free_count++;
-            ray_tl_stats.bytes_allocated -= block_size;
+            RAY_STAT(ray_tl_stats.free_count++);
+            RAY_STAT(ray_tl_stats.bytes_allocated -= block_size);
             return;
         }
     }
@@ -710,16 +725,16 @@ void ray_free(ray_t* v) {
     if (!is_local) {
         v->fl_next = h->foreign;
         h->foreign = v;
-        ray_tl_stats.free_count++;
-        ray_tl_stats.bytes_allocated -= block_size;
+        RAY_STAT(ray_tl_stats.free_count++);
+        RAY_STAT(ray_tl_stats.bytes_allocated -= block_size);
         return;
     }
 
     /* Local block — coalesce with buddy */
     heap_coalesce(h, v, (uintptr_t)phdr, phdr->pool_order);
 
-    ray_tl_stats.free_count++;
-    ray_tl_stats.bytes_allocated -= block_size;
+    RAY_STAT(ray_tl_stats.free_count++);
+    RAY_STAT(ray_tl_stats.bytes_allocated -= block_size);
 }
 
 /* --------------------------------------------------------------------------
@@ -758,7 +773,10 @@ ray_t* ray_alloc_copy(ray_t* v) {
     memcpy(copy, v, 32 + data_size);
     copy->mmod  = new_mmod;
     copy->order = new_order;
-    ray_atomic_store(&copy->rc, 1);
+    if (RAY_UNLIKELY(ray_rc_sync))
+        ray_atomic_store(&copy->rc, 1);
+    else
+        copy->rc = 1;
     ray_retain_owned_refs(copy);
     return copy;
 }
@@ -805,7 +823,10 @@ ray_t* ray_scratch_realloc(ray_t* v, size_t new_data_size) {
         memcpy(new_v, v, 32 + copy_data);
         new_v->mmod = new_mmod;
         new_v->order = new_order;
-        ray_atomic_store(&new_v->rc, 1);
+        if (RAY_UNLIKELY(ray_rc_sync))
+            ray_atomic_store(&new_v->rc, 1);
+        else
+            new_v->rc = 1;
         /* Ownership transfers via memcpy — no retain needed on new_v.
          * Detach nulls old pointers so ray_free won't double-release. */
         ray_detach_owned_refs(v);

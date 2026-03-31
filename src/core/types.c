@@ -42,3 +42,16 @@ const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {
     /* [RAY_STR]       = 14 */ 16,  /* sizeof(ray_str_t) */
     /* [RAY_SEL]       = 15 */ 0,   /* variable-size layout, no elem_size */
 };
+
+/* ===== Semantic Version API ===== */
+
+/* Stringify helpers to build version string from header macros */
+#define RAY_VER_STR_(x) #x
+#define RAY_VER_STR(x)  RAY_VER_STR_(x)
+#define RAY_VERSION_STRING_ \
+    RAY_VER_STR(RAY_VERSION_MAJOR) "." RAY_VER_STR(RAY_VERSION_MINOR) "." RAY_VER_STR(RAY_VERSION_PATCH)
+
+int  ray_version_major(void)         { return RAY_VERSION_MAJOR; }
+int  ray_version_minor(void)         { return RAY_VERSION_MINOR; }
+int  ray_version_patch(void)         { return RAY_VERSION_PATCH; }
+const char* ray_version_string(void) { return RAY_VERSION_STRING_; }

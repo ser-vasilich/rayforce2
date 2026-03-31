@@ -33,5 +33,11 @@
  */
 
 #include <rayforce.h>
+#include "core/platform.h"
+
+/* Thread-local flag: plain (false) vs atomic (true) refcount ops.
+ * Default is false (fast single-threaded path).
+ * The thread pool sets true before parallel dispatch. */
+extern RAY_TLS bool ray_rc_sync;
 
 #endif /* RAY_COW_H */

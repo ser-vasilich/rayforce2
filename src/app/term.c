@@ -620,10 +620,11 @@ static int32_t find_next_utf8(const char* buf, int32_t pos, int32_t len) {
 /* ===== ANSI color constants ===== */
 
 #define CLR_GREEN      "\033[1;32m"
-#define CLR_YELLOW     "\033[33m"
-#define CLR_CYAN       "\033[36m"
-#define CLR_GRAY       "\033[90m"
-#define CLR_LIGHT_BLUE "\033[94m"
+#define CLR_YELLOW     "\033[1;33m"
+#define CLR_CYAN       "\033[1;36m"
+#define CLR_GRAY       "\033[1;38;5;8m"
+#define CLR_LIGHT_BLUE "\033[1;38;5;39m"
+#define CLR_SALAD      "\033[1;38;5;118m"
 #define CLR_RESET      "\033[0m"
 #define CLR_BOLD       "\033[1m"
 #define CLR_BACK_CYAN  "\033[46m"
@@ -787,7 +788,7 @@ static int32_t term_highlight_into(char* dst, int32_t dst_cap,
             int32_t j = i + 1;
             while (j < buf_len && is_alphanum(buf[j])) j++;
             if (j > i + 1) {
-                HL_LIT(CLR_CYAN);
+                HL_LIT(CLR_SALAD);
                 HL_APPEND(buf + i, j - i);
                 HL_LIT(CLR_RESET);
                 i = j - 1;

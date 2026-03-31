@@ -21,9 +21,14 @@
  *   SOFTWARE.
  */
 
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "exec.h"
 #include "hash.h"
 #include "pool.h"
+#include "profile.h"
 #include "store/csr.h"
 #include "store/hnsw.h"
 #include "lftj.h"
@@ -37,6 +42,9 @@
 #include <stdlib.h>
 #include <float.h>
 #include <ctype.h>
+
+/* Global profiler instance (zero-initialized = inactive) */
+ray_profile_t g_ray_profile;
 
 /* --------------------------------------------------------------------------
  * Arena-based scratch allocation helpers
@@ -2794,8 +2802,9 @@ static ray_t* sel_compact(ray_graph_t* g, ray_t* tbl, ray_t* sel) {
  * Sort execution (simple insertion sort)
  * ============================================================================ */
 
-/* Forward declaration — exec_node is defined later */
+/* Forward declarations — exec_node wraps exec_node_inner with profiling */
 static ray_t* exec_node(ray_graph_t* g, ray_op_t* op);
+static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op);
 
 /* --------------------------------------------------------------------------
  * Sort comparator: compare two row indices across all sort keys.
@@ -15461,7 +15470,33 @@ static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
  * Recursive executor
  * ============================================================================ */
 
+/* Is this opcode a "heavy" pipeline breaker worth profiling? */
+static inline bool op_is_heavy(uint16_t opc) {
+    return opc == OP_FILTER || opc == OP_SORT || opc == OP_GROUP ||
+           opc == OP_JOIN   || opc == OP_WINDOW_JOIN || opc == OP_SELECT ||
+           opc == OP_HEAD   || opc == OP_TAIL || opc == OP_WINDOW ||
+           (opc >= OP_EXPAND && opc <= OP_HNSW_KNN);
+}
+
 static ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
+    if (!op) return RAY_ERR_PTR(RAY_ERR_NYI);
+
+    bool profiling = g_ray_profile.active && op_is_heavy(op->opcode);
+    const char* oname = NULL;
+    if (profiling) {
+        oname = ray_opcode_name(op->opcode);
+        ray_profile_span_start(oname);
+    }
+
+    ray_t* _prof_result = exec_node_inner(g, op);
+
+    if (profiling)
+        ray_profile_span_end(oname);
+
+    return _prof_result;
+}
+
+static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
     if (!op) return RAY_ERR_PTR(RAY_ERR_NYI);
 
     switch (op->opcode) {

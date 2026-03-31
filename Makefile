@@ -2,12 +2,16 @@ CC      ?= clang
 STD     = c17
 AR      = ar
 TARGET  = rayforce
-VERSION = 2.1.0
+# Version is authoritative in include/rayforce.h — extract it here
+VERSION_MAJOR := $(shell grep 'RAY_VERSION_MAJOR' include/rayforce.h | head -1 | awk '{print $$3}')
+VERSION_MINOR := $(shell grep 'RAY_VERSION_MINOR' include/rayforce.h | head -1 | awk '{print $$3}')
+VERSION_PATCH := $(shell grep 'RAY_VERSION_PATCH' include/rayforce.h | head -1 | awk '{print $$3}')
+VERSION       = $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_PATCH)
 GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%d)
 
 WARNS   = -Wall -Wextra -Werror=return-type -Wno-unused-parameter
-DEFS    = -DRAYFORCE_VERSION=\"$(VERSION)\" -DRAYFORCE_GIT_COMMIT=\"$(GIT_HASH)\" -DRAYFORCE_BUILD_DATE=\"$(BUILD_DATE)\"
+DEFS    = -DRAYFORCE_GIT_COMMIT=\"$(GIT_HASH)\" -DRAYFORCE_BUILD_DATE=\"$(BUILD_DATE)\"
 INCLUDES = -Iinclude -Isrc
 
 UNAME_S := $(shell uname -s)

@@ -32,8 +32,10 @@
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
+#include "lang/parse.h"
 #include "mem/heap.h"
 #include "ops/ops.h"
+#include "ops/profile.h"
 #include "table/sym.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -55,23 +57,84 @@
 #include <sys/sysctl.h>
 #endif
 
-/* Cross-platform monotonic time in nanoseconds */
-static int64_t time_now_ns(void) {
-#if defined(_WIN32)
-    LARGE_INTEGER freq, cnt;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&cnt);
-    return (int64_t)((double)cnt.QuadPart / (double)freq.QuadPart * 1e9);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
-#endif
+
+/* ===== Progress bar renderer (DuckDB-style) ===== */
+
+static void render_progress(int64_t done, int64_t total, const char* label) {
+    if (total <= 0) return;
+    double pct = (double)done / (double)total;
+    if (pct > 1.0) pct = 1.0;
+    int bar_width = 30;
+    int filled = (int)(pct * bar_width);
+
+    /* \r + overwrite line */
+    fprintf(stderr, "\r\033[90m");
+    if (label) fprintf(stderr, "%s ", label);
+    fprintf(stderr, "[");
+    for (int i = 0; i < bar_width; i++)
+        fputc(i < filled ? '\xe2' : ' ', stderr);
+    /* Using simple = and space for portability */
+    fprintf(stderr, "\r");
+    if (label) fprintf(stderr, "%s ", label);
+    fprintf(stderr, "[");
+    for (int i = 0; i < bar_width; i++)
+        fputc(i < filled ? '=' : ' ', stderr);
+    fprintf(stderr, "] %3.0f%%\033[0m", pct * 100.0);
+    fflush(stderr);
 }
 
-#ifndef RAYFORCE_VERSION
-#define RAYFORCE_VERSION "dev"
-#endif
+static void clear_progress(void) {
+    /* Clear the progress line */
+    fprintf(stderr, "\r\033[K");
+    fflush(stderr);
+}
+
+/* ===== Profiler span tree printer (reads from g_ray_profile) ===== */
+
+/* Recursively print nested span tree (matching Rayforce 1.0 format) */
+static int32_t profile_print_tree(int32_t idx, int32_t indent) {
+    while (idx < g_ray_profile.n) {
+        ray_prof_span_t* sp = &g_ray_profile.spans[idx];
+
+        switch (sp->type) {
+        case RAY_PROF_SPAN_START: {
+            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
+            fprintf(stdout, "\xe2\x95\xad %s\n", sp->msg); /* ╭ */
+            idx++;
+            idx = profile_print_tree(idx, indent + 1);
+            /* idx now points at the matching END span (or past end if truncated) */
+            if (idx < g_ray_profile.n) {
+                double ms = (double)(g_ray_profile.spans[idx].ts - sp->ts) / 1e6;
+                for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
+                fprintf(stdout, "\xe2\x95\xb0\xe2\x94\x80\xe2\x94\xa4 %.3f ms\n", ms); /* ╰─┤ */
+                idx++;
+            }
+            break;
+        }
+        case RAY_PROF_SPAN_END:
+            return idx;
+        case RAY_PROF_SPAN_TICK: {
+            double ms = 0.0;
+            if (idx > 0)
+                ms = (double)(sp->ts - g_ray_profile.spans[idx - 1].ts) / 1e6;
+            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
+            fprintf(stdout, "\xe2\x9c\xb6  %s: %.3f ms\n", sp->msg, ms); /* ✶ */
+            idx++;
+            break;
+        }
+        }
+    }
+    return idx;
+}
+
+static void profile_print(bool use_color) {
+    if (!g_ray_profile.active || g_ray_profile.n == 0) return;
+    if (use_color) fprintf(stdout, "\033[90m");
+    profile_print_tree(0, 0);
+    if (use_color) fprintf(stdout, "\033[0m");
+    fflush(stdout);
+}
+
 #ifndef RAYFORCE_GIT_COMMIT
 #define RAYFORCE_GIT_COMMIT "unknown"
 #endif
@@ -148,7 +211,7 @@ static void print_banner(void) {
         "  Documentation: https://rayforcedb.com/\n"
         "  Github: https://github.com/RayforceDB/rayforce\n"
         "\033[0m",
-        RAYFORCE_VERSION, RAYFORCE_BUILD_DATE,
+        ray_version_string(), RAYFORCE_BUILD_DATE,
         cpu, mem_mb, ncores,
         ncores);
 }
@@ -194,20 +257,45 @@ void ray_repl_destroy(ray_repl_t* repl) {
 
 static void eval_and_print(ray_term_t* term, const char* input,
                            bool use_color, bool timeit) {
-    int64_t t0 = 0, t1 = 0;
-    if (timeit) t0 = time_now_ns();
+    bool profiling = timeit && g_ray_profile.active;
+
+    if (profiling) {
+        ray_profile_reset();
+        g_ray_profile.progress_cb = render_progress;
+        ray_profile_span_start("top-level");
+    }
 
     ray_term_clear_interrupt();
     ray_eval_clear_interrupt();
     if (term) ray_term_eval_begin(term);
-    ray_t* result = ray_eval_str(input);
+
+    /* Parse */
+    ray_t* parsed = ray_parse(input);
+    if (profiling) ray_profile_tick("parse");
+
+    ray_t* result;
+    if (RAY_IS_ERR(parsed)) {
+        result = parsed;
+    } else {
+        /* Eval (DAG optimize + execute happens inside for select/update) */
+        result = ray_eval(parsed);
+        if (profiling) ray_profile_tick("eval");
+        ray_release(parsed);
+    }
+
     if (term) ray_term_eval_end(term);
 
     /* Materialize lazy handles before printing */
-    if (ray_is_lazy(result))
+    if (ray_is_lazy(result)) {
         result = ray_lazy_materialize(result);
+        if (profiling) ray_profile_tick("materialize");
+    }
 
-    if (timeit) t1 = time_now_ns();
+    if (profiling) {
+        ray_profile_span_end("top-level");
+        if (g_ray_profile.progress_total > 0) clear_progress();
+        g_ray_profile.progress_cb = NULL;
+    }
 
     if (ray_term_interrupted()) {
         ray_term_clear_interrupt();
@@ -227,13 +315,7 @@ static void eval_and_print(ray_term_t* term, const char* input,
         ray_release(result);
     }
 
-    if (timeit) {
-        double ms = (double)(t1 - t0) / 1e6;
-        if (use_color) fprintf(stdout, "\033[90m");
-        fprintf(stdout, "%.3f ms\n", ms);
-        if (use_color) fprintf(stdout, "\033[0m");
-        fflush(stdout);
-    }
+    if (profiling) profile_print(use_color);
 }
 
 static const char* type_label(ray_t* val) {
@@ -270,6 +352,7 @@ static bool cmd_match(const char* cmd, size_t clen,
 static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     if (len == 0 || str[0] != ':') return false;
 
+    bool color = (repl->term != NULL);
     const char* cmd = str + 1;
     size_t clen = len - 1;
     const char* arg = NULL;
@@ -277,25 +360,51 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
 
     if (cmd_match(cmd, clen, "?", 1, &arg, &arg_len) ||
         cmd_match(cmd, clen, "help", 4, &arg, &arg_len)) {
+        if (color) fprintf(stdout, "\033[1;33m");
+        fprintf(stdout, ". Commands list:");
+        if (color) fprintf(stdout, "\033[0m");
+        fprintf(stdout, "\n");
+        if (color) fprintf(stdout, "\033[90m");
         fprintf(stdout,
-            "Commands:\n"
-            "  :help, :?       Show this help\n"
-            "  :t, :timeit     Toggle expression timing\n"
-            "  :t <expr>       Time a single expression\n"
-            "  :env            List defined variables\n"
-            "  :clear          Clear screen\n"
-            "  :quit, :q       Exit REPL\n");
+            "  :?      - Displays help.\n"
+            "  :t      - Turns on|off measurement of expressions: [0|1].\n"
+            "  :t expr - Profiles a single expression.\n"
+            "  :env    - Lists defined variables.\n"
+            "  :clear  - Clears screen.\n"
+            "  :q      - Exits the application.");
+        if (color) fprintf(stdout, "\033[0m");
+        fprintf(stdout, "\n");
         return true;
     }
 
     if (cmd_match(cmd, clen, "t", 1, &arg, &arg_len) ||
         cmd_match(cmd, clen, "timeit", 6, &arg, &arg_len)) {
         if (arg && arg_len > 0) {
-            /* :t <expr> — time a single expression */
-            eval_and_print(repl->term, arg, repl->term != NULL, true);
+            /* :t 1 / :t 0 — activate/deactivate profiler */
+            if (arg_len == 1 && (arg[0] == '1' || arg[0] == '0')) {
+                bool on = (arg[0] == '1');
+                g_ray_profile.active = on;
+                repl->timeit = on;
+                if (color) fprintf(stdout, "\033[1;33m");
+                fprintf(stdout, ". Timeit is %s.", on ? "on" : "off");
+                if (color) fprintf(stdout, "\033[0m");
+                fprintf(stdout, "\n");
+            } else {
+                /* :t <expr> — profile a single expression */
+                bool was_active = g_ray_profile.active;
+                g_ray_profile.active = true;
+                repl->timeit = true;
+                eval_and_print(repl->term, arg, color, true);
+                g_ray_profile.active = was_active;
+                repl->timeit = was_active;
+            }
         } else {
             repl->timeit = !repl->timeit;
-            fprintf(stdout, "timing %s\n", repl->timeit ? "on" : "off");
+            g_ray_profile.active = repl->timeit;
+            if (color) fprintf(stdout, "\033[1;33m");
+            fprintf(stdout, ". Timeit is %s.", repl->timeit ? "on" : "off");
+            if (color) fprintf(stdout, "\033[0m");
+            fprintf(stdout, "\n");
         }
         return true;
     }
@@ -314,13 +423,21 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     }
 
     if (cmd_match(cmd, clen, "clear", 5, &arg, &arg_len)) {
-        fprintf(stdout, "\033[2J\033[H");
-        fflush(stdout);
+        if (color) {
+            fprintf(stdout, "\033[2J\033[H");
+            fflush(stdout);
+        }
         return true;
     }
 
-    fprintf(stdout, "unknown command: %.*s\n", (int)len, str);
-    fprintf(stdout, "type :? for help\n");
+    if (color) fprintf(stdout, "\033[1;33m");
+    fprintf(stdout, ". Unknown command: %.*s.", (int)len, str);
+    if (color) fprintf(stdout, "\033[0m");
+    fprintf(stdout, "\n");
+    if (color) fprintf(stdout, "\033[90m");
+    fprintf(stdout, "Type :? for help.");
+    if (color) fprintf(stdout, "\033[0m");
+    fprintf(stdout, "\n");
     return true;
 }
 
@@ -563,6 +680,8 @@ int ray_repl_run_file(const char* path) {
     size_t nread = fread(buf, 1, (size_t)flen, f);
     fclose(f);
     buf[nread] = '\0';
+
+    if (nread == 0) { ray_release(block); return 0; }
 
     ray_t* result = ray_eval_str(buf);
     ray_release(block);

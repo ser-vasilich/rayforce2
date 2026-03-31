@@ -499,7 +499,13 @@ static void fmt_list(fmt_buf_t* b, ray_t* list, int mode) {
         }
     }
 
-    fmt_puts(b, "(list ");
+    /* mode 0 = compact/round-trippable: "(list ...)" prefix required
+     * mode 1 = REPL display: "(...)" matching rayforce 1 output */
+    if (mode == 0)
+        fmt_puts(b, "(list ");
+    else
+        fmt_puts(b, "(");
+
     int64_t max_elems = (mode == 1) ? FMT_LIST_MAX_HEIGHT : len;
     int64_t show = len < max_elems ? len : max_elems;
 
@@ -550,6 +556,7 @@ static void fmt_dict(fmt_buf_t* b, ray_t* dict, int mode) {
 #define G_RT "\xe2\x94\xa4"    /* ┤ */
 #define G_X  "\xe2\x94\xbc"    /* ┼ */
 #define G_HDOTS "\xe2\x80\xa6" /* … */
+#define G_VDOTS "\xe2\x94\x86" /* ┆ */
 
 /* ===== Table formatter helpers ===== */
 
@@ -832,7 +839,7 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
 
         /* 6. Truncation indicator row between head and tail */
         if (has_hidden_rows && ri == half) {
-            fmt_puts(b, G_V);
+            fmt_puts(b, G_VDOTS);
             for (int64_t ci = 0; ci < table_width; ci++) {
                 /* Center the ellipsis (3 bytes, 1 display char) */
                 int32_t left  = (col_widths[ci] - 1) / 2;
@@ -840,10 +847,10 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
                 for (int32_t p = 0; p < left; p++)  fmt_putc(b, ' ');
                 fmt_puts(b, G_HDOTS);
                 for (int32_t p = 0; p < right; p++) fmt_putc(b, ' ');
-                fmt_puts(b, G_V);
+                fmt_puts(b, G_VDOTS);
             }
             if (has_hidden_cols) {
-                fmt_puts(b, " " G_HDOTS " " G_V);
+                fmt_puts(b, " " G_HDOTS " " G_VDOTS);
             }
             fmt_putc(b, '\n');
         }

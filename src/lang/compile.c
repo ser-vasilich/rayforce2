@@ -44,6 +44,7 @@ typedef struct {
     int32_t  n_locals;
     int32_t  max_locals;
     bool     error;
+    ray_t   *lambda;     /* the lambda being compiled (for 'self' resolution) */
 } compiler_t;
 
 static void compile_expr(compiler_t *c, ray_t *ast);
@@ -167,15 +168,16 @@ static void patch_jump(compiler_t *c, int32_t pos) {
 }
 
 /* Cached sym IDs for special forms */
-static _Thread_local int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1;
+static _Thread_local int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1, sf_self = -1;
 
 static void init_sf_syms(void) {
     if (sf_set >= 0) return;
-    sf_set = ray_sym_intern("set", 3);
-    sf_let = ray_sym_intern("let", 3);
-    sf_if  = ray_sym_intern("if",  2);
-    sf_do  = ray_sym_intern("do",  2);
-    sf_fn  = ray_sym_intern("fn",  2);
+    sf_set  = ray_sym_intern("set", 3);
+    sf_let  = ray_sym_intern("let", 3);
+    sf_if   = ray_sym_intern("if",  2);
+    sf_do   = ray_sym_intern("do",  2);
+    sf_fn   = ray_sym_intern("fn",  2);
+    sf_self = ray_sym_intern("self", 4);
 }
 
 /* ── Compile a list (special form or function call) ── */
@@ -256,6 +258,18 @@ static void compile_list(compiler_t *c, ray_t *ast) {
         }
     }
 
+    /* Self-recursive call: emit OP_CALLS (lean frame reuse, no fn object) */
+    if (head->type == -RAY_SYM && (head->attrs & RAY_ATTR_NAME) &&
+        head->i64 == sf_self) {
+        int64_t argc = n - 1;
+        if (argc > 64) { c->error = true; return; }
+        for (int64_t i = 1; i < n; i++)
+            compile_expr(c, elems[i]);
+        emit(c, OP_CALLS);
+        emit(c, (uint8_t)argc);
+        return;
+    }
+
     /* Look up head at compile time to determine call type */
     ray_t *fn = NULL;
     if (head->type == -RAY_SYM && (head->attrs & RAY_ATTR_NAME))
@@ -270,8 +284,15 @@ static void compile_list(compiler_t *c, ray_t *ast) {
         return;
     }
 
-    /* General function call: compile head, args, then dispatch */
-    compile_expr(c, head);
+    /* General function call: compile head, args, then dispatch.
+     * If head resolved to a builtin at compile time, emit LOADCONST
+     * instead of RESOLVE to skip the runtime hash lookup. */
+    if (fn && (fn->type == RAY_UNARY || fn->type == RAY_BINARY || fn->type == RAY_VARY)) {
+        int32_t idx = add_constant(c, fn);
+        emit_const(c, idx);
+    } else {
+        compile_expr(c, head);
+    }
     int64_t argc = n - 1;
     if (argc > 64) { c->error = true; return; }
     for (int64_t i = 1; i < n; i++)

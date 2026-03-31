@@ -21,7 +21,12 @@
  *   SOFTWARE.
  */
 
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "opt.h"
+#include "profile.h"
 #include "mem/sys.h"
 #include <math.h>
 #include <string.h>
@@ -1642,35 +1647,49 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
 ray_op_t* ray_optimize(ray_graph_t* g, ray_op_t* root) {
     if (!g || !root) return root;
 
+    ray_profile_span_start("optimize");
+
     /* Pass 1: Type inference */
     pass_type_inference(g, root);
+    ray_profile_tick("type inference");
 
     /* Pass 2: Constant folding */
     pass_constant_fold(g, root);
+    ray_profile_tick("constant fold");
 
     /* Pass 3: SIP (graph-aware sideways information passing) */
     sip_pass(g, root);
+    ray_profile_tick("SIP");
 
     /* Pass 4: Factorized detection (OP_EXPAND → OP_GROUP optimization) */
     factorize_pass(g, root);
+    ray_profile_tick("factorize");
 
     /* Pass 5: Predicate pushdown (may change root) */
     root = pass_predicate_pushdown(g, root);
+    ray_profile_tick("predicate pushdown");
 
     /* Pass 6: Filter reordering (split ANDs + reorder by cost, may change root) */
     root = pass_filter_reorder(g, root);
+    ray_profile_tick("filter reorder");
 
     /* Pass 7: Projection pushdown (mark unreachable nodes dead) */
     pass_projection_pushdown(g, root);
+    ray_profile_tick("projection pushdown");
 
     /* Pass 8: Partition pruning (set est_rows hints for mapcommon filters) */
     pass_partition_pruning(g, root);
+    ray_profile_tick("partition pruning");
 
     /* Pass 9: Fusion */
     ray_fuse_pass(g, root);
+    ray_profile_tick("fusion");
 
     /* Pass 10: DCE */
     pass_dce(g, root);
+    ray_profile_tick("DCE");
+
+    ray_profile_span_end("optimize");
 
     return root;
 }

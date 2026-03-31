@@ -33,7 +33,7 @@ static ray_op_ext_t* find_ext(ray_graph_t* g, uint32_t node_id) {
     return NULL;
 }
 
-static const char* opcode_name(uint16_t op) {
+const char* ray_opcode_name(uint16_t op) {
     switch (op) {
         case OP_SCAN:          return "SCAN";
         case OP_CONST:         return "CONST";
@@ -148,7 +148,7 @@ static void dump_node(FILE* f, ray_graph_t* g, ray_op_t* node, int depth) {
         fprintf(f, "  ");
 
     /* Opcode name */
-    fprintf(f, "%s", opcode_name(node->opcode));
+    fprintf(f, "%s", ray_opcode_name(node->opcode));
 
     /* Find extended node for annotations */
     ray_op_ext_t* ext = find_ext(g, node->id);

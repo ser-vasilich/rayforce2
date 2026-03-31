@@ -22,6 +22,7 @@
  */
 
 #include "pool.h"
+#include "mem/cow.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
 #include <string.h>
@@ -50,6 +51,7 @@ static void worker_loop(void* arg) {
 
     /* Each worker thread gets its own heap */
     ray_heap_init();
+    ray_rc_sync = true;  /* workers always use atomic refcounting */
 
     for (;;) {
         ray_sem_wait(&pool->work_ready);
@@ -268,6 +270,9 @@ void ray_pool_dispatch(ray_pool_t* pool, ray_pool_fn fn, void* ctx,
      * freelist modification is unsafe until spin-wait completes. */
     atomic_store_explicit(&ray_parallel_flag, 1, memory_order_release);
 
+    /* Main thread enters atomic refcount mode during parallel dispatch */
+    ray_rc_sync = true;
+
     /* Wake worker threads */
     for (uint32_t i = 0; i < pool->n_workers; i++) {
         ray_sem_signal(&pool->work_ready);
@@ -308,6 +313,9 @@ void ray_pool_dispatch(ray_pool_t* pool, ray_pool_fn fn, void* ctx,
     /* All tasks done, workers heading to sem_wait (no GC in loop).
      * Safe for main to modify worker heaps between dispatches. */
     atomic_store_explicit(&ray_parallel_flag, 0, memory_order_release);
+
+    /* Restore single-threaded fast path */
+    ray_rc_sync = false;
 }
 
 /* --------------------------------------------------------------------------
@@ -350,6 +358,7 @@ void ray_pool_dispatch_n(ray_pool_t* pool, ray_pool_fn fn, void* ctx,
     atomic_store_explicit(&pool->pending, n_tasks, memory_order_release);
 
     atomic_store_explicit(&ray_parallel_flag, 1, memory_order_release);
+    ray_rc_sync = true;
 
     /* Wake worker threads */
     for (uint32_t i = 0; i < pool->n_workers; i++) {
@@ -388,6 +397,7 @@ void ray_pool_dispatch_n(ray_pool_t* pool, ray_pool_fn fn, void* ctx,
     }
 
     atomic_store_explicit(&ray_parallel_flag, 0, memory_order_release);
+    ray_rc_sync = false;
 }
 
 /* --------------------------------------------------------------------------

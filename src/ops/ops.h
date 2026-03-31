@@ -625,6 +625,7 @@ void     ray_fuse_pass(ray_graph_t* g, ray_op_t* root);
 
 /* ===== Plan Printer ===== */
 
+const char* ray_opcode_name(uint16_t op);
 void ray_graph_dump(ray_graph_t* g, ray_op_t* root, void* out);
 
 /* ===== Executor API ===== */

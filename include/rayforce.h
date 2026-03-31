@@ -33,6 +33,26 @@
 extern "C" {
 #endif
 
+/* ===== Semantic Versioning ===== */
+
+#define RAY_VERSION_MAJOR 2
+#define RAY_VERSION_MINOR 1
+#define RAY_VERSION_PATCH 0
+
+/* Packed version number: 0xMMmmpp (MM=major, mm=minor, pp=patch) */
+#define RAY_VERSION_NUMBER \
+    ((RAY_VERSION_MAJOR * 10000) + (RAY_VERSION_MINOR * 100) + RAY_VERSION_PATCH)
+
+/* Compile-time version check: true if lib version >= (major, minor, patch) */
+#define RAY_VERSION_AT_LEAST(major, minor, patch) \
+    (RAY_VERSION_NUMBER >= ((major) * 10000 + (minor) * 100 + (patch)))
+
+/* Runtime version query */
+int  ray_version_major(void);
+int  ray_version_minor(void);
+int  ray_version_patch(void);
+const char* ray_version_string(void);
+
 /* ===== Type Constants ===== */
 
 #define RAY_LIST       0
