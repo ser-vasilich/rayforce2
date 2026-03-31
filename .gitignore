@@ -1,3 +1,9 @@
+*.o
+*.a
+*.so
+*.dylib
+rayforce
+rayforce.test
 build/
 build_*/
 .DS_Store
