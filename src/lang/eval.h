@@ -26,6 +26,7 @@
 
 #include <rayforce.h>
 #include <stdio.h>
+#include "lang/nfo.h"
 
 /* ===== Function Attribute Flags (stored in attrs byte) ===== */
 
@@ -87,6 +88,8 @@ enum {
  *   data[2] = ray_t* bytecode      (RAY_U8 vector of opcodes)
  *   data[3] = ray_t* constants     (RAY_LIST of constant pool entries)
  *   data[4] = int32_t n_locals    (number of local slots needed)
+ *   data[5] = ray_t* nfo          (source location info, NULL if absent)
+ *   data[6] = ray_t* dbg          (debug metadata, NULL if absent)
  */
 
 #define RAY_FN_COMPILED  0x40   /* lambda has been compiled to bytecode */
@@ -96,6 +99,8 @@ enum {
 #define LAMBDA_BC(lam)        (((ray_t**)ray_data(lam))[2])
 #define LAMBDA_CONSTS(lam)    (((ray_t**)ray_data(lam))[3])
 #define LAMBDA_NLOCALS(lam)   (*((int32_t*)&((ray_t**)ray_data(lam))[4]))
+#define LAMBDA_NFO(lam)       (((ray_t**)ray_data(lam))[5])
+#define LAMBDA_DBG(lam)       (((ray_t**)ray_data(lam))[6])
 
 #define LAMBDA_IS_COMPILED(lam) ((lam)->attrs & RAY_FN_COMPILED)
 
@@ -151,6 +156,10 @@ void ray_compile(ray_t* lambda);
 /* Reset compiler cached state (call from ray_lang_destroy). */
 void ray_compile_reset(void);
 
+/* Look up the source span for a bytecode IP from a lambda's debug vector.
+ * Returns a span with id==0 if not found. */
+ray_span_t ray_bc_dbg_get(ray_t* dbg, int32_t ip);
+
 /* Print a ray_t value to a FILE stream. */
 void ray_lang_print(FILE* fp, ray_t* val);
 
@@ -160,6 +169,15 @@ void ray_lang_print(FILE* fp, ray_t* val);
 void ray_eval_request_interrupt(void);
 void ray_eval_clear_interrupt(void);
 int  ray_eval_is_interrupted(void);
+
+/* Return the current eval context's nfo (source location) object, or NULL. */
+ray_t* ray_eval_get_nfo(void);
+void   ray_eval_set_nfo(ray_t* nfo);
+
+/* Error trace: list of [span_i64, filename, fn_name, source] frames built when
+ * a VM error propagates without a trap.  Cleared at the start of ray_eval_str. */
+ray_t* ray_get_error_trace(void);
+void   ray_clear_error_trace(void);
 
 /* ===== Rayfall Builtin Functions ===== */
 

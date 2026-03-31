@@ -31,4 +31,9 @@
  * source contains multiple top-level forms. */
 ray_t* ray_parse(const char* source);
 
+/* Parse with source-location tracking.  If nfo is non-NULL every AST
+ * node produced by the parser will have its span recorded in the nfo
+ * object (created via ray_nfo_create in lang/nfo.h). */
+ray_t* ray_parse_with_nfo(const char* source, ray_t* nfo);
+
 #endif /* RAY_PARSE_H */

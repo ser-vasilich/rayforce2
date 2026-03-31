@@ -23,6 +23,7 @@
 
 #include "lang/eval.h"
 #include "lang/env.h"
+#include "lang/nfo.h"
 #include "lang/parse.h"
 #include "io/csv.h"
 #include "ops/ops.h"
@@ -48,12 +49,26 @@
 #define RAY_EVAL_MAX_DEPTH 512
 _Thread_local static int eval_depth = 0;
 
+/* Thread-local nfo for eval context — tracks source locations during evaluation */
+static _Thread_local ray_t* g_eval_nfo = NULL;
+
+/* Thread-local error trace — list of [span_i64, filename, fn_name, source] frames */
+static _Thread_local ray_t* g_error_trace = NULL;
+
 /* Interrupt flag — set by REPL signal handler, checked by eval/VM loops */
 static volatile sig_atomic_t g_eval_interrupted = 0;
 
 void ray_eval_request_interrupt(void) { g_eval_interrupted = 1; }
 void ray_eval_clear_interrupt(void)   { g_eval_interrupted = 0; }
 int  ray_eval_is_interrupted(void)    { return g_eval_interrupted != 0; }
+
+ray_t* ray_eval_get_nfo(void) { return g_eval_nfo; }
+void   ray_eval_set_nfo(ray_t* nfo) { g_eval_nfo = nfo; }
+
+ray_t* ray_get_error_trace(void) { return g_error_trace; }
+void   ray_clear_error_trace(void) {
+    if (g_error_trace) { ray_release(g_error_trace); g_error_trace = NULL; }
+}
 
 /* ══════════════════════════════════════════
  * Arithmetic builtins
@@ -6935,6 +6950,7 @@ ray_t* ray_load_file(ray_t* path_obj) {
     if (path_obj->type != -RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
     const char* path = ray_str_ptr(path_obj);
     if (!path) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    size_t path_len = ray_str_len(path_obj);
 
 #if defined(_WIN32)
     /* Windows: fall back to fread */
@@ -6950,7 +6966,18 @@ ray_t* ray_load_file(ray_t* path_obj) {
     size_t rd = fread(buf, 1, (size_t)sz, fp);
     fclose(fp);
     buf[rd] = '\0';
-    ray_t* result = ray_eval_str(buf);
+
+    ray_t* nfo = ray_nfo_create(path, path_len, buf, rd);
+    ray_t* parsed = ray_parse_with_nfo(buf, nfo);
+    if (RAY_IS_ERR(parsed)) { ray_release(nfo); free(buf); return parsed; }
+
+    ray_t* prev_nfo = g_eval_nfo;
+    g_eval_nfo = nfo;
+    ray_t* result = ray_eval(parsed);
+    g_eval_nfo = prev_nfo;
+
+    ray_release(parsed);
+    ray_release(nfo);
     free(buf);
     return result;
 #else
@@ -6969,7 +6996,18 @@ ray_t* ray_load_file(ray_t* path_obj) {
     memcpy(buf, map, sz);
     buf[sz] = '\0';
     munmap(map, sz);
-    ray_t* result = ray_eval_str(buf);
+
+    ray_t* nfo = ray_nfo_create(path, path_len, buf, sz);
+    ray_t* parsed = ray_parse_with_nfo(buf, nfo);
+    if (RAY_IS_ERR(parsed)) { ray_release(nfo); free(buf); return parsed; }
+
+    ray_t* prev_nfo = g_eval_nfo;
+    g_eval_nfo = nfo;
+    ray_t* result = ray_eval(parsed);
+    g_eval_nfo = prev_nfo;
+
+    ray_release(parsed);
+    ray_release(nfo);
     free(buf);
     return result;
 #endif
@@ -7075,9 +7113,10 @@ ray_t* ray_fn(ray_t** args, int64_t n) {
     /* args[0] = param vector (list of name symbols), args[1..n-1] = body exprs */
     ray_t* params_list = args[0];
 
-    /* Create lambda object with space for 5 slots:
-     * [0] params, [1] body, [2] bytecode, [3] constants, [4] n_locals */
-    ray_t* lambda = ray_alloc(5 * sizeof(ray_t*));
+    /* Create lambda object with space for 7 slots:
+     * [0] params, [1] body, [2] bytecode, [3] constants, [4] n_locals,
+     * [5] nfo (source location), [6] dbg (debug metadata) */
+    ray_t* lambda = ray_alloc(7 * sizeof(ray_t*));
     if (!lambda) return RAY_ERR_PTR(RAY_ERR_OOM);
     lambda->type = RAY_LAMBDA;
     lambda->attrs = 0;
@@ -7109,7 +7148,70 @@ ray_t* ray_fn(ray_t** args, int64_t n) {
     LAMBDA_CONSTS(lambda) = NULL;
     LAMBDA_NLOCALS(lambda) = 0;
 
+    /* Attach source location info from current eval context */
+    if (g_eval_nfo) {
+        LAMBDA_NFO(lambda) = g_eval_nfo;
+        ray_retain(g_eval_nfo);
+    } else {
+        LAMBDA_NFO(lambda) = NULL;
+    }
+    LAMBDA_DBG(lambda) = NULL;
+
     return lambda;
+}
+
+/* Build a single error trace frame from a lambda's debug/nfo info at the given
+ * bytecode IP.  Appends [span_i64, filename, fn_name, source] to g_error_trace. */
+static void add_error_frame(ray_t* fn, int32_t ip) {
+    if (!fn || fn->type != RAY_LAMBDA) return;
+    ray_t* dbg = LAMBDA_DBG(fn);
+    ray_t* nfo = LAMBDA_NFO(fn);
+    if (!dbg && !nfo) return;
+
+    ray_span_t span = {0};
+    if (dbg) span = ray_bc_dbg_get(dbg, ip);
+    if (span.id == 0) return;
+
+    /* Build frame: alloc 4-slot list, set elements directly */
+    ray_t* frame = ray_alloc(4 * sizeof(ray_t*));
+    if (!frame || RAY_IS_ERR(frame)) return;
+    frame->type = RAY_LIST;
+    frame->len = 4;
+    ray_t** fe = (ray_t**)ray_data(frame);
+
+    /* [0] span as i64 atom */
+    fe[0] = ray_i64(span.id);
+
+    /* [1] filename from nfo */
+    if (nfo && NFO_FILENAME(nfo)) {
+        fe[1] = NFO_FILENAME(nfo);
+        ray_retain(fe[1]);
+    } else {
+        fe[1] = ray_str("<unknown>", 9);
+    }
+
+    /* [2] function name — NULL for anonymous lambdas */
+    fe[2] = NULL;
+
+    /* [3] source from nfo */
+    if (nfo && NFO_SOURCE(nfo)) {
+        fe[3] = NFO_SOURCE(nfo);
+        ray_retain(fe[3]);
+    } else {
+        fe[3] = ray_str("", 0);
+    }
+
+    /* Append frame to trace list */
+    if (!g_error_trace) {
+        g_error_trace = ray_alloc(sizeof(ray_t*));
+        if (!g_error_trace) { ray_release(frame); return; }
+        g_error_trace->type = RAY_LIST;
+        g_error_trace->len = 1;
+        ((ray_t**)ray_data(g_error_trace))[0] = frame;
+    } else {
+        g_error_trace = ray_list_append(g_error_trace, frame);
+        ray_release(frame);
+    }
 }
 
 /* Execute compiled bytecode for a lambda. */
@@ -7618,6 +7720,14 @@ vm_error: {
     }
 
     /* No trap frame — regular error cleanup */
+
+    /* Build error trace: current frame + callers from return stack */
+    add_error_frame(vm.fn, ip > 0 ? ip - 1 : 0);
+    for (int32_t i = vm.rp - 1; i >= 0; i--) {
+        if (vm.rs[i].fn)
+            add_error_frame(vm.rs[i].fn, vm.rs[i].ip > 0 ? vm.rs[i].ip - 1 : 0);
+    }
+
     for (int32_t i = 0; i < vm.sp; i++)
         if (vm.ps[i]) ray_release(vm.ps[i]);
     ray_release(vm.fn);
@@ -9355,9 +9465,17 @@ out:
 }
 
 ray_t* ray_eval_str(const char* source) {
-    ray_t* parsed = ray_parse(source);
-    if (RAY_IS_ERR(parsed)) return parsed;
+    ray_clear_error_trace();
+    ray_t* nfo = ray_nfo_create("repl", 4, source, strlen(source));
+    ray_t* parsed = ray_parse_with_nfo(source, nfo);
+    if (RAY_IS_ERR(parsed)) { ray_release(nfo); return parsed; }
+
+    ray_t* prev_nfo = g_eval_nfo;
+    g_eval_nfo = nfo;
     ray_t* result = ray_eval(parsed);
+    g_eval_nfo = prev_nfo;
+
     ray_release(parsed);
+    ray_release(nfo);
     return result;
 }

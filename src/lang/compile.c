@@ -23,6 +23,7 @@
 
 #include "lang/eval.h"
 #include "lang/env.h"
+#include "lang/nfo.h"
 #include <stdbool.h>
 #include <string.h>
 
@@ -45,6 +46,9 @@ typedef struct {
     int32_t  max_locals;
     bool     error;
     ray_t   *lambda;     /* the lambda being compiled (for 'self' resolution) */
+
+    ray_t    *dbg_obj;   /* I64 vector: pairs of [offset, span.id] */
+    int32_t   dbg_len;
 } compiler_t;
 
 static void compile_expr(compiler_t *c, ray_t *ast);
@@ -74,6 +78,24 @@ static void compiler_destroy(compiler_t *c) {
     ray_release(c->consts_obj);
     ray_release(c->code_obj);
 }
+
+/* ── Debug info helpers ── */
+static void dbg_append(compiler_t* c, int32_t offset, int64_t span_id) {
+    if (!c->dbg_obj) {
+        c->dbg_obj = ray_vec_new(RAY_I64, 0);
+        if (!c->dbg_obj) return;
+    }
+    int64_t off64 = (int64_t)offset;
+    c->dbg_obj = ray_vec_append(c->dbg_obj, &off64);
+    c->dbg_obj = ray_vec_append(c->dbg_obj, &span_id);
+}
+
+#define EMIT_DBG(c, ast) do { \
+    if ((c)->lambda && LAMBDA_NFO((c)->lambda)) { \
+        ray_span_t _sp = ray_nfo_get(LAMBDA_NFO((c)->lambda), (ast)); \
+        if (_sp.id != 0) dbg_append(c, (c)->code_len, _sp.id); \
+    } \
+} while(0)
 
 /* ── Emit helpers ── */
 static void emit(compiler_t *c, uint8_t byte) {
@@ -183,6 +205,7 @@ static void init_sf_syms(void) {
 /* ── Compile a list (special form or function call) ── */
 static void compile_list(compiler_t *c, ray_t *ast) {
     if (c->error) return;
+    EMIT_DBG(c, ast);
     ray_t **elems = (ray_t **)ray_data(ast);
     int64_t n = ray_len(ast);
     ray_t *head = elems[0];
@@ -327,6 +350,7 @@ static void compile_list(compiler_t *c, ray_t *ast) {
 static void compile_expr(compiler_t *c, ray_t *ast) {
     if (c->error) return;
     if (!ast || RAY_IS_ERR(ast)) return;
+    EMIT_DBG(c, ast);
 
     if (ray_is_atom(ast)) {
         if (ast->type == -RAY_SYM && (ast->attrs & RAY_ATTR_NAME)) {
@@ -373,6 +397,7 @@ void ray_compile(ray_t *lambda) {
 
     compiler_t c;
     if (!compiler_init(&c)) return;
+    c.lambda = lambda;
 
     /* Register params as locals */
     ray_t *params_list = LAMBDA_PARAMS(lambda);
@@ -392,7 +417,11 @@ void ray_compile(ray_t *lambda) {
     }
     emit(&c, OP_RET);
 
-    if (c.error) { compiler_destroy(&c); return; }
+    if (c.error) {
+        if (c.dbg_obj) ray_release(c.dbg_obj);
+        compiler_destroy(&c);
+        return;
+    }
 
     /* Build bytecode vector */
     ray_t *bc = ray_alloc(c.code_len);
@@ -417,7 +446,28 @@ void ray_compile(ray_t *lambda) {
     LAMBDA_NLOCALS(lambda) = c.max_locals;
     lambda->attrs |= RAY_FN_COMPILED;
 
+    if (c.dbg_obj) {
+        LAMBDA_DBG(lambda) = c.dbg_obj;
+        /* dbg_obj is now owned by the lambda, don't release it */
+    }
+
     compiler_destroy(&c);
+}
+
+ray_span_t ray_bc_dbg_get(ray_t* dbg, int32_t ip) {
+    ray_span_t span = {0};
+    if (!dbg || dbg->len == 0) return span;
+    int64_t* data = (int64_t*)ray_data(dbg);
+    int64_t n = dbg->len;
+    int64_t best_offset = -1;
+    for (int64_t i = 0; i < n; i += 2) {
+        int64_t offset = data[i];
+        if (offset <= ip && offset > best_offset) {
+            best_offset = offset;
+            span.id = data[i + 1];
+        }
+    }
+    return span;
 }
 
 void ray_compile_reset(void) {

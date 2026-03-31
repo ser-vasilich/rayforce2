@@ -32,6 +32,7 @@
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
+#include "lang/nfo.h"
 #include "lang/parse.h"
 #include "mem/heap.h"
 #include "ops/ops.h"
@@ -217,15 +218,140 @@ static void print_banner(void) {
 }
 
 #define PIPE_BUF_SIZE 4096
+
+/* Format a rich error message with source snippet, carets, and stack trace. */
+static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_color) {
+    ray_err_t code = RAY_ERR_CODE(err);
+    const char* msg = ray_err_str(code);
+
+    /* Header: "  x Error: type" */
+    fprintf(fp, "\n");
+    if (use_color) fprintf(fp, "\033[1;31m");
+    fprintf(fp, "  \xc3\x97 Error: %s", msg);
+    if (use_color) fprintf(fp, "\033[0m");
+    fprintf(fp, "\n");
+
+    int64_t nframes = ray_len(trace);
+    int64_t show = nframes < 5 ? nframes : 5;
+
+    for (int64_t fi = 0; fi < show; fi++) {
+        ray_t* frame = ((ray_t**)ray_data(trace))[fi];
+        if (!frame || frame->type != RAY_LIST || ray_len(frame) < 4) continue;
+        ray_t** felems = (ray_t**)ray_data(frame);
+
+        /* Extract span */
+        ray_span_t span;
+        span.id = felems[0] ? felems[0]->i64 : 0;
+        if (span.id == 0) continue;
+
+        /* Filename */
+        const char* fname = "repl";
+        size_t fname_len = 4;
+        if (felems[1] && !RAY_IS_ERR(felems[1])) {
+            fname = ray_str_ptr(felems[1]);
+            fname_len = ray_str_len(felems[1]);
+        }
+
+        /* Source */
+        const char* source = "";
+        size_t src_len = 0;
+        if (felems[3] && !RAY_IS_ERR(felems[3])) {
+            source = ray_str_ptr(felems[3]);
+            src_len = ray_str_len(felems[3]);
+        }
+
+        /* Find line in source */
+        int line_num = span.start_line;
+        const char* line_start = source;
+        int current_line = 0;
+        while (current_line < line_num && line_start < source + src_len) {
+            if (*line_start == '\n') current_line++;
+            line_start++;
+        }
+        /* Find line end */
+        const char* line_end = line_start;
+        while (line_end < source + src_len && *line_end != '\n') line_end++;
+        int line_len = (int)(line_end - line_start);
+
+        /* Gutter width */
+        int display_line = line_num + 1;
+        int gutter = 1;
+        { int tmp = display_line; while (tmp >= 10) { gutter++; tmp /= 10; } }
+
+        /* Frame header: \u256d\u2500[filename:line:col] */
+        fprintf(fp, "\n");
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, "   \xe2\x95\xad\xe2\x94\x80[");
+        if (use_color) fprintf(fp, "\033[36m");
+        fprintf(fp, "%.*s", (int)fname_len, fname);
+        if (use_color) fprintf(fp, "\033[33m");
+        fprintf(fp, ":%d:%d", display_line, span.start_col + 1);
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, "]\n");
+
+        /* Source line: " N \u2502 source" */
+        if (use_color) fprintf(fp, "\033[36m");
+        fprintf(fp, " %*d", gutter, display_line);
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, " \xe2\x94\x82 ");
+        if (use_color) fprintf(fp, "\033[0m");
+        fprintf(fp, "%.*s\n", line_len, line_start);
+
+        /* Caret line: "   \u2502     \u25b2" */
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, " %*s \xe2\x94\x82 ", gutter, "");
+        for (int i = 0; i < span.start_col; i++) fputc(' ', fp);
+        if (use_color) fprintf(fp, "\033[35m");
+        fprintf(fp, "\xe2\x96\xb2\n");
+
+        /* Error label: "   \u2502     \u2570\u2500 type" */
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, " %*s \xe2\x94\x82 ", gutter, "");
+        for (int i = 0; i < span.start_col; i++) fputc(' ', fp);
+        if (use_color) fprintf(fp, "\033[35m");
+        fprintf(fp, "\xe2\x95\xb0\xe2\x94\x80 ");
+        if (use_color) fprintf(fp, "\033[1;31m");
+        if (fi == 0) fprintf(fp, "%s", msg);
+        if (use_color) fprintf(fp, "\033[0m");
+        fprintf(fp, "\n");
+
+        /* Footer: "   \u2570\u2500 in \u03bb" or "   \u2570\u2500 in func_name" */
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, "   \xe2\x95\xb0\xe2\x94\x80 in ");
+        if (felems[2] && !RAY_IS_ERR(felems[2])) {
+            if (use_color) fprintf(fp, "\033[32m");
+            fprintf(fp, "%.*s", (int)ray_str_len(felems[2]), ray_str_ptr(felems[2]));
+        } else {
+            if (use_color) fprintf(fp, "\033[32m");
+            fprintf(fp, "\xce\xbb");
+        }
+        if (use_color) fprintf(fp, "\033[0m");
+        fprintf(fp, "\n");
+    }
+
+    if (nframes > show) {
+        if (use_color) fprintf(fp, "\033[90m");
+        fprintf(fp, "   ... %" PRId64 " more frames\n", nframes - show);
+        if (use_color) fprintf(fp, "\033[0m");
+    }
+    fprintf(fp, "\n");
+}
+
 /* Pretty-print a result value */
 static void repl_print_result(FILE* fp, ray_t* val, bool use_color) {
     if (!val) return;
     if (RAY_IS_ERR(val)) {
-        ray_err_t code = RAY_ERR_CODE(val);
-        if (use_color) fprintf(fp, "\033[1;31m");
-        fprintf(fp, "error: %s", ray_err_str(code));
-        if (use_color) fprintf(fp, "\033[0m");
-        fprintf(fp, "\n");
+        ray_t* trace = ray_get_error_trace();
+        if (trace && ray_len(trace) > 0) {
+            fmt_error_with_trace(fp, val, trace, use_color);
+            ray_clear_error_trace();
+        } else {
+            ray_err_t code = RAY_ERR_CODE(val);
+            if (use_color) fprintf(fp, "\033[1;31m");
+            fprintf(fp, "error: %s", ray_err_str(code));
+            if (use_color) fprintf(fp, "\033[0m");
+            fprintf(fp, "\n");
+        }
         return;
     }
     ray_fmt_print(fp, val, 1);
@@ -269,8 +395,12 @@ static void eval_and_print(ray_term_t* term, const char* input,
     ray_eval_clear_interrupt();
     if (term) ray_term_eval_begin(term);
 
+    /* Create nfo for source location tracking */
+    ray_t* nfo = ray_nfo_create("repl", 4, input, strlen(input));
+    ray_clear_error_trace();
+
     /* Parse */
-    ray_t* parsed = ray_parse(input);
+    ray_t* parsed = ray_parse_with_nfo(input, nfo);
     if (profiling) ray_profile_tick("parse");
 
     ray_t* result;
@@ -278,10 +408,15 @@ static void eval_and_print(ray_term_t* term, const char* input,
         result = parsed;
     } else {
         /* Eval (DAG optimize + execute happens inside for select/update) */
+        ray_t* prev_nfo = ray_eval_get_nfo();
+        /* Set nfo so lambdas created during eval get source info */
+        ray_eval_set_nfo(nfo);
         result = ray_eval(parsed);
+        ray_eval_set_nfo(prev_nfo);
         if (profiling) ray_profile_tick("eval");
         ray_release(parsed);
     }
+    ray_release(nfo);
 
     if (term) ray_term_eval_end(term);
 

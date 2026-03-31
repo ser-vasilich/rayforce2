@@ -22,6 +22,7 @@
  */
 
 #include "lang/parse.h"
+#include "lang/nfo.h"
 #include "lang/env.h"
 #include <string.h>
 #include <stdlib.h>
@@ -79,14 +80,48 @@ static const char _PA[128] =
 typedef struct {
     const char *src;
     const char *pos;
+    int32_t line;
+    int32_t col;
+    ray_t  *nfo;
 } ray_parser_t;
+
+static void advance(ray_parser_t *p, int32_t n) {
+    for (int32_t i = 0; i < n; i++) {
+        if (p->pos[i] == '\n') { p->line++; p->col = 0; }
+        else { p->col++; }
+    }
+    p->pos += n;
+}
+
+/* Fixup line/col after raw p->pos advancement (scan consumed region). */
+static void fixup_pos(ray_parser_t *p, const char *old_pos) {
+    for (const char *c = old_pos; c < p->pos; c++) {
+        if (*c == '\n') { p->line++; p->col = 0; }
+        else { p->col++; }
+    }
+}
+
+/* Record a span for node in the nfo object. */
+static void nfo_record(ray_parser_t *p, ray_t *node,
+                        int32_t sl, int32_t sc) {
+    if (!p->nfo || RAY_IS_ERR(node)) return;
+    ray_span_t span;
+    span.start_line = (uint16_t)sl;
+    span.start_col  = (uint16_t)sc;
+    span.end_line   = (uint16_t)p->line;
+    span.end_col    = (uint16_t)(p->col > 0 ? p->col - 1 : 0);
+    ray_nfo_insert(p->nfo, node, span);
+}
 
 static void skip_ws_and_comments(ray_parser_t *p) {
     for (;;) {
-        while (*p->pos == ' ' || *p->pos == '\t' || *p->pos == '\n' || *p->pos == '\r')
+        while (*p->pos == ' ' || *p->pos == '\t' || *p->pos == '\n' || *p->pos == '\r') {
+            if (*p->pos == '\n') { p->line++; p->col = 0; }
+            else { p->col++; }
             p->pos++;
+        }
         if (*p->pos == ';') {
-            while (*p->pos && *p->pos != '\n') p->pos++;
+            while (*p->pos && *p->pos != '\n') { p->col++; p->pos++; }
             continue;
         }
         break;
@@ -455,7 +490,7 @@ static ray_t* parse_name(ray_parser_t *p) {
 
 /* ── Vector literal: [1 2 3] ── */
 static ray_t* parse_vector(ray_parser_t *p) {
-    p->pos++; /* skip [ */
+    advance(p, 1); /* skip [ */
 
     /* Collect parsed elements into a temporary array */
     ray_t* elems[4096];
@@ -479,7 +514,7 @@ static ray_t* parse_vector(ray_parser_t *p) {
         for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
         return RAY_ERR_PTR(RAY_ERR_PARSE);
     }
-    p->pos++;
+    advance(p, 1); /* skip ] */
 
     if (count == 0) {
         /* Empty vector -> empty i64 vector */
@@ -606,7 +641,7 @@ boxed_list:
 
 /* ── Dict literal: {key: val key: val ...} ── */
 static ray_t* parse_dict(ray_parser_t *p) {
-    p->pos++; /* skip { */
+    advance(p, 1); /* skip { */
     ray_t* list = ray_list_new(8);
     if (RAY_IS_ERR(list)) return list;
     list->attrs |= RAY_ATTR_DICT;
@@ -617,14 +652,16 @@ static ray_t* parse_dict(ray_parser_t *p) {
         /* Parse key: name or string literal */
         if (*p->pos == '"') {
             /* String key: parse as string, then intern as symbol */
+            const char *sk_before = p->pos;
             ray_t* str_key = parse_string(p);
+            fixup_pos(p, sk_before);
             if (RAY_IS_ERR(str_key)) { ray_release(list); return str_key; }
             /* Use the string value as the dict key directly */
             key = str_key;
             /* Expect colon */
             skip_ws_and_comments(p);
             if (*p->pos != ':') { ray_release(key); ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
-            p->pos++; /* skip : */
+            advance(p, 1); /* skip : */
             skip_ws_and_comments(p);
             /* Parse value */
             ray_t* val = parse_expr(p);
@@ -642,6 +679,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
         while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT
                || *p->pos == '_' || *p->pos == '-')
             p->pos++;
+        p->col += (int32_t)(p->pos - kstart); /* key names don't span lines */
         size_t klen = (size_t)(p->pos - kstart);
         if (klen == 0) { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
 
@@ -652,7 +690,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
         /* Expect colon */
         skip_ws_and_comments(p);
         if (*p->pos != ':') { ray_release(key); ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
-        p->pos++; /* skip : */
+        advance(p, 1); /* skip : */
         skip_ws_and_comments(p);
 
         /* Parse value expression */
@@ -670,13 +708,13 @@ static ray_t* parse_dict(ray_parser_t *p) {
         skip_ws_and_comments(p);
     }
     if (*p->pos != '}') { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
-    p->pos++;
+    advance(p, 1); /* skip } */
     return list;
 }
 
 /* ── List (s-expression): (fn arg1 arg2 ...) ── */
 static ray_t* parse_list(ray_parser_t *p) {
-    p->pos++; /* skip ( */
+    advance(p, 1); /* skip ( */
     ray_t* list = ray_list_new(4);
     if (RAY_IS_ERR(list)) return list;
 
@@ -690,7 +728,7 @@ static ray_t* parse_list(ray_parser_t *p) {
         skip_ws_and_comments(p);
     }
     if (*p->pos != ')') { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
-    p->pos++;
+    advance(p, 1); /* skip ) */
     return list;
 }
 
@@ -698,57 +736,70 @@ static ray_t* parse_list(ray_parser_t *p) {
 static ray_t* parse_expr(ray_parser_t *p) {
     skip_ws_and_comments(p);
 
+    int32_t sl = p->line, sc = p->col;
+    const char *before = p->pos;
+    ray_t *result;
+
     switch (PA(*p->pos)) {
         case PA_END:    return RAY_ERR_PTR(RAY_ERR_PARSE);
-        case PA_DIGIT:  return parse_number(p);
+        case PA_DIGIT:  result = parse_number(p); break;
         case PA_MINUS:
             if (p->pos[1] >= '0' && p->pos[1] <= '9')
-                return parse_number(p);
-            return parse_name(p);  /* standalone '-' or '-name' */
-        case PA_ALPHA:  return parse_name(p);
-        case PA_STRING: return parse_string(p);
-        case PA_QUOTE:  return parse_symbol(p);
-        case PA_LPAREN: return parse_list(p);
-        case PA_LBRACK: return parse_vector(p);
-        case PA_LBRACE: return parse_dict(p);
+                result = parse_number(p);
+            else
+                result = parse_name(p);  /* standalone '-' or '-name' */
+            break;
+        case PA_ALPHA:  result = parse_name(p); break;
+        case PA_STRING: result = parse_string(p); break;
+        case PA_QUOTE:  result = parse_symbol(p); break;
+        case PA_LPAREN: result = parse_list(p); break;
+        case PA_LBRACK: result = parse_vector(p); break;
+        case PA_LBRACE: result = parse_dict(p); break;
         case PA_RPAREN: return RAY_ERR_PTR(RAY_ERR_PARSE);
         case PA_RBRACK: return RAY_ERR_PTR(RAY_ERR_PARSE);
         case PA_RBRACE: return RAY_ERR_PTR(RAY_ERR_PARSE);
-        default:        return parse_name(p);  /* operators like +, *, etc. */
+        default:        result = parse_name(p); break;  /* operators like +, *, etc. */
     }
+
+    /* Fixup line/col: leaf parsers advance pos without updating line/col.
+     * Compound parsers (list/vector/dict) use advance() internally and
+     * call skip_ws_and_comments, so their line/col is already accurate. */
+    if (PA(*before) != PA_LPAREN && PA(*before) != PA_LBRACK && PA(*before) != PA_LBRACE)
+        fixup_pos(p, before);
+    nfo_record(p, result, sl, sc);
+    return result;
 }
 
-/* ── Public API ── */
-ray_t* ray_parse(const char* source) {
-    if (!source) return RAY_ERR_PTR(RAY_ERR_PARSE);
-    ray_parser_t p = { .src = source, .pos = source };
-    ray_t* first = parse_expr(&p);
+/* ── Internal parse driver (shared by public APIs) ── */
+static ray_t* parse_source(ray_parser_t *p) {
+    ray_t* first = parse_expr(p);
     if (RAY_IS_ERR(first)) return first;
 
     /* Check if there are more expressions after the first */
-    skip_ws_and_comments(&p);
-    if (*p.pos == '\0') return first;  /* single expression */
+    skip_ws_and_comments(p);
+    if (*p->pos == '\0') return first;  /* single expression */
 
     /* Multiple expressions: collect into (do expr1 expr2 ...) */
     ray_t* exprs[256];
     int32_t count = 0;
     exprs[count++] = first;
 
-    while (*p.pos) {
+    while (*p->pos) {
         if (count >= 256) {
             for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
             return RAY_ERR_PTR(RAY_ERR_DOMAIN);  /* too many top-level expressions */
         }
-        ray_t* expr = parse_expr(&p);
+        ray_t* expr = parse_expr(p);
         if (RAY_IS_ERR(expr)) {
             for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
             return expr;
         }
         exprs[count++] = expr;
-        skip_ws_and_comments(&p);
+        skip_ws_and_comments(p);
     }
 
     /* Build (do expr1 expr2 ...) list */
+    int32_t sl = p->line, sc = p->col;
     ray_t* do_list = ray_alloc((count + 1) * sizeof(ray_t*));
     if (!do_list) {
         for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
@@ -771,5 +822,23 @@ ray_t* ray_parse(const char* source) {
     for (int32_t i = 0; i < count; i++)
         elems[i + 1] = exprs[i];
     do_list->len = count + 1;
+    nfo_record(p, do_list, sl, sc);
     return do_list;
+}
+
+/* ── Public API ── */
+ray_t* ray_parse(const char* source) {
+    return ray_parse_with_nfo(source, NULL);
+}
+
+ray_t* ray_parse_with_nfo(const char* source, ray_t* nfo) {
+    if (!source) return RAY_ERR_PTR(RAY_ERR_PARSE);
+    ray_parser_t p = {
+        .src  = source,
+        .pos  = source,
+        .line = 0,
+        .col  = 0,
+        .nfo  = nfo
+    };
+    return parse_source(&p);
 }

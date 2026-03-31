@@ -26,6 +26,7 @@
 #include "sys.h"
 #include "core/platform.h"
 #include "table/sym.h"
+#include "lang/eval.h"
 #include <string.h>
 
 /* --------------------------------------------------------------------------
@@ -348,12 +349,15 @@ static void ray_release_owned_refs(ray_t* v) {
 
     if (ray_is_atom(v)) {
         if (v->type == RAY_LAMBDA) {
-            /* Lambda stores [params, body, bytecode, constants] in ray_data */
+            /* Lambda stores [params, body, bytecode, constants, n_locals, nfo, dbg] in ray_data */
             ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) {
                 if (slots[i] && !RAY_IS_ERR(slots[i]))
                     ray_release(slots[i]);
             }
+            /* Release optional debug info slots */
+            if (LAMBDA_NFO(v)) ray_release(LAMBDA_NFO(v));
+            if (LAMBDA_DBG(v)) ray_release(LAMBDA_DBG(v));
             return;
         }
         if (v->type == RAY_LAZY) {
@@ -432,6 +436,8 @@ void ray_retain_owned_refs(ray_t* v) {
                 if (slots[i] && !RAY_IS_ERR(slots[i]))
                     ray_retain(slots[i]);
             }
+            if (LAMBDA_NFO(v)) ray_retain(LAMBDA_NFO(v));
+            if (LAMBDA_DBG(v)) ray_retain(LAMBDA_DBG(v));
             return;
         }
         /* Lazy handles own their graph uniquely — no retain on copy */
@@ -500,6 +506,8 @@ static void ray_detach_owned_refs(ray_t* v) {
         if (v->type == RAY_LAMBDA) {
             ray_t** slots = (ray_t**)ray_data(v);
             for (int i = 0; i < 4; i++) slots[i] = NULL;
+            LAMBDA_NFO(v) = NULL;
+            LAMBDA_DBG(v) = NULL;
             return;
         }
         if (v->type == RAY_LAZY) {
