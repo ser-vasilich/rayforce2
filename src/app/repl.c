@@ -118,7 +118,7 @@ static void print_banner(void) {
     int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
 
     fprintf(stdout,
-        "TeideDB: %s %s\n"
+        "RayforceDB: %s %s\n"
         "  %s %"PRId64"(MB) %d core(s)\n"
         "  Using %d cores(s)\n"
         "  Apache-2.0 license | type :? for help\n",
