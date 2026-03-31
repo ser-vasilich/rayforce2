@@ -2,6 +2,8 @@
 #include "lang/eval.h"
 #include "mem/heap.h"
 #include <rayforce.h>
+#include <string.h>
+#include <unistd.h>
 
 int main(int argc, char** argv) {
     ray_heap_init();
@@ -9,12 +11,25 @@ int main(int argc, char** argv) {
     ray_lang_init();
 
     int rc = 0;
-    /* Load script file(s) first, then drop into REPL */
+    int interactive = 0;
+    const char* file = NULL;
+
+    /* Parse args: [-i] [file.rfl] */
     for (int i = 1; i < argc; i++) {
-        rc = ray_repl_run_file(argv[i]);
-        if (rc != 0) goto done;
+        if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--interactive") == 0)
+            interactive = 1;
+        else
+            file = argv[i];
     }
-    /* Interactive REPL — always, even after loading scripts */
+
+    /* Load script if specified */
+    if (file) {
+        rc = ray_repl_run_file(file);
+        /* Oneshot: file without -i → execute and exit (like Python/rayforce) */
+        if (!interactive) goto done;
+    }
+
+    /* REPL: interactive TTY, piped stdin, or -i after script */
     {
         ray_repl_t* repl = ray_repl_create();
         if (repl) {
@@ -22,8 +37,8 @@ int main(int argc, char** argv) {
             ray_repl_destroy(repl);
         }
     }
-done:
 
+done:
     ray_lang_destroy();
     ray_sym_destroy();
     ray_heap_destroy();
