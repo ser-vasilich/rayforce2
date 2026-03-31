@@ -118,10 +118,13 @@ static void print_banner(void) {
     int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
 
     fprintf(stdout,
-        "RayforceDB: %s %s\n"
+        "\033[1m"
+        "  RayforceDB: %s %s\n"
+        "\033[0m"
         "  %s %"PRId64"(MB) %d core(s)\n"
         "  Using %d cores(s)\n"
-        "  Apache-2.0 license | type :? for help\n",
+        "  Documentation: https://rayforcedb.com/\n"
+        "  Github: https://github.com/singaraiona/rayforce\n",
         RAYFORCE_VERSION, RAYFORCE_BUILD_DATE,
         cpu, mem_mb, ncores,
         ncores);
