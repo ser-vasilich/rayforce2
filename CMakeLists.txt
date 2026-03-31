@@ -78,6 +78,14 @@ if(NOT RAYFORCE_GIT_COMMIT)
 endif()
 string(TIMESTAMP RAYFORCE_BUILD_DATE "%Y-%m-%d" UTC)
 
+# Version defines for library targets (banner in src/app/repl.c)
+foreach(tgt rayforce_static rayforce_lib)
+    target_compile_definitions(${tgt} PRIVATE
+        RAYFORCE_VERSION="${RAYFORCE_VERSION}"
+        RAYFORCE_GIT_COMMIT="${RAYFORCE_GIT_COMMIT}"
+        RAYFORCE_BUILD_DATE="${RAYFORCE_BUILD_DATE}")
+endforeach()
+
 add_executable(rayforce src/lang/repl.c)
 target_link_libraries(rayforce PRIVATE rayforce_static)
 target_include_directories(rayforce PRIVATE include src)
