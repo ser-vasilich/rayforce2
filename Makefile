@@ -1,8 +1,8 @@
-CC      = clang
+CC      ?= clang
 STD     = c17
 AR      = ar
 TARGET  = rayforce
-VERSION = 0.1.0
+VERSION = 2.1.0
 GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%d)
 
@@ -10,14 +10,22 @@ WARNS   = -Wall -Wextra -Werror=return-type -Wno-unused-parameter
 DEFS    = -DRAYFORCE_VERSION=\"$(VERSION)\" -DRAYFORCE_GIT_COMMIT=\"$(GIT_HASH)\" -DRAYFORCE_BUILD_DATE=\"$(BUILD_DATE)\"
 INCLUDES = -Iinclude -Isrc
 
+UNAME_S := $(shell uname -s)
+
 DEBUG_CFLAGS   = -fPIC $(WARNS) -std=$(STD) -g -O0 -march=native -DDEBUG \
   -fsanitize=address,undefined -fno-omit-frame-pointer
 RELEASE_CFLAGS = -fPIC $(WARNS) -std=$(STD) -O3 -march=native \
-  -ftree-vectorize -funroll-loops -fomit-frame-pointer -fno-math-errno
-LIBS    = -lm -lpthread
+  -funroll-loops -fomit-frame-pointer -fno-math-errno
+
+ifeq ($(UNAME_S),Linux)
+  LIBS            = -lm -lpthread
+  RELEASE_LDFLAGS = -Wl,--gc-sections -Wl,--as-needed
+else
+  LIBS            = -lm
+  RELEASE_LDFLAGS = -Wl,-dead_strip
+endif
 
 DEBUG_LDFLAGS   = -fsanitize=address,undefined
-RELEASE_LDFLAGS = -Wl,--gc-sections -Wl,--as-needed
 
 CFLAGS  = $(DEBUG_CFLAGS)
 LDFLAGS = $(DEBUG_LDFLAGS)

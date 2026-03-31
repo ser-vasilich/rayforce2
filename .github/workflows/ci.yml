@@ -14,31 +14,19 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            build_type: Debug
+            target: debug
           - os: ubuntu-latest
-            build_type: Release
+            target: release
           - os: macos-latest
-            build_type: Debug
+            target: debug
           - os: macos-latest
-            build_type: Release
+            target: release
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install latest Clang
-        if: runner.os == 'Linux'
-        run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs) 19"
-          sudo apt-get update
-          sudo apt-get install -y clang-19
-          echo "CC=clang-19" >> $GITHUB_ENV
-
-      - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DRAYFORCE_WERROR=ON
-
-      - name: Build
-        run: cmake --build build
+      - name: Build (${{ matrix.target }})
+        run: make ${{ matrix.target }}
 
       - name: Test
-        run: cd build && ctest --output-on-failure
+        run: make test

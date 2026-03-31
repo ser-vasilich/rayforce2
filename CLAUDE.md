@@ -7,21 +7,21 @@ Pure C17 zero-dependency columnar dataframe library with native graph engine. La
 ## Build & Test
 
 ```bash
-# Debug (ASan + UBSan)
-cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
+# Debug (ASan + UBSan) — default
+make
 
 # Release
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release && cmake --build build_release
+make release
 
 # Run all tests
-cd build && ctest --output-on-failure
+make test
 
 # Run a single test suite
-./build/test_rayforce --suite /vec
+./rayforce.test --suite /vec
 
 # Run the Rayfall REPL (interactive or file mode)
-./build/rayforce
-./build/rayforce script.rfl
+./rayforce
+./rayforce script.rfl
 ```
 
 ## Architecture
