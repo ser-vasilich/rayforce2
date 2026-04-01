@@ -88,7 +88,7 @@ static ray_t* sym_str_arena(ray_arena_t* arena, const char* s, size_t len) {
         v->sdata[len] = '\0';
         return v;
     }
-    /* Long string: fused single allocation for CHAR vector + STR header.
+    /* Long string: fused single allocation for U8 vector + STR header.
      * Layout: [CHAR ray_t header (32B) | string data (len+1) | padding | STR ray_t header (32B)]
      * This halves arena_alloc calls for long strings. */
     size_t data_size = len + 1;

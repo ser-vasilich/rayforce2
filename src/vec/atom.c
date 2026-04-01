@@ -80,7 +80,7 @@ ray_t* ray_f64(double val) {
 }
 
 /* --------------------------------------------------------------------------
- * String atom: SSO for <= 7 bytes, long string via CHAR vector for > 7
+ * String atom: SSO for <= 7 bytes, long string via U8 vector for > 7
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_str(const char* s, size_t len) {
@@ -96,7 +96,7 @@ ray_t* ray_str(const char* s, size_t len) {
         v->sdata[len] = '\0';
         return v;
     }
-    /* Long string: allocate a CHAR vector to hold the data, store pointer.
+    /* Long string: allocate a U8 vector to hold the data, store pointer.
      * Allocate len+1 and null-terminate for C string compatibility — callers
      * (including ctypes c_char_p) may read until '\0'. */
     size_t data_size = len + 1;

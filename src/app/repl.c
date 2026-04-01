@@ -70,14 +70,7 @@ static void render_progress(int64_t done, int64_t total, const char* label) {
     int bar_width = 30;
     int filled = (int)(pct * bar_width);
 
-    /* \r + overwrite line */
     fprintf(stderr, "\r\033[90m");
-    if (label) fprintf(stderr, "%s ", label);
-    fprintf(stderr, "[");
-    for (int i = 0; i < bar_width; i++)
-        fputc(i < filled ? '\xe2' : ' ', stderr);
-    /* Using simple = and space for portability */
-    fprintf(stderr, "\r");
     if (label) fprintf(stderr, "%s ", label);
     fprintf(stderr, "[");
     for (int i = 0; i < bar_width; i++)
@@ -450,13 +443,10 @@ static void eval_and_print(ray_term_t* term, const char* input,
         return;
     }
 
-    if (RAY_IS_ERR(result)) {
+    if (result) {
         repl_print_result(stdout, result, use_color);
         fflush(stdout);
-    } else if (result) {
-        repl_print_result(stdout, result, use_color);
-        fflush(stdout);
-        ray_release(result);
+        if (!RAY_IS_ERR(result)) ray_release(result);
     }
 
     if (profiling) profile_print(use_color);

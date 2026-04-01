@@ -29,7 +29,7 @@
  *
  * The slen/sdata and obj fields share the same 8-byte union in ray_t.
  * SSO: slen is 0..7, sdata contains the string bytes.
- * Long: obj is a non-NULL pointer to a CHAR vector.
+ * Long: obj is a non-NULL pointer to a U8 vector.
  *
  * Distinction:
  *   - slen 1..7 → always SSO (a 32B-aligned pointer's low byte is a

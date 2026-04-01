@@ -775,9 +775,7 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
     for (int64_t ci = 0; ci < table_width; ci++) {
         for (int32_t j = 0; j < col_widths[ci]; j++)
             fmt_puts(b, G_H);
-        if (ci < table_width - 1)
-            fmt_puts(b, G_TT);
-        else if (has_hidden_cols)
+        if (ci < table_width - 1 || has_hidden_cols)
             fmt_puts(b, G_TT);
         else
             fmt_puts(b, G_TR);
@@ -814,9 +812,7 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
     for (int64_t ci = 0; ci < table_width; ci++) {
         for (int32_t j = 0; j < col_widths[ci]; j++)
             fmt_puts(b, G_H);
-        if (ci < table_width - 1)
-            fmt_puts(b, G_X);
-        else if (has_hidden_cols)
+        if (ci < table_width - 1 || has_hidden_cols)
             fmt_puts(b, G_X);
         else
             fmt_puts(b, G_RT);
@@ -870,9 +866,7 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
     for (int64_t ci = 0; ci < table_width; ci++) {
         for (int32_t j = 0; j < col_widths[ci]; j++)
             fmt_puts(b, G_H);
-        if (ci < table_width - 1)
-            fmt_puts(b, G_BT);
-        else if (has_hidden_cols)
+        if (ci < table_width - 1 || has_hidden_cols)
             fmt_puts(b, G_BT);
         else
             fmt_puts(b, G_RT);

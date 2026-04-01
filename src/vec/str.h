@@ -28,7 +28,7 @@
  * str.h -- String helper functions.
  *
  * String atoms use SSO for <= 7 bytes (stored in sdata[7] with slen).
- * Long strings store data in a CHAR vector pointed to by obj.
+ * Long strings store data in a U8 vector pointed to by obj.
  */
 
 #include <rayforce.h>
