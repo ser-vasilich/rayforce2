@@ -1548,6 +1548,27 @@ static MunitResult test_atomic_map_nested_vec(const void* params, void* fixture)
     return MUNIT_OK;
 }
 
+/* Verify that errors in compiled lambdas produce a trace with source info */
+static MunitResult test_error_trace_exists(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Eval a lambda that will error — the trace should be built */
+    ray_clear_error_trace();
+    ray_t* r = ray_eval_str("((fn [x] (+ x \"s\")) 1)");
+    munit_assert(RAY_IS_ERR(r));
+    ray_t* trace = ray_get_error_trace();
+    munit_assert_ptr_not_null(trace);
+    munit_assert(ray_len(trace) > 0);
+    /* First frame should have a span with non-zero id */
+    ray_t* frame = ((ray_t**)ray_data(trace))[0];
+    munit_assert_ptr_not_null(frame);
+    munit_assert_int(ray_len(frame), ==, 4);
+    ray_t** fe = (ray_t**)ray_data(frame);
+    munit_assert_ptr_not_null(fe[0]); /* span atom */
+    munit_assert(fe[0]->i64 != 0); /* non-zero span */
+    ray_clear_error_trace();
+    return MUNIT_OK;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * Ported rayforce lang tests (41 functions, ~3800 assertions)
  * ═══════════════════════════════════════════════════════════════ */
@@ -1648,6 +1669,7 @@ static MunitTest lang_tests[] = {
     { "/verb/if_sum",          test_verb_if_sum,          lang_setup, lang_teardown, 0, NULL },
     { "/verb/sum_var",         test_verb_sum_var,         lang_setup, lang_teardown, 0, NULL },
     { "/atomic_map_nested_vec", test_atomic_map_nested_vec, lang_setup, lang_teardown, 0, NULL },
+    { "/error_trace_exists",    test_error_trace_exists,    lang_setup, lang_teardown, 0, NULL },
     /* Ported rayforce lang tests */
     { "/rf/map",                   test_rf_map,           lang_setup, lang_teardown, 0, NULL },
     { "/rf/basic",                 test_rf_basic,         lang_setup, lang_teardown, 0, NULL },
