@@ -320,7 +320,8 @@ static MunitResult test_shortest_path_no_path(const void* params, void* data) {
 
     ray_t* result = ray_execute(g, sp);
     munit_assert_true(RAY_IS_ERR(result));
-    munit_assert_int(RAY_ERR_CODE(result), ==, RAY_ERR_RANGE);
+    munit_assert_string_equal(ray_err_code(result), "range");
+    ray_release(result);
 
     ray_graph_free(g);
     ray_rel_free(rel);

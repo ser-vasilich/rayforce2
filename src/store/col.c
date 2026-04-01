@@ -335,7 +335,7 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
         if (type == RAY_SYM) {
             uint32_t sc = ray_sym_count();
             ray_err_t ve = validate_sym_bounds(ray_data(vec), len, attrs, sc);
-            if (ve != RAY_OK) { ray_release(vec); return RAY_ERR_PTR(ve); }
+            if (ve != RAY_OK) { ray_release(vec); return ray_error(ray_err_code_str(ve), NULL); }
         }
         return vec;
     }
@@ -665,7 +665,7 @@ ray_t* ray_col_load(const char* path) {
                                                 vec->attrs, ray_sym_count());
         if (sym_err != RAY_OK) {
             ray_release(vec);
-            return RAY_ERR_PTR(sym_err);
+            return ray_error(ray_err_code_str(sym_err), NULL);
         }
     }
 
@@ -742,7 +742,7 @@ ray_t* ray_col_mmap(const char* path) {
             (const char*)ptr + 32, vec->len, vec->attrs, cur_sc);
         if (sym_err != RAY_OK) {
             ray_vm_unmap_file(ptr, mapped_size);
-            return RAY_ERR_PTR(sym_err);
+            return ray_error(ray_err_code_str(sym_err), NULL);
         }
     }
 

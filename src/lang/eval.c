@@ -51,26 +51,7 @@ ray_t* ray_error(const char* code, const char* fmt, ...);
 #include <unistd.h>
 #endif
 
-/* Convert ray_err_t enum to short string code for ray_error() */
-static const char* err_code_str(ray_err_t e) {
-    switch (e) {
-    case RAY_ERR_OOM:     return "oom";
-    case RAY_ERR_TYPE:    return "type";
-    case RAY_ERR_RANGE:   return "range";
-    case RAY_ERR_LENGTH:  return "length";
-    case RAY_ERR_RANK:    return "rank";
-    case RAY_ERR_DOMAIN:  return "domain";
-    case RAY_ERR_NYI:     return "nyi";
-    case RAY_ERR_IO:      return "io";
-    case RAY_ERR_SCHEMA:  return "schema";
-    case RAY_ERR_CORRUPT: return "corrupt";
-    case RAY_ERR_CANCEL:  return "cancel";
-    case RAY_ERR_PARSE:   return "parse";
-    case RAY_ERR_NAME:    return "name";
-    case RAY_ERR_LIMIT:   return "limit";
-    default:              return "domain";
-    }
-}
+/* err_code_str removed — use ray_ray_err_code_str() from runtime.c */
 
 /* Maximum recursion depth for ray_eval() to prevent stack overflow */
 #define RAY_EVAL_MAX_DEPTH 512
@@ -6249,7 +6230,7 @@ ray_t* ray_write_csv_fn(ray_t** args, int64_t n) {
         return ray_error("type", NULL);
     if (!path) return ray_error("domain", NULL);
     ray_err_t err = ray_write_csv(tbl, path);
-    if (err != RAY_OK) return ray_error(err_code_str(err), NULL);
+    if (err != RAY_OK) return ray_error(ray_err_code_str(err), NULL);
     return make_i64(0);
 }
 
@@ -7088,7 +7069,7 @@ ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
         val = ray_lazy_materialize(val);
     if (RAY_IS_ERR(val)) return val;
     ray_err_t err = ray_env_set_local(name_obj->i64, val);
-    if (err != RAY_OK) { ray_release(val); return ray_error(err_code_str(err), NULL); }
+    if (err != RAY_OK) { ray_release(val); return ray_error(ray_err_code_str(err), NULL); }
     return val;
 }
 

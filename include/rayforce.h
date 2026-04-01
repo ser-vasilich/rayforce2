@@ -155,6 +155,8 @@ typedef union ray_t {
 
 /* Error object creation (defined in core/runtime.c) */
 ray_t* ray_error(const char* code, const char* fmt, ...);
+const char* ray_err_code_str(ray_err_t e);
+const char* ray_err_code(ray_t* err);
 
 /* ===== Accessor Macros ===== */
 

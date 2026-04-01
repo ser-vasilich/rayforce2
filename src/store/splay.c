@@ -126,7 +126,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
     /* Load symbol table if sym_path provided */
     if (sym_path) {
         ray_err_t sym_err = ray_sym_load(sym_path);
-        if (sym_err != RAY_OK) return RAY_ERR_PTR(sym_err);
+        if (sym_err != RAY_OK) return ray_error(ray_err_code_str(sym_err), NULL);
     }
 
     /* Load .d schema */
@@ -201,7 +201,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
     ray_err_t sym_check = validate_sym_columns(tbl, ncols);
     if (sym_check != RAY_OK) {
         ray_release(tbl);
-        return RAY_ERR_PTR(sym_check);
+        return ray_error(ray_err_code_str(sym_check), NULL);
     }
 
     return tbl;
@@ -220,7 +220,7 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
     /* Load symbol table if sym_path provided — failure is fatal */
     if (sym_path) {
         ray_err_t sym_err = ray_sym_load(sym_path);
-        if (sym_err != RAY_OK) return RAY_ERR_PTR(sym_err);
+        if (sym_err != RAY_OK) return ray_error(ray_err_code_str(sym_err), NULL);
     }
 
     /* Load .d schema (small, use ray_col_load — buddy copy is fine) */
@@ -291,7 +291,7 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
     ray_err_t sym_check = validate_sym_columns(tbl, ncols);
     if (sym_check != RAY_OK) {
         ray_release(tbl);
-        return RAY_ERR_PTR(sym_check);
+        return ray_error(ray_err_code_str(sym_check), NULL);
     }
 
     return tbl;

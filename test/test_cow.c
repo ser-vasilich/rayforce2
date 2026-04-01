@@ -130,12 +130,14 @@ static MunitResult test_null_error_safety(const void* params, void* fixture) {
     ray_t* r = ray_cow(NULL);
     munit_assert_null(r);
 
-    /* Error pointers */
-    ray_t* err = RAY_ERR_PTR(RAY_ERR_OOM);
+    /* Error objects (new model: ray_error returns a real ray_t with type RAY_ERROR) */
+    ray_t* err = ray_error("oom", NULL);
+    munit_assert_true(RAY_IS_ERR(err));
     ray_retain(err);
     ray_release(err);
     ray_t* r2 = ray_cow(err);
     munit_assert_true(RAY_IS_ERR(r2));
+    ray_release(err);
 
     return MUNIT_OK;
 }

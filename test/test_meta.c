@@ -96,9 +96,10 @@ static MunitResult test_meta_save_null_returns_error(const void* params, void* f
 static MunitResult test_meta_save_err_ptr_returns_error(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    ray_t* bad = RAY_ERR_PTR(RAY_ERR_TYPE);
+    ray_t* bad = ray_error("type", NULL);
     ray_err_t err = ray_meta_save_d(bad, TMP_META_PATH);
     munit_assert_int(err, !=, RAY_OK);
+    ray_release(bad);
 
     return MUNIT_OK;
 }

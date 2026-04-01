@@ -314,7 +314,7 @@ ray_t* ray_read_parted(const char* db_root, const char* table_name) {
 
     /* Load global symfile */
     ray_err_t sym_err = ray_sym_load(sym_path);
-    if (sym_err != RAY_OK) return RAY_ERR_PTR(sym_err);
+    if (sym_err != RAY_OK) return ray_error(ray_err_code_str(sym_err), NULL);
 
     /* Scan db_root for partition directories */
     DIR* d = opendir(db_root);

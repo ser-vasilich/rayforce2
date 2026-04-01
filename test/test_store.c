@@ -216,7 +216,8 @@ static MunitResult test_col_mmap_corrupt(const void* params, void* fixture) {
 
     ray_t* result = ray_col_mmap(TMP_COL_PATH);
     munit_assert_true(RAY_IS_ERR(result));
-    munit_assert_int(RAY_ERR_CODE(result), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(result), "corrupt");
+    ray_release(result);
 
     unlink(TMP_COL_PATH);
     return MUNIT_OK;
@@ -229,7 +230,8 @@ static MunitResult test_col_mmap_nofile(const void* params, void* fixture) {
 
     ray_t* result = ray_col_mmap("/tmp/rayforce_nonexistent_file_xyz.dat");
     munit_assert_true(RAY_IS_ERR(result));
-    munit_assert_int(RAY_ERR_CODE(result), ==, RAY_ERR_IO);
+    munit_assert_string_equal(ray_err_code(result), "io");
+    ray_release(result);
 
     return MUNIT_OK;
 }
@@ -1125,12 +1127,14 @@ static MunitResult test_sym_col_bounds_reject(const void* params, void* fixture)
     /* Load should fail with RAY_ERR_CORRUPT */
     ray_t* bad = ray_col_load(TMP_COL_PATH);
     munit_assert_true(RAY_IS_ERR(bad));
-    munit_assert_int(RAY_ERR_CODE(bad), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(bad), "corrupt");
+    ray_release(bad);
 
     /* Same test via mmap */
     bad = ray_col_mmap(TMP_COL_PATH);
     munit_assert_true(RAY_IS_ERR(bad));
-    munit_assert_int(RAY_ERR_CODE(bad), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(bad), "corrupt");
+    ray_release(bad);
 
     ray_release(vec);
     unlink(TMP_COL_PATH);
@@ -1174,12 +1178,14 @@ static MunitResult test_sym_col_count_mismatch(const void* params, void* fixture
     /* Load should fail: saved sym count > current sym count (fast-reject) */
     ray_t* bad = ray_col_load(TMP_COL_PATH);
     munit_assert_true(RAY_IS_ERR(bad));
-    munit_assert_int(RAY_ERR_CODE(bad), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(bad), "corrupt");
+    ray_release(bad);
 
     /* Same via mmap */
     bad = ray_col_mmap(TMP_COL_PATH);
     munit_assert_true(RAY_IS_ERR(bad));
-    munit_assert_int(RAY_ERR_CODE(bad), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(bad), "corrupt");
+    ray_release(bad);
 
     unlink(TMP_COL_PATH);
     return MUNIT_OK;
@@ -1343,7 +1349,8 @@ static MunitResult test_splay_load_sym_missing_corrupt(const void* params, void*
      * ray_splay_load catches RAY_SYM + empty sym table. */
     ray_t* loaded = ray_splay_load(TMP_SPLAY_SYM_DIR, NULL);
     munit_assert_true(RAY_IS_ERR(loaded));
-    munit_assert_int(RAY_ERR_CODE(loaded), ==, RAY_ERR_CORRUPT);
+    munit_assert_string_equal(ray_err_code(loaded), "corrupt");
+    ray_release(loaded);
 
     ray_release(col);
     ray_release(tbl);

@@ -63,7 +63,8 @@ static MunitResult test_vec_new_invalid(const void* params, void* fixture) {
 
     ray_t* v = ray_vec_new(-1, 10);
     munit_assert_true(RAY_IS_ERR(v));
-    munit_assert_int(RAY_ERR_CODE(v), ==, RAY_ERR_TYPE);
+    munit_assert_string_equal(ray_err_code(v), "type");
+    ray_release(v);
 
     return MUNIT_OK;
 }
@@ -460,7 +461,8 @@ static MunitResult test_vec_concat_type_mismatch(const void* params, void* fixtu
 
     ray_t* c = ray_vec_concat(a, b);
     munit_assert_true(RAY_IS_ERR(c));
-    munit_assert_int(RAY_ERR_CODE(c), ==, RAY_ERR_TYPE);
+    munit_assert_string_equal(ray_err_code(c), "type");
+    ray_release(c);
 
     ray_release(a);
     ray_release(b);

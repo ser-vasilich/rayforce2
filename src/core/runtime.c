@@ -30,6 +30,30 @@
 ray_runtime_t *__RUNTIME = NULL;
 _Thread_local ray_vm_t *__VM = NULL;
 
+/* ===== Error code to string ===== */
+
+const char* ray_err_code_str(ray_err_t e) {
+    static const char* codes[] = {
+        [RAY_OK]          = "ok",
+        [RAY_ERR_OOM]     = "oom",
+        [RAY_ERR_TYPE]    = "type",
+        [RAY_ERR_RANGE]   = "range",
+        [RAY_ERR_LENGTH]  = "length",
+        [RAY_ERR_RANK]    = "rank",
+        [RAY_ERR_DOMAIN]  = "domain",
+        [RAY_ERR_NYI]     = "nyi",
+        [RAY_ERR_IO]      = "io",
+        [RAY_ERR_SCHEMA]  = "schema",
+        [RAY_ERR_CORRUPT] = "corrupt",
+        [RAY_ERR_CANCEL]  = "cancel",
+        [RAY_ERR_PARSE]   = "parse",
+        [RAY_ERR_NAME]    = "name",
+        [RAY_ERR_LIMIT]   = "limit",
+    };
+    if ((unsigned)e >= sizeof(codes)/sizeof(codes[0])) return "error";
+    return codes[e];
+}
+
 /* ===== Error API ===== */
 
 ray_t* ray_verror(const char* code, const char* fmt, va_list ap) {
@@ -78,7 +102,11 @@ ray_t* ray_error(const char* code, const char* fmt, ...) {
 
 const char* ray_err_code(ray_t* err) {
     if (!err || err->type != RAY_ERROR) return NULL;
-    return err->sdata;
+    /* sdata is 7 bytes and may not be null-terminated when full */
+    static _Thread_local char buf[8];
+    memcpy(buf, err->sdata, err->slen);
+    buf[err->slen] = '\0';
+    return buf;
 }
 
 const char* ray_error_msg(void) {
