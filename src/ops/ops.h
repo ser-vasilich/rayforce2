@@ -628,6 +628,14 @@ void     ray_fuse_pass(ray_graph_t* g, ray_op_t* root);
 const char* ray_opcode_name(uint16_t op);
 void ray_graph_dump(ray_graph_t* g, ray_op_t* root, void* out);
 
+/* ===== Sort API ===== */
+
+/* Sort columns and return index array (I64 vector of sorted indices).
+ * Uses parallel radix sort for numerics, merge sort for strings/symbols.
+ * descs/nulls_first may be NULL (all-asc / PostgreSQL null convention). */
+ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
+                        uint8_t n_cols, int64_t nrows);
+
 /* ===== Executor API ===== */
 
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root);
