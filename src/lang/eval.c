@@ -3392,8 +3392,13 @@ static ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
         uint8_t esz = (uint8_t)RAY_SYM_ELEM(w);
         char* src = (char*)ray_data(vec);
         char* dst = (char*)ray_data(result);
-        for (int64_t i = 0; i < n; i++)
-            memcpy(dst + i * esz, src + idx[i] * esz, esz);
+        switch (esz) {
+        case 8: for (int64_t i = 0; i < n; i++) memcpy(dst + i*8, src + idx[i]*8, 8); break;
+        case 4: for (int64_t i = 0; i < n; i++) memcpy(dst + i*4, src + idx[i]*4, 4); break;
+        case 2: for (int64_t i = 0; i < n; i++) memcpy(dst + i*2, src + idx[i]*2, 2); break;
+        case 1: for (int64_t i = 0; i < n; i++) dst[i] = src[idx[i]]; break;
+        default: for (int64_t i = 0; i < n; i++) memcpy(dst + i*esz, src + idx[i]*esz, esz); break;
+        }
         if (vec->sym_dict) {
             ray_retain(vec->sym_dict);
             result->sym_dict = vec->sym_dict;
@@ -3407,20 +3412,14 @@ static ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
     uint8_t esz = ray_type_sizes[type];
     char* src = (char*)ray_data(vec);
     char* dst = (char*)ray_data(result);
-    /* Fast path: 8-byte types (I64, F64, TIMESTAMP) — avoid memcpy overhead */
-    if (esz == 8) {
-        int64_t* s64 = (int64_t*)src;
-        int64_t* d64 = (int64_t*)dst;
-        for (int64_t i = 0; i < n; i++)
-            d64[i] = s64[idx[i]];
-    } else if (esz == 4) {
-        int32_t* s32 = (int32_t*)src;
-        int32_t* d32 = (int32_t*)dst;
-        for (int64_t i = 0; i < n; i++)
-            d32[i] = s32[idx[i]];
-    } else {
-        for (int64_t i = 0; i < n; i++)
-            memcpy(dst + i * esz, src + idx[i] * esz, esz);
+    /* Typed gather — compiler constant esz enables vectorization, alias-safe */
+    switch (esz) {
+    case 8: for (int64_t i = 0; i < n; i++) memcpy(dst + i*8, src + idx[i]*8, 8); break;
+    case 4: for (int64_t i = 0; i < n; i++) memcpy(dst + i*4, src + idx[i]*4, 4); break;
+    case 2: for (int64_t i = 0; i < n; i++) memcpy(dst + i*2, src + idx[i]*2, 2); break;
+    case 1: for (int64_t i = 0; i < n; i++) dst[i] = src[idx[i]]; break;
+    default: for (int64_t i = 0; i < n; i++) memcpy(dst + i*esz, src + idx[i]*esz, esz); break;
+    case 16: for (int64_t i = 0; i < n; i++) memcpy(dst + i*16, src + idx[i]*16, 16); break;
     }
 
     return result;
