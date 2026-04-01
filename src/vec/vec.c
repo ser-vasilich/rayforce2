@@ -51,15 +51,15 @@ static int64_t vec_capacity(ray_t* vec) {
 
 ray_t* ray_vec_new(int8_t type, int64_t capacity) {
     if (type <= 0 || type >= RAY_TYPE_COUNT)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
     if (type == RAY_SYM)
         return ray_sym_vec_new(RAY_SYM_W64, capacity);  /* default: global sym IDs */
-    if (capacity < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (capacity < 0) return ray_error("range", NULL);
 
     uint8_t esz = ray_elem_size(type);
     size_t data_size = (size_t)capacity * esz;
     if (esz > 1 && data_size / esz != (size_t)capacity)
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
 
     ray_t* v = ray_alloc(data_size);
     if (!v || RAY_IS_ERR(v)) return v;
@@ -82,13 +82,13 @@ ray_t* ray_vec_new(int8_t type, int64_t capacity) {
 
 ray_t* ray_sym_vec_new(uint8_t sym_width, int64_t capacity) {
     if ((sym_width & ~RAY_SYM_W_MASK) != 0)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (capacity < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("type", NULL);
+    if (capacity < 0) return ray_error("range", NULL);
 
     uint8_t esz = (uint8_t)RAY_SYM_ELEM(sym_width);
     size_t data_size = (size_t)capacity * esz;
     if (esz > 1 && data_size / esz != (size_t)capacity)
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
 
     ray_t* v = ray_alloc(data_size);
     if (!v || RAY_IS_ERR(v)) return v;
@@ -108,8 +108,8 @@ ray_t* ray_sym_vec_new(uint8_t sym_width, int64_t capacity) {
 ray_t* ray_vec_append(ray_t* vec, const void* elem) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
     if (vec->type <= 0 || vec->type >= RAY_TYPE_COUNT)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (vec->type == RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
+    if (vec->type == RAY_STR) return ray_error("type", NULL);
 
     /* COW: if shared, copy first */
     vec = ray_cow(vec);
@@ -126,7 +126,7 @@ ray_t* ray_vec_append(ray_t* vec, const void* elem) {
         else {
             size_t s = 32;
             while (s < new_data_size) {
-                if (s > SIZE_MAX / 2) return RAY_ERR_PTR(RAY_ERR_OOM);
+                if (s > SIZE_MAX / 2) return ray_error("oom", NULL);
                 s *= 2;
             }
             new_data_size = s;
@@ -150,9 +150,9 @@ ray_t* ray_vec_append(ray_t* vec, const void* elem) {
 
 ray_t* ray_vec_set(ray_t* vec, int64_t idx, const void* elem) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
-    if (vec->type == RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (vec->type == RAY_STR) return ray_error("type", NULL);
     if (idx < 0 || idx >= vec->len)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     /* COW: if shared, copy first */
     vec = ray_cow(vec);
@@ -194,7 +194,7 @@ void* ray_vec_get(ray_t* vec, int64_t idx) {
 ray_t* ray_vec_slice(ray_t* vec, int64_t offset, int64_t len) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
     if (offset < 0 || len < 0 || offset > vec->len || len > vec->len - offset)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     /* If input is already a slice, resolve to ultimate parent */
     ray_t* parent = vec;
@@ -228,11 +228,11 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
     if (!a || RAY_IS_ERR(a)) return a;
     if (!b || RAY_IS_ERR(b)) return b;
     if (a->type != b->type)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
 
     if (a->type == RAY_STR) {
         int64_t total_len = a->len + b->len;
-        if (total_len < a->len) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (total_len < a->len) return ray_error("oom", NULL);
 
         ray_t* result = ray_vec_new(RAY_STR, total_len);
         if (!result || RAY_IS_ERR(result)) return result;
@@ -263,7 +263,7 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
         /* Guard: total pool must fit in uint32_t for pool_off rebasing */
         if (total_pool > (int64_t)UINT32_MAX) {
             ray_release(result);
-            return RAY_ERR_PTR(RAY_ERR_RANGE);
+            return ray_error("range", NULL);
         }
 
         if (total_pool > 0) {
@@ -271,7 +271,7 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
             if (!result->str_pool || RAY_IS_ERR(result->str_pool)) {
                 result->str_pool = NULL;
                 ray_release(result);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
             result->str_pool->type = RAY_CHAR;
             result->str_pool->len = total_pool;
@@ -319,10 +319,10 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
     uint8_t esz = (a_esz >= b_esz) ? a_esz : b_esz;
 
     int64_t total_len = a->len + b->len;
-    if (total_len < a->len) return RAY_ERR_PTR(RAY_ERR_OOM); /* overflow */
+    if (total_len < a->len) return ray_error("oom", NULL); /* overflow */
     size_t data_size = (size_t)total_len * esz;
     if (esz > 1 && data_size / esz != (size_t)total_len)
-        return RAY_ERR_PTR(RAY_ERR_OOM); /* multiplication overflow */
+        return ray_error("oom", NULL); /* multiplication overflow */
 
     ray_t* result = ray_alloc(data_size);
     if (!result || RAY_IS_ERR(result)) return result;
@@ -392,9 +392,9 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
 
 ray_t* ray_vec_from_raw(int8_t type, const void* data, int64_t count) {
     if (type <= 0 || type >= RAY_TYPE_COUNT)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (type == RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (count < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("type", NULL);
+    if (type == RAY_STR) return ray_error("type", NULL);
+    if (count < 0) return ray_error("range", NULL);
 
     /* RAY_SYM defaults to W64 (global sym IDs) */
     uint8_t sym_w = (type == RAY_SYM) ? RAY_SYM_W64 : 0;
@@ -566,8 +566,8 @@ static inline void str_pool_add_dead(ray_t* vec, uint32_t bytes) {
 
 ray_t* ray_str_vec_append(ray_t* vec, const char* s, size_t len) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
-    if (vec->type != RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (len > UINT32_MAX) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (vec->type != RAY_STR) return ray_error("type", NULL);
+    if (len > UINT32_MAX) return ray_error("range", NULL);
 
     ray_t* original = vec;
     vec = ray_cow(vec);
@@ -645,10 +645,10 @@ ray_t* ray_str_vec_append(ray_t* vec, const char* s, size_t len) {
 
 fail_oom:
     if (vec != original) ray_release(vec);
-    return RAY_ERR_PTR(RAY_ERR_OOM);
+    return ray_error("oom", NULL);
 fail_range:
     if (vec != original) ray_release(vec);
-    return RAY_ERR_PTR(RAY_ERR_RANGE);
+    return ray_error("range", NULL);
 }
 
 /* --------------------------------------------------------------------------
@@ -691,9 +691,9 @@ const char* ray_str_vec_get(ray_t* vec, int64_t idx, size_t* out_len) {
 
 ray_t* ray_str_vec_set(ray_t* vec, int64_t idx, const char* s, size_t len) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
-    if (vec->type != RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
-    if (idx < 0 || idx >= vec->len) return RAY_ERR_PTR(RAY_ERR_RANGE);
-    if (len > UINT32_MAX) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (vec->type != RAY_STR) return ray_error("type", NULL);
+    if (idx < 0 || idx >= vec->len) return ray_error("range", NULL);
+    if (len > UINT32_MAX) return ray_error("range", NULL);
 
     ray_t* original = vec;
     vec = ray_cow(vec);
@@ -758,10 +758,10 @@ ray_t* ray_str_vec_set(ray_t* vec, int64_t idx, const char* s, size_t len) {
 
 fail_oom:
     if (vec != original) ray_release(vec);
-    return RAY_ERR_PTR(RAY_ERR_OOM);
+    return ray_error("oom", NULL);
 fail_range:
     if (vec != original) ray_release(vec);
-    return RAY_ERR_PTR(RAY_ERR_RANGE);
+    return ray_error("range", NULL);
 }
 
 /* --------------------------------------------------------------------------
@@ -773,7 +773,7 @@ fail_range:
 
 ray_t* ray_str_vec_compact(ray_t* vec) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
-    if (vec->type != RAY_STR) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (vec->type != RAY_STR) return ray_error("type", NULL);
     if (!vec->str_pool || str_pool_dead(vec) == 0) return vec;
 
     ray_t* original = vec;
@@ -781,7 +781,7 @@ ray_t* ray_str_vec_compact(ray_t* vec) {
     if (!vec || RAY_IS_ERR(vec)) return vec;
     if (!str_pool_cow(vec)) {
         if (vec != original) ray_release(vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Compute true live size by scanning elements — avoids overflow when

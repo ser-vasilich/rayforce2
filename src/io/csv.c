@@ -1032,19 +1032,19 @@ ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
                         const int8_t* col_types_in, int32_t n_types) {
     /* ---- 1. Open file and get size ---- */
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (fd < 0) return ray_error("io", NULL);
 
     struct stat st;
     if (fstat(fd, &st) != 0 || st.st_size <= 0) {
         close(fd);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
     size_t file_size = (size_t)st.st_size;
 
     /* ---- 2. mmap the file ---- */
     char* buf = (char*)mmap(NULL, file_size, PROT_READ, MMAP_FLAGS, fd, 0);
     close(fd);
-    if (buf == MAP_FAILED) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (buf == MAP_FAILED) return ray_error("io", NULL);
 
 #ifdef __APPLE__
     madvise(buf, file_size, MADV_SEQUENTIAL);
@@ -1081,7 +1081,7 @@ ray_t* ray_read_csv_opts(const char* path, char delimiter, bool header,
     if (ncols > CSV_MAX_COLS) {
         munmap(buf, file_size);
         /* fd already closed after mmap (line 1044) — do not close again */
-        return RAY_ERR_PTR(RAY_ERR_RANGE);  /* too many columns */
+        return ray_error("range", NULL);  /* too many columns */
     }
 
     /* ---- 5. Parse header row ---- */
@@ -1396,7 +1396,7 @@ fail_offsets:
     scratch_free(row_offsets_hdr);
 fail_unmap:
     munmap(buf, file_size);
-    return RAY_ERR_PTR(RAY_ERR_OOM);
+    return ray_error("oom", NULL);
 }
 
 /* --------------------------------------------------------------------------

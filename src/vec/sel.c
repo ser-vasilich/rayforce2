@@ -51,7 +51,7 @@ static size_t sel_data_size(int64_t nrows) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_sel_new(int64_t nrows) {
-    if (nrows < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (nrows < 0) return ray_error("range", NULL);
 
     size_t dsz = sel_data_size(nrows);
     ray_t* s = ray_alloc(dsz);
@@ -128,7 +128,7 @@ void ray_sel_recompute(ray_t* sel) {
 
 ray_t* ray_sel_from_pred(ray_t* pred) {
     if (!pred || RAY_IS_ERR(pred)) return pred;
-    if (pred->type != RAY_BOOL) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (pred->type != RAY_BOOL) return ray_error("type", NULL);
 
     int64_t nrows = pred->len;
     ray_t* sel = ray_sel_new(nrows);
@@ -169,9 +169,9 @@ ray_t* ray_sel_and(ray_t* a, ray_t* b) {
     if (!a || RAY_IS_ERR(a)) return a;
     if (!b || RAY_IS_ERR(b)) return b;
     if (a->type != RAY_SEL || b->type != RAY_SEL)
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
     if (a->len != b->len)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     int64_t nrows = a->len;
     ray_t* out = ray_sel_new(nrows);

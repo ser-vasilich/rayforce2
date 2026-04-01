@@ -34,7 +34,7 @@ ray_t* ray_alloc(size_t size) {
     if (size < 32) size = 32;
     size = (size + 4095) & ~(size_t)4095;
     void* p = ray_vm_alloc(size);
-    if (!p) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!p) return ray_error("oom", NULL);
     return (ray_t*)p;
 }
 
@@ -66,7 +66,7 @@ size_t ray_block_size(ray_t* v) {
 ray_t* ray_block_copy(ray_t* src) {
     size_t sz = ray_block_size(src);
     ray_t* dst = ray_alloc(sz);
-    if (!dst) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!dst) return ray_error("oom", NULL);
     /* Save allocator metadata before memcpy overwrites the header */
     uint8_t new_mmod = dst->mmod;
     uint8_t new_order = dst->order;

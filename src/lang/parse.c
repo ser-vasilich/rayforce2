@@ -208,7 +208,7 @@ static ray_t* parse_number(ray_parser_t *p) {
         p->pos += 2;
         char *end;
         unsigned long v = strtoul(p->pos, &end, 16);
-        if (end == p->pos) return RAY_ERR_PTR(RAY_ERR_PARSE);
+        if (end == p->pos) return ray_error("parse", NULL);
         p->pos = end;
         return ray_u8((uint8_t)v);
     }
@@ -258,15 +258,15 @@ static ray_t* parse_number(ray_parser_t *p) {
             /* Parse HH:MM:SS.nnnnnnnnn */
             if (!(p->pos[0] >= '0' && p->pos[0] <= '9' &&
                   p->pos[1] >= '0' && p->pos[1] <= '9'))
-                return RAY_ERR_PTR(RAY_ERR_PARSE);
+                return ray_error("parse", NULL);
             int hh = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
-            if (*p->pos != ':') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            if (*p->pos != ':') return ray_error("parse", NULL);
             p->pos++;
             int mi = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
-            if (*p->pos != ':') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            if (*p->pos != ':') return ray_error("parse", NULL);
             p->pos++;
             int ss = (p->pos[0] - '0') * 10 + (p->pos[1] - '0'); p->pos += 2;
-            if (*p->pos != '.') return RAY_ERR_PTR(RAY_ERR_PARSE);
+            if (*p->pos != '.') return ray_error("parse", NULL);
             p->pos++;
             /* Parse fractional seconds (up to 9 digits for nanoseconds) */
             const char* fstart = p->pos;
@@ -330,12 +330,12 @@ plain_number:;
     /* Type suffix: h (i16), i (i32) */
     if (*p->pos == 'h') {
         p->pos++;
-        if (v < -32767 || v > 32767) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        if (v < -32767 || v > 32767) return ray_error("domain", NULL);
         return ray_i16((int16_t)v);
     }
     if (*p->pos == 'i') {
         p->pos++;
-        if (v < -2147483647LL || v > 2147483647LL) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+        if (v < -2147483647LL || v > 2147483647LL) return ray_error("domain", NULL);
         return ray_i32((int32_t)v);
     }
 
@@ -355,7 +355,7 @@ static ray_t* parse_string(ray_parser_t *p) {
         scan++;
     }
     size_t raw_len = (size_t)(scan - start);
-    if (*scan != '"') return RAY_ERR_PTR(RAY_ERR_PARSE); /* unterminated string */
+    if (*scan != '"') return ray_error("parse", NULL); /* unterminated string */
     scan++;
     p->pos = scan;
 
@@ -368,7 +368,7 @@ static ray_t* parse_string(ray_parser_t *p) {
     const char *end = start + raw_len;
     while (r < end) {
         if (out >= sizeof(buf) - 2)
-            return RAY_ERR_PTR(RAY_ERR_DOMAIN);  /* string too long for escape buffer */
+            return ray_error("domain", NULL);  /* string too long for escape buffer */
         if (*r == '\\' && r + 1 < end) {
             r++;
             switch (*r) {
@@ -474,7 +474,7 @@ static ray_t* parse_name(ray_parser_t *p) {
            || *p->pos == '&' || *p->pos == '|')
         p->pos++;
     size_t len = (size_t)(p->pos - start);
-    if (len == 0) return RAY_ERR_PTR(RAY_ERR_PARSE);
+    if (len == 0) return ray_error("parse", NULL);
 
     /* Check for true/false */
     if (len == 4 && memcmp(start, "true", 4) == 0)  return ray_bool(true);
@@ -500,7 +500,7 @@ static ray_t* parse_vector(ray_parser_t *p) {
     while (*p->pos && *p->pos != ']') {
         if (count >= 4096) {
             for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
-            return RAY_ERR_PTR(RAY_ERR_LIMIT);
+            return ray_error("limit", NULL);
         }
         ray_t* elem = parse_expr(p);
         if (RAY_IS_ERR(elem)) {
@@ -512,7 +512,7 @@ static ray_t* parse_vector(ray_parser_t *p) {
     }
     if (*p->pos != ']') {
         for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
-        return RAY_ERR_PTR(RAY_ERR_PARSE);
+        return ray_error("parse", NULL);
     }
     advance(p, 1); /* skip ] */
 
@@ -636,7 +636,7 @@ static ray_t* parse_vector(ray_parser_t *p) {
 boxed_list:
     /* Mixed types in vector literal — domain error */
     for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
-    return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    return ray_error("domain", NULL);
 }
 
 /* ── Dict literal: {key: val key: val ...} ── */
@@ -660,7 +660,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
             key = str_key;
             /* Expect colon */
             skip_ws_and_comments(p);
-            if (*p->pos != ':') { ray_release(key); ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+            if (*p->pos != ':') { ray_release(key); ray_release(list); return ray_error("parse", NULL); }
             advance(p, 1); /* skip : */
             skip_ws_and_comments(p);
             /* Parse value */
@@ -681,7 +681,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
             p->pos++;
         p->col += (int32_t)(p->pos - kstart); /* key names don't span lines */
         size_t klen = (size_t)(p->pos - kstart);
-        if (klen == 0) { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+        if (klen == 0) { ray_release(list); return ray_error("parse", NULL); }
 
         int64_t kid = ray_sym_intern(kstart, klen);
         key = ray_sym(kid);
@@ -689,7 +689,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
 
         /* Expect colon */
         skip_ws_and_comments(p);
-        if (*p->pos != ':') { ray_release(key); ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+        if (*p->pos != ':') { ray_release(key); ray_release(list); return ray_error("parse", NULL); }
         advance(p, 1); /* skip : */
         skip_ws_and_comments(p);
 
@@ -707,7 +707,7 @@ static ray_t* parse_dict(ray_parser_t *p) {
 
         skip_ws_and_comments(p);
     }
-    if (*p->pos != '}') { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+    if (*p->pos != '}') { ray_release(list); return ray_error("parse", NULL); }
     advance(p, 1); /* skip } */
     return list;
 }
@@ -727,7 +727,7 @@ static ray_t* parse_list(ray_parser_t *p) {
         if (RAY_IS_ERR(list)) return list;
         skip_ws_and_comments(p);
     }
-    if (*p->pos != ')') { ray_release(list); return RAY_ERR_PTR(RAY_ERR_PARSE); }
+    if (*p->pos != ')') { ray_release(list); return ray_error("parse", NULL); }
     advance(p, 1); /* skip ) */
     return list;
 }
@@ -741,7 +741,7 @@ static ray_t* parse_expr(ray_parser_t *p) {
     ray_t *result;
 
     switch (PA(*p->pos)) {
-        case PA_END:    return RAY_ERR_PTR(RAY_ERR_PARSE);
+        case PA_END:    return ray_error("parse", NULL);
         case PA_DIGIT:  result = parse_number(p); break;
         case PA_MINUS:
             if (p->pos[1] >= '0' && p->pos[1] <= '9')
@@ -755,9 +755,9 @@ static ray_t* parse_expr(ray_parser_t *p) {
         case PA_LPAREN: result = parse_list(p); break;
         case PA_LBRACK: result = parse_vector(p); break;
         case PA_LBRACE: result = parse_dict(p); break;
-        case PA_RPAREN: return RAY_ERR_PTR(RAY_ERR_PARSE);
-        case PA_RBRACK: return RAY_ERR_PTR(RAY_ERR_PARSE);
-        case PA_RBRACE: return RAY_ERR_PTR(RAY_ERR_PARSE);
+        case PA_RPAREN: return ray_error("parse", NULL);
+        case PA_RBRACK: return ray_error("parse", NULL);
+        case PA_RBRACE: return ray_error("parse", NULL);
         default:        result = parse_name(p); break;  /* operators like +, *, etc. */
     }
 
@@ -787,7 +787,7 @@ static ray_t* parse_source(ray_parser_t *p) {
     while (*p->pos) {
         if (count >= 256) {
             for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
-            return RAY_ERR_PTR(RAY_ERR_DOMAIN);  /* too many top-level expressions */
+            return ray_error("domain", NULL);  /* too many top-level expressions */
         }
         ray_t* expr = parse_expr(p);
         if (RAY_IS_ERR(expr)) {
@@ -803,7 +803,7 @@ static ray_t* parse_source(ray_parser_t *p) {
     ray_t* do_list = ray_alloc((count + 1) * sizeof(ray_t*));
     if (!do_list) {
         for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     do_list->type = RAY_LIST;
     do_list->len = 0;
@@ -813,7 +813,7 @@ static ray_t* parse_source(ray_parser_t *p) {
     if (!do_sym) {
         ray_release(do_list);
         for (int32_t i = 0; i < count; i++) ray_release(exprs[i]);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     do_sym->type = -RAY_SYM;
     do_sym->attrs = RAY_ATTR_NAME;
@@ -832,7 +832,7 @@ ray_t* ray_parse(const char* source) {
 }
 
 ray_t* ray_parse_with_nfo(const char* source, ray_t* nfo) {
-    if (!source) return RAY_ERR_PTR(RAY_ERR_PARSE);
+    if (!source) return ray_error("parse", NULL);
     ray_parser_t p = {
         .src  = source,
         .pos  = source,

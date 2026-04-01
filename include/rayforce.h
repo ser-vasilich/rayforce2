@@ -153,6 +153,9 @@ typedef union ray_t {
     };
 } ray_t;
 
+/* Error object creation (defined in core/runtime.c) */
+ray_t* ray_error(const char* code, const char* fmt, ...);
+
 /* ===== Accessor Macros ===== */
 
 #define ray_type(v)       ((v)->type)

@@ -205,11 +205,11 @@ static inline bool pool_cancelled(ray_pool_t* pool) {
 
 #define CHECK_CANCEL(pool)                                \
     do { if (pool_cancelled(pool))                        \
-             return RAY_ERR_PTR(RAY_ERR_CANCEL); } while(0)
+             return ray_error("cancel", NULL); } while(0)
 
 #define CHECK_CANCEL_GOTO(pool, lbl)                      \
     do { if (pool_cancelled(pool)) {                      \
-             result = RAY_ERR_PTR(RAY_ERR_CANCEL);          \
+             result = ray_error("cancel", NULL);          \
              goto lbl;                                    \
          }                                                \
     } while(0)
@@ -245,7 +245,7 @@ static ray_t* materialize_mapcommon(ray_t* mc) {
     for (int64_t p = 0; p < n_parts; p++) total += counts[p];
 
     ray_t* flat = ray_vec_new(kv_type, total);
-    if (!flat || RAY_IS_ERR(flat)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
     flat->len = total;
 
     /* Pattern-fill: broadcast each partition's key value across its row range.
@@ -285,7 +285,7 @@ static ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n) {
     const int64_t* counts = (const int64_t*)ray_data(rc);
 
     ray_t* flat = ray_vec_new(kv_type, n);
-    if (!flat || RAY_IS_ERR(flat)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
     flat->len = n;
 
     char* out = (char*)ray_data(flat);
@@ -324,7 +324,7 @@ static ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_
     const int64_t* counts = (const int64_t*)ray_data(rc);
 
     ray_t* flat = ray_vec_new(kv_type, pass_count);
-    if (!flat || RAY_IS_ERR(flat)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
     flat->len = pass_count;
 
     char* out = (char*)ray_data(flat);
@@ -1268,7 +1268,7 @@ static ray_t* expr_eval_full_parted(const ray_expr_t* expr, int64_t nrows) {
             break;
         }
     }
-    if (!ref_parted) { ray_release(out); return RAY_ERR_PTR(RAY_ERR_NYI); }
+    if (!ref_parted) { ray_release(out); return ray_error("nyi", NULL); }
 
     int64_t n_segs = ref_parted->len;
     ray_t** ref_segs = (ray_t**)ray_data(ref_parted);
@@ -1710,7 +1710,7 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
 
     int64_t len = 1;
     if (!l_scalar && !r_scalar) {
-        if (lhs->len != rhs->len) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+        if (lhs->len != rhs->len) return ray_error("length", NULL);
         len = lhs->len;
     } else if (l_scalar && !r_scalar) {
         len = rhs->len;
@@ -1738,14 +1738,14 @@ static ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, 
         if (l_is_str || r_is_str || (l_atom_str && r_atom_str)) {
             /* RAY_STR only supports comparison ops — reject arithmetic */
             uint16_t opc = op->opcode;
-            if (opc < OP_EQ || opc > OP_GE) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+            if (opc < OP_EQ || opc > OP_GE) { ray_release(result); return ray_error("type", NULL); }
             /* At least one side is a RAY_STR column — use string comparison path.
                The scalar side (if any) must be -RAY_STR or RAY_SYM atom.
                The non-scalar side must be RAY_STR. */
-            if (l_scalar && !l_atom_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-            if (r_scalar && !r_atom_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-            if (!l_scalar && !l_is_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
-            if (!r_scalar && !r_is_str) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_TYPE); }
+            if (l_scalar && !l_atom_str) { ray_release(result); return ray_error("type", NULL); }
+            if (r_scalar && !r_atom_str) { ray_release(result); return ray_error("type", NULL); }
+            if (!l_scalar && !l_is_str) { ray_release(result); return ray_error("type", NULL); }
+            if (!r_scalar && !r_is_str) { ray_release(result); return ray_error("type", NULL); }
 
             ray_pool_t* pool = ray_pool_get();
             if (pool && len >= RAY_PARALLEL_THRESHOLD) {
@@ -1965,7 +1965,7 @@ static ray_t* exec_count_distinct(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     case RAY_SYM:
         break;
     default:
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
     }
 
     /* Use a simple open-addressing hash set for int64 values */
@@ -1973,7 +1973,7 @@ static ray_t* exec_count_distinct(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     /* Round up to power of 2 */
     uint64_t c = 1;
     while (c && c < cap) c <<= 1;
-    if (!c) return RAY_ERR_PTR(RAY_ERR_OOM); /* overflow: cap too large */
+    if (!c) return ray_error("oom", NULL); /* overflow: cap too large */
     cap = c;
 
     ray_t* set_hdr;
@@ -1985,7 +1985,7 @@ static ray_t* exec_count_distinct(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     if (!set || !used) {
         if (set_hdr) scratch_free(set_hdr);
         if (used_hdr) scratch_free(used_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t count = 0;
@@ -2031,7 +2031,7 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     if (input->type == RAY_TABLE) {
         if (op->opcode == OP_COUNT)
             return ray_i64(ray_table_nrows(input));
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
     }
 
     int8_t in_type = input->type;
@@ -2052,7 +2052,7 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         uint32_t nw = ray_pool_total_workers(pool);
         ray_t* accs_hdr;
         reduce_acc_t* accs = (reduce_acc_t*)scratch_calloc(&accs_hdr, nw * sizeof(reduce_acc_t));
-        if (!accs) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (!accs) return ray_error("oom", NULL);
         for (uint32_t i = 0; i < nw; i++) reduce_acc_init(&accs[i]);
 
         par_reduce_ctx_t ctx = { .input = input, .accs = accs,
@@ -2107,7 +2107,7 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
                 result = ray_f64(val);
                 break;
             }
-            default:       result = RAY_ERR_PTR(RAY_ERR_NYI); break;
+            default:       result = ray_error("nyi", NULL); break;
         }
         scratch_free(accs_hdr);
         return result;
@@ -2139,7 +2139,7 @@ static ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
             else val = acc.cnt > 1 ? sqrt(var_pop * acc.cnt / (acc.cnt - 1)) : NAN;
             return ray_f64(val);
         }
-        default:       return RAY_ERR_PTR(RAY_ERR_NYI);
+        default:       return ray_error("nyi", NULL);
     }
 }
 
@@ -4395,19 +4395,19 @@ static ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit)
     if (!tbl || RAY_IS_ERR(tbl)) return tbl;
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     int64_t nrows = ray_table_nrows(tbl);
     int64_t ncols = ray_table_ncols(tbl);
-    if (ncols > 4096) return RAY_ERR_PTR(RAY_ERR_NYI); /* stack safety */
+    if (ncols > 4096) return ray_error("nyi", NULL); /* stack safety */
     uint8_t n_sort = ext->sort.n_cols;
-    if (n_sort > 16) return RAY_ERR_PTR(RAY_ERR_NYI); /* radix_encode_ctx_t limit */
+    if (n_sort > 16) return ray_error("nyi", NULL); /* radix_encode_ctx_t limit */
 
     /* Allocate index array (iota deferred: radix path fuses with encode,
      * merge sort path initializes before sorting) */
     ray_t* indices_hdr;
     int64_t* indices = (int64_t*)scratch_alloc(&indices_hdr, (size_t)nrows * sizeof(int64_t));
-    if (!indices) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!indices) return ray_error("oom", NULL);
     bool iota_done = false;
 
     /* Resolve sort key vectors */
@@ -4429,7 +4429,7 @@ static ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit)
             sort_owned[k] = 1;
         }
         if (!sort_vecs[k] || RAY_IS_ERR(sort_vecs[k])) {
-            ray_t* err = sort_vecs[k] ? sort_vecs[k] : RAY_ERR_PTR(RAY_ERR_NYI);
+            ray_t* err = sort_vecs[k] ? sort_vecs[k] : ray_error("nyi", NULL);
             for (uint8_t j = 0; j < k; j++) {
                 if (sort_owned[j] && sort_vecs[j] && !RAY_IS_ERR(sort_vecs[j]))
                     ray_release(sort_vecs[j]);
@@ -4931,7 +4931,7 @@ static ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit)
                                 (size_t)nrows * sizeof(int64_t));
             if (!tmp) {
                 scratch_free(indices_hdr);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
 
             uint32_t n_chunks = n_workers;
@@ -4987,7 +4987,7 @@ static ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit)
             scratch_free(sorted_keys_hdr);
             scratch_free(radix_itmp_hdr);
             scratch_free(indices_hdr);
-            return RAY_ERR_PTR(RAY_ERR_CANCEL);
+            return ray_error("cancel", NULL);
         }
     }
 
@@ -6614,10 +6614,10 @@ static ray_t* exec_group_per_partition(ray_t* parted_tbl, ray_op_ext_t* ext,
 static ray_t* exec_group_parted(ray_graph_t* g, ray_op_t* op, ray_t* parted_tbl,
                                int64_t group_limit) {
     int64_t ncols = ray_table_ncols(parted_tbl);
-    if (ncols <= 0) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (ncols <= 0) return ray_error("nyi", NULL);
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     uint8_t n_keys = ext->n_keys;
     uint8_t n_aggs = ext->n_aggs;
@@ -6633,7 +6633,7 @@ static ray_t* exec_group_parted(ray_graph_t* g, ray_op_t* op, ray_t* parted_tbl,
             break;
         }
     }
-    if (n_parts <= 0 || total_rows <= 0) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (n_parts <= 0 || total_rows <= 0) return ray_error("nyi", NULL);
 
     /* Check eligibility for per-partition exec + merge:
      * - All keys and agg inputs must be simple SCANs
@@ -6805,7 +6805,7 @@ static ray_t* exec_group_parted(ray_graph_t* g, ray_op_t* op, ray_t* parted_tbl,
             ray_t* flat = typed_vec_new(base_type, base_attrs, total_rows);
             if (!flat || RAY_IS_ERR(flat)) {
                 ray_release(flat_tbl);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
             flat->len = total_rows;
 
@@ -6848,7 +6848,7 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
     }
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     int64_t nrows = ray_table_nrows(tbl);
     uint8_t n_keys = ext->n_keys;
@@ -6888,13 +6888,13 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
                         int64_t out_ncols = out_nkeys + n_aggs;
                         ray_t* result = ray_table_new((int64_t)out_ncols);
                         if (!result || RAY_IS_ERR(result))
-                            return RAY_ERR_PTR(RAY_ERR_OOM);
+                            return ray_error("oom", NULL);
                         ray_retain(src_col);
                         ray_t* tmp_r = ray_table_add_col(result, src_sym, src_col);
                         ray_release(src_col);
                         if (!tmp_r || RAY_IS_ERR(tmp_r)) {
                             ray_release(result);
-                            return RAY_ERR_PTR(RAY_ERR_OOM);
+                            return ray_error("oom", NULL);
                         }
                         result = tmp_r;
                         for (uint8_t a = 0; a < n_aggs; a++) {
@@ -6909,7 +6909,7 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
                             ray_release(cnt_col);
                             if (!tmp_r || RAY_IS_ERR(tmp_r)) {
                                 ray_release(result);
-                                return RAY_ERR_PTR(RAY_ERR_OOM);
+                                return ray_error("oom", NULL);
                             }
                             result = tmp_r;
                         }
@@ -6929,7 +6929,7 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
         sel_flags = ray_sel_flags(g->selection);
     }
 
-    if (n_keys > 8 || n_aggs > 8) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (n_keys > 8 || n_aggs > 8) return ray_error("nyi", NULL);
 
     /* Resolve key columns (VLA — n_keys ≤ 8; use ≥1 to avoid zero-size VLA UB) */
     uint8_t vla_keys = n_keys > 0 ? n_keys : 1;
@@ -7032,7 +7032,7 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
             for (uint8_t k = 0; k < n_keys; k++) {
                 if (key_owned[k] && key_vecs[k]) ray_release(key_vecs[k]);
             }
-            return bcast && RAY_IS_ERR(bcast) ? bcast : RAY_ERR_PTR(RAY_ERR_OOM);
+            return bcast && RAY_IS_ERR(bcast) ? bcast : ray_error("oom", NULL);
         }
 
         if (agg_owned[a]) ray_release(agg_vecs[a]);
@@ -7225,7 +7225,7 @@ static ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl,
                 if (agg_owned[a] && agg_vecs[a]) ray_release(agg_vecs[a]);
             for (uint8_t k = 0; k < n_keys; k++)
                 if (key_owned[k] && key_vecs[k]) ray_release(key_vecs[k]);
-            return result ? result : RAY_ERR_PTR(RAY_ERR_OOM);
+            return result ? result : ray_error("oom", NULL);
         }
 
         emit_agg_columns(&result, g, ext, agg_vecs, 1, n_aggs,
@@ -7636,7 +7636,7 @@ da_path:;
                     if (agg_owned[a] && agg_vecs[a]) ray_release(agg_vecs[a]);
                 for (uint8_t k = 0; k < n_keys; k++)
                     if (key_owned[k] && key_vecs[k]) ray_release(key_vecs[k]);
-                return result ? result : RAY_ERR_PTR(RAY_ERR_OOM);
+                return result ? result : ray_error("oom", NULL);
             }
 
             /* Key columns — decompose composite slot back to per-key values */
@@ -7725,7 +7725,7 @@ ht_path:;
                 if (key_owned[kk] && key_vecs[kk]) ray_release(key_vecs[kk]);
             for (uint8_t a = 0; a < n_aggs; a++)
                 if (agg_owned[a] && agg_vecs[a]) ray_release(agg_vecs[a]);
-            return RAY_ERR_PTR(RAY_ERR_NYI);
+            return ray_error("nyi", NULL);
         }
     }
 
@@ -7981,7 +7981,7 @@ ht_path:;
 sequential_fallback:;
     /* Sequential path using row-layout HT */
     if (!group_ht_init(&single_ht, ht_cap, &ght_layout)) {
-        result = RAY_ERR_PTR(RAY_ERR_OOM);
+        result = ray_error("oom", NULL);
         goto cleanup;
     }
     group_rows_range(&single_ht, key_data, key_types, key_attrs, agg_vecs, 0, nrows);
@@ -9446,14 +9446,14 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
     if (!right_table || RAY_IS_ERR(right_table)) return right_table;
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     int64_t left_rows = ray_table_nrows(left_table);
     int64_t right_rows = ray_table_nrows(right_table);
     /* Guard: radix path stores row indices as int32_t (widened to int64_t on gather).
      * Chained HT path uses uint32_t.  Cap at INT32_MAX for correctness. */
     if (right_rows > (int64_t)INT32_MAX || left_rows > (int64_t)INT32_MAX)
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
     uint8_t n_keys = ext->join.n_join_keys;
     uint8_t join_type = ext->join.join_type;
 
@@ -9477,7 +9477,7 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
     for (uint8_t k = 0; k < n_keys; k++) {
         if ((l_key_vecs[k] && l_key_vecs[k]->type == RAY_STR) ||
             (r_key_vecs[k] && r_key_vecs[k]->type == RAY_STR))
-            return RAY_ERR_PTR(RAY_ERR_NYI);
+            return ray_error("nyi", NULL);
     }
 
     ray_pool_t* pool = ray_pool_get();
@@ -9526,7 +9526,7 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
 
         if (pool_cancelled(pool)) {
             scratch_free(r_hash_hdr); scratch_free(l_hash_hdr);
-            return RAY_ERR_PTR(RAY_ERR_CANCEL);
+            return ray_error("cancel", NULL);
         }
 
         /* Partition both sides using cached hashes */
@@ -9559,7 +9559,7 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
                 if (l_parts[rp2].entries_hdr) scratch_free(l_parts[rp2].entries_hdr);
             }
             scratch_free(r_parts_hdr); scratch_free(l_parts_hdr);
-            return RAY_ERR_PTR(RAY_ERR_CANCEL);
+            return ray_error("cancel", NULL);
         }
 
         /* FULL OUTER: allocate matched_right tracker */
@@ -9634,7 +9634,7 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
             scratch_free(pp_meta_hdr); scratch_free(pcounts_hdr);
             if (matched_right_hdr) { scratch_free(matched_right_hdr); matched_right_hdr = NULL; }
             matched_right = NULL;
-            if (bp_cancelled) return RAY_ERR_PTR(RAY_ERR_CANCEL);
+            if (bp_cancelled) return ray_error("cancel", NULL);
             goto chained_ht_fallback;
         }
 
@@ -9672,7 +9672,7 @@ static ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* 
                 scratch_free(pcounts_hdr);
                 if (matched_right_hdr) scratch_free(matched_right_hdr);
                 matched_right_hdr = NULL;
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
 
             /* Copy per-partition results into contiguous arrays (int32→int64 widen) */
@@ -9728,7 +9728,7 @@ chained_ht_fallback:;
     _Atomic(uint32_t)* ht_heads = (_Atomic(uint32_t)*)scratch_alloc(&ht_heads_hdr, ht_cap * sizeof(uint32_t));
     if (!ht_next || !ht_heads) {
         scratch_free(ht_next_hdr); scratch_free(ht_heads_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     memset(ht_heads, 0xFF, ht_cap * sizeof(uint32_t));  /* JHT_EMPTY = 0xFFFFFFFF */
 
@@ -9817,7 +9817,7 @@ chained_ht_fallback:;
                               (size_t)(n_tasks + 1) * sizeof(int64_t));
     if (!morsel_counts) {
         scratch_free(ht_next_hdr); scratch_free(ht_heads_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* For FULL OUTER JOIN, allocate matched_right tracker */
@@ -10084,7 +10084,7 @@ join_cleanup:
 static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
                                ray_t* left_table, ray_t* right_table) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     uint8_t n_eq      = ext->asof.n_eq_keys;
     uint8_t join_type = ext->asof.join_type;
@@ -10095,7 +10095,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     /* Resolve time key */
     ray_op_ext_t* time_ext = find_ext(g, ext->asof.time_key->id);
     if (!time_ext || time_ext->base.opcode != OP_SCAN)
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
     int64_t time_sym = time_ext->sym;
 
     /* Resolve equality keys */
@@ -10103,7 +10103,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     for (uint8_t k = 0; k < n_eq; k++) {
         ray_op_ext_t* ek = find_ext(g, ext->asof.eq_keys[k]->id);
         if (!ek || ek->base.opcode != OP_SCAN)
-            return RAY_ERR_PTR(RAY_ERR_NYI);
+            return ray_error("nyi", NULL);
         eq_syms[k] = ek->sym;
     }
 
@@ -10112,7 +10112,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
      * We expand to a temporary i64 array for uniform comparison. */
     ray_t* lt_time_vec = ray_table_get_col(left_table, time_sym);
     ray_t* rt_time_vec = ray_table_get_col(right_table, time_sym);
-    if (!lt_time_vec || !rt_time_vec) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!lt_time_vec || !rt_time_vec) return ray_error("schema", NULL);
     int8_t time_type = lt_time_vec->type;
 
     /* Helper macro to read time value as int64_t regardless of storage type */
@@ -10128,7 +10128,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     if ((!lt_time && left_n > 0) || (!rt_time && right_n > 0)) {
         if (lt_time_hdr) scratch_free(lt_time_hdr);
         if (rt_time_hdr) scratch_free(rt_time_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     for (int64_t i = 0; i < left_n; i++) lt_time[i] = READ_TIME(lt_time_vec, i);
     for (int64_t i = 0; i < right_n; i++) rt_time[i] = READ_TIME(rt_time_vec, i);
@@ -10139,7 +10139,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     for (uint8_t k = 0; k < n_eq; k++) {
         ray_t* lv = ray_table_get_col(left_table, eq_syms[k]);
         ray_t* rv = ray_table_get_col(right_table, eq_syms[k]);
-        if (!lv || !rv) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+        if (!lv || !rv) return ray_error("schema", NULL);
         lt_eq[k] = (int64_t*)ray_data(lv);
         rt_eq[k] = (int64_t*)ray_data(rv);
     }
@@ -10151,7 +10151,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     if ((!li_idx && left_n > 0) || (!ri_idx && right_n > 0)) {
         if (li_hdr) scratch_free(li_hdr);
         if (ri_hdr) scratch_free(ri_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     for (int64_t i = 0; i < left_n; i++) li_idx[i] = i;
     for (int64_t i = 0; i < right_n; i++) ri_idx[i] = i;
@@ -10165,7 +10165,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
             : NULL;
         if (!tmp && max_n > 0) {
             scratch_free(li_hdr); scratch_free(ri_hdr);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
 
         /* Sort left indices by (eq_keys, time) */
@@ -10230,7 +10230,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     int64_t* match = (int64_t*)scratch_alloc(&match_hdr, (size_t)left_n * sizeof(int64_t));
     if (!match && left_n > 0) {
         scratch_free(li_hdr); scratch_free(ri_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Two-pointer merge with best-match carry-forward */
@@ -10276,7 +10276,7 @@ static ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
     int64_t* match_orig = (int64_t*)scratch_alloc(&mo_hdr, (size_t)left_n * sizeof(int64_t));
     if (!match_orig && left_n > 0) {
         scratch_free(match_hdr); scratch_free(li_hdr); scratch_free(ri_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     for (int64_t lp = 0; lp < left_n; lp++)
         match_orig[li_idx[lp]] = match[lp];
@@ -10780,7 +10780,7 @@ static ray_t* exec_string_unary(ray_graph_t* g, ray_op_t* op) {
             if (!buf) {
                 ray_release(result);
                 ray_release(input);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
         }
         size_t out_len = sl;
@@ -11031,7 +11031,7 @@ static ray_t* exec_replace(ray_graph_t* g, ray_op_t* op) {
             if (!buf) {
                 ray_release(result);
                 ray_release(input); ray_release(from_v); ray_release(to_v);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
         }
         size_t buf_cap = dyn_hdr ? worst : sizeof(sbuf);
@@ -11061,9 +11061,9 @@ static ray_t* exec_replace(ray_graph_t* g, ray_op_t* op) {
 /* CONCAT(a, b, ...) */
 static ray_t* exec_concat(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
     int64_t raw_nargs = ext->sym;
-    if (raw_nargs < 2 || raw_nargs > 255) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (raw_nargs < 2 || raw_nargs > 255) return ray_error("domain", NULL);
     int n_args = (int)raw_nargs;
 
     /* Evaluate all inputs */
@@ -11072,7 +11072,7 @@ static ray_t* exec_concat(ray_graph_t* g, ray_op_t* op) {
     ray_t* args_hdr = NULL;
     if (n_args > 16) {
         args = (ray_t**)scratch_calloc(&args_hdr, (size_t)n_args * sizeof(ray_t*));
-        if (!args) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (!args) return ray_error("oom", NULL);
     }
 
     args[0] = exec_node(g, op->inputs[0]);
@@ -11159,7 +11159,7 @@ static ray_t* exec_concat(ray_graph_t* g, ray_op_t* op) {
                 ray_release(result);
                 for (int i = 0; i < n_args; i++) ray_release(args[i]);
                 scratch_free(args_hdr);
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             }
             buf_cap = total + 1;
         }
@@ -11214,7 +11214,7 @@ static ray_t* exec_extract(ray_graph_t* g, ray_op_t* op) {
     if (!input || RAY_IS_ERR(input)) return input;
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) { ray_release(input); return RAY_ERR_PTR(RAY_ERR_NYI); }
+    if (!ext) { ray_release(input); return ray_error("nyi", NULL); }
 
     int64_t field = ext->sym;
     int64_t len = input->len;
@@ -11349,7 +11349,7 @@ static ray_t* exec_date_trunc(ray_graph_t* g, ray_op_t* op) {
     if (!input || RAY_IS_ERR(input)) return input;
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) { ray_release(input); return RAY_ERR_PTR(RAY_ERR_NYI); }
+    if (!ext) { ray_release(input); return ray_error("nyi", NULL); }
 
     int64_t field = ext->sym;
     int64_t len = input->len;
@@ -11947,7 +11947,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
     if (!tbl || RAY_IS_ERR(tbl)) return tbl;
 
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     int64_t nrows = ray_table_nrows(tbl);
     int64_t ncols = ray_table_ncols(tbl);
@@ -11956,7 +11956,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
     uint8_t n_funcs = ext->window.n_funcs;
     /* Guard against uint8_t overflow on n_part + n_order */
     if ((uint16_t)n_part + n_order > 255)
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
     uint8_t n_sort  = n_part + n_order;
 
     if (nrows == 0 || n_funcs == 0) {
@@ -11978,7 +11978,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
                                         &sort_owned[k]);
         sort_descs[k] = 0;  /* partition keys always ASC */
         if (!sort_vecs[k] || RAY_IS_ERR(sort_vecs[k])) {
-            ray_t* err = sort_vecs[k] ? sort_vecs[k] : RAY_ERR_PTR(RAY_ERR_NYI);
+            ray_t* err = sort_vecs[k] ? sort_vecs[k] : ray_error("nyi", NULL);
             for (uint8_t j = 0; j < k; j++)
                 if (sort_owned[j] && sort_vecs[j] && !RAY_IS_ERR(sort_vecs[j]))
                     ray_release(sort_vecs[j]);
@@ -11991,7 +11991,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
         sort_descs[n_part + k] = ext->window.order_descs[k];
         if (!sort_vecs[n_part + k] || RAY_IS_ERR(sort_vecs[n_part + k])) {
             ray_t* err = sort_vecs[n_part + k] ? sort_vecs[n_part + k]
-                                               : RAY_ERR_PTR(RAY_ERR_NYI);
+                                               : ray_error("nyi", NULL);
             for (uint8_t j = 0; j < n_part + k; j++)
                 if (sort_owned[j] && sort_vecs[j] && !RAY_IS_ERR(sort_vecs[j]))
                     ray_release(sort_vecs[j]);
@@ -12010,7 +12010,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
         if (fi) {
             func_vecs[f] = win_resolve_vec(g, fi, tbl, &func_owned[f]);
             if (!func_vecs[f] || RAY_IS_ERR(func_vecs[f])) {
-                ray_t* err = func_vecs[f] ? func_vecs[f] : RAY_ERR_PTR(RAY_ERR_NYI);
+                ray_t* err = func_vecs[f] ? func_vecs[f] : ray_error("nyi", NULL);
                 for (uint8_t j = 0; j < f; j++)
                     if (func_owned[j] && func_vecs[j] && !RAY_IS_ERR(func_vecs[j]))
                         ray_release(func_vecs[j]);
@@ -12406,7 +12406,7 @@ static ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
             for (uint8_t f = 0; f < n_funcs; f++)
                 if (func_owned[f] && func_vecs[f] && !RAY_IS_ERR(func_vecs[f]))
                     ray_release(func_vecs[f]);
-            return RAY_ERR_PTR(RAY_ERR_CANCEL);
+            return ray_error("cancel", NULL);
         }
     }
 
@@ -12526,7 +12526,7 @@ oom:
         if (result_vecs[f] && !RAY_IS_ERR(result_vecs[f]))
             ray_release(result_vecs[f]);
     }
-    return RAY_ERR_PTR(RAY_ERR_OOM);
+    return ray_error("oom", NULL);
 }
 
 /* ============================================================================
@@ -12546,7 +12546,7 @@ static ray_t* exec_expand_factorized(ray_rel_t* rel, uint8_t direction, ray_t* s
     if (!out_src || RAY_IS_ERR(out_src) || !out_cnt || RAY_IS_ERR(out_cnt)) {
         if (out_src && !RAY_IS_ERR(out_src)) ray_release(out_src);
         if (out_cnt && !RAY_IS_ERR(out_cnt)) ray_release(out_cnt);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* sd = (int64_t*)ray_data(out_src);
@@ -12578,13 +12578,13 @@ static ray_t* exec_expand_factorized(ray_rel_t* rel, uint8_t direction, ray_t* s
     ray_t* result = ray_table_new(2);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(out_src); ray_release(out_cnt);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     ray_t* tmp = ray_table_add_col(result, src_sym, out_src);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(out_src); ray_release(out_cnt); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(out_src); ray_release(out_cnt); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, cnt_sym, out_cnt);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(out_src); ray_release(out_cnt); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(out_src); ray_release(out_cnt); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     ray_release(out_src); ray_release(out_cnt);
     return result;
@@ -12594,10 +12594,10 @@ static ray_t* exec_expand_factorized(ray_rel_t* rel, uint8_t direction, ray_t* s
  * Count-then-fill pattern (same as exec_join). */
 static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     /* Factorized mode: emit pre-aggregated degree counts */
     if (ext->graph.factorized)
@@ -12665,7 +12665,7 @@ static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
         if (!d_src || RAY_IS_ERR(d_src) || !d_dst || RAY_IS_ERR(d_dst)) { \
             if (d_src && !RAY_IS_ERR(d_src)) ray_release(d_src); \
             if (d_dst && !RAY_IS_ERR(d_dst)) ray_release(d_dst); \
-            return RAY_ERR_PTR(RAY_ERR_OOM); \
+            return ray_error("oom", NULL); \
         } \
         d_src->len = total; d_dst->len = total; \
         int64_t* sd = (int64_t*)ray_data(d_src); \
@@ -12691,13 +12691,13 @@ static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
         ray_t* result = ray_table_new(2); \
         if (!result || RAY_IS_ERR(result)) { \
             ray_release(d_src); ray_release(d_dst); \
-            return RAY_ERR_PTR(RAY_ERR_OOM); \
+            return ray_error("oom", NULL); \
         } \
         ray_t* _tmp = ray_table_add_col(result, src_sym, d_src); \
-        if (!_tmp || RAY_IS_ERR(_tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); } \
+        if (!_tmp || RAY_IS_ERR(_tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return ray_error("oom", NULL); } \
         result = _tmp; \
         _tmp = ray_table_add_col(result, dst_sym, d_dst); \
-        if (!_tmp || RAY_IS_ERR(_tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); } \
+        if (!_tmp || RAY_IS_ERR(_tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return ray_error("oom", NULL); } \
         result = _tmp; \
         ray_release(d_src); ray_release(d_dst); \
         return result; \
@@ -12737,7 +12737,7 @@ static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
         if (!d_src || RAY_IS_ERR(d_src) || !d_dst || RAY_IS_ERR(d_dst)) {
             if (d_src && !RAY_IS_ERR(d_src)) ray_release(d_src);
             if (d_dst && !RAY_IS_ERR(d_dst)) ray_release(d_dst);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         d_src->len = total; d_dst->len = total;
         int64_t* sd = (int64_t*)ray_data(d_src);
@@ -12774,13 +12774,13 @@ static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
         ray_t* result = ray_table_new(2);
         if (!result || RAY_IS_ERR(result)) {
             ray_release(d_src); ray_release(d_dst);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         ray_t* tmp = ray_table_add_col(result, src_sym, d_src);
-        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return ray_error("oom", NULL); }
         result = tmp;
         tmp = ray_table_add_col(result, dst_sym, d_dst);
-        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(d_src); ray_release(d_dst); ray_release(result); return ray_error("oom", NULL); }
         result = tmp;
         ray_release(d_src); ray_release(d_dst);
         return result;
@@ -12791,10 +12791,10 @@ static ray_t* exec_expand(ray_graph_t* g, ray_op_t* op, ray_t* src_vec) {
 /* exec_var_expand: iterative BFS with depth limit and cycle detection */
 static ray_t* exec_var_expand(ray_graph_t* g, ray_op_t* op, ray_t* start_vec) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     uint8_t direction = ext->graph.direction;
     uint8_t min_depth = ext->graph.min_depth;
@@ -12815,7 +12815,7 @@ static ray_t* exec_var_expand(ray_graph_t* g, ray_op_t* op, ray_t* start_vec) {
     int64_t* out_depth = (int64_t*)scratch_alloc(&depth_hdr, (size_t)out_cap * sizeof(int64_t));
     if (!out_start || !out_end || !out_depth) {
         scratch_free(start_hdr); scratch_free(end_hdr); scratch_free(depth_hdr);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     int64_t out_count = 0;
 
@@ -12937,7 +12937,7 @@ cleanup:;
         if (v_start && !RAY_IS_ERR(v_start)) ray_release(v_start);
         if (v_end && !RAY_IS_ERR(v_end)) ray_release(v_end);
         if (v_depth && !RAY_IS_ERR(v_depth)) ray_release(v_depth);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t start_sym = ray_sym_intern("_start", 6);
@@ -12947,16 +12947,16 @@ cleanup:;
     ray_t* result = ray_table_new(3);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(v_start); ray_release(v_end); ray_release(v_depth);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     ray_t* tmp = ray_table_add_col(result, start_sym, v_start);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, end_sym, v_end);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, depth_sym, v_depth);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_start); ray_release(v_end); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     ray_release(v_start); ray_release(v_end); ray_release(v_depth);
     return result;
@@ -12966,10 +12966,10 @@ cleanup:;
 static ray_t* exec_shortest_path(ray_graph_t* g, ray_op_t* op,
                                  ray_t* src_val, ray_t* dst_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
     uint8_t direction = ext->graph.direction;
     ray_csr_t* csr = (direction == 1) ? &rel->rev : &rel->fwd;
     ray_csr_t* csr_rev = &rel->rev;
@@ -12985,19 +12985,19 @@ static ray_t* exec_shortest_path(ray_graph_t* g, ray_op_t* op,
     if (ray_is_atom(src_val)) {
         src_node = src_val->i64;
     } else {
-        if (src_val->len == 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+        if (src_val->len == 0) return ray_error("range", NULL);
         src_node = ((int64_t*)ray_data(src_val))[0];
     }
     if (ray_is_atom(dst_val)) {
         dst_node = dst_val->i64;
     } else {
-        if (dst_val->len == 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+        if (dst_val->len == 0) return ray_error("range", NULL);
         dst_node = ((int64_t*)ray_data(dst_val))[0];
     }
 
     if (src_node < 0 || src_node >= bfs_n_nodes ||
         dst_node < 0 || dst_node >= bfs_n_nodes)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     /* Special case: src == dst */
     if (src_node == dst_node) {
@@ -13007,15 +13007,15 @@ static ray_t* exec_shortest_path(ray_graph_t* g, ray_op_t* op,
         if (!v_node || RAY_IS_ERR(v_node) || !v_depth || RAY_IS_ERR(v_depth)) {
             if (v_node && !RAY_IS_ERR(v_node)) ray_release(v_node);
             if (v_depth && !RAY_IS_ERR(v_depth)) ray_release(v_depth);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         ray_t* result = ray_table_new(2);
-        if (!result || RAY_IS_ERR(result)) { ray_release(v_node); ray_release(v_depth); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        if (!result || RAY_IS_ERR(result)) { ray_release(v_node); ray_release(v_depth); return ray_error("oom", NULL); }
         ray_t* tmp = ray_table_add_col(result, sym_intern_safe("_node", 5), v_node);
-        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
         result = tmp;
         tmp = ray_table_add_col(result, sym_intern_safe("_depth", 6), v_depth);
-        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+        if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
         result = tmp;
         ray_release(v_node); ray_release(v_depth);
         return result;
@@ -13025,7 +13025,7 @@ static ray_t* exec_shortest_path(ray_graph_t* g, ray_op_t* op,
     ray_t* parent_hdr;
     int64_t* parent = (int64_t*)scratch_alloc(&parent_hdr,
                                                (size_t)bfs_n_nodes * sizeof(int64_t));
-    if (!parent) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!parent) return ray_error("oom", NULL);
     memset(parent, 0xFF, (size_t)bfs_n_nodes * sizeof(int64_t)); /* -1 */
     parent[src_node] = src_node;
 
@@ -13033,7 +13033,7 @@ static ray_t* exec_shortest_path(ray_graph_t* g, ray_op_t* op,
     ray_t* queue_hdr;
     int64_t q_cap = 1024;
     int64_t* queue = (int64_t*)scratch_alloc(&queue_hdr, (size_t)q_cap * sizeof(int64_t));
-    if (!queue) { scratch_free(parent_hdr); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!queue) { scratch_free(parent_hdr); return ray_error("oom", NULL); }
     queue[0] = src_node;
     int64_t q_start = 0, q_end = 1;
     bool found = false;
@@ -13078,7 +13078,7 @@ bfs_done:
 
     if (!found) {
         scratch_free(parent_hdr);
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
     }
 
     /* Reconstruct path */
@@ -13106,7 +13106,7 @@ bfs_done:
     if (!v_node || RAY_IS_ERR(v_node) || !v_depth || RAY_IS_ERR(v_depth)) {
         if (v_node && !RAY_IS_ERR(v_node)) ray_release(v_node);
         if (v_depth && !RAY_IS_ERR(v_depth)) ray_release(v_depth);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     v_depth->len = path_len;
     int64_t* dep_data = (int64_t*)ray_data(v_depth);
@@ -13115,12 +13115,12 @@ bfs_done:
     int64_t node_sym  = ray_sym_intern("_node", 5);
     int64_t depth_sym = ray_sym_intern("_depth", 6);
     ray_t* result = ray_table_new(2);
-    if (!result || RAY_IS_ERR(result)) { ray_release(v_node); ray_release(v_depth); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!result || RAY_IS_ERR(result)) { ray_release(v_node); ray_release(v_depth); return ray_error("oom", NULL); }
     ray_t* tmp = ray_table_add_col(result, node_sym, v_node);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, depth_sym, v_depth);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(v_node); ray_release(v_depth); ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     ray_release(v_node); ray_release(v_depth);
     return result;
@@ -13135,16 +13135,16 @@ bfs_done:
  * -------------------------------------------------------------------------- */
 static ray_t* exec_pagerank(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n       = rel->fwd.n_nodes;
     uint16_t iters  = ext->graph.max_iter;
     double damping  = ext->graph.damping;
 
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     /* Arena for all scratch memory — freed in one shot */
     ray_scratch_arena_t arena;
@@ -13154,7 +13154,7 @@ static ray_t* exec_pagerank(ray_graph_t* g, ray_op_t* op) {
     double* rank_new = (double*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(double));
     if (!rank || !rank_new) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     double init = 1.0 / (double)n;
@@ -13203,7 +13203,7 @@ static ray_t* exec_pagerank(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (rank_vec && !RAY_IS_ERR(rank_vec)) ray_release(rank_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -13222,7 +13222,7 @@ static ray_t* exec_pagerank(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec);
         ray_release(rank_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13239,13 +13239,13 @@ static ray_t* exec_pagerank(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_connected_comp(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     /* Arena for all scratch memory — freed in one shot */
     ray_scratch_arena_t arena;
@@ -13254,7 +13254,7 @@ static ray_t* exec_connected_comp(ray_graph_t* g, ray_op_t* op) {
     int64_t* label = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!label) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Initialize: each node is its own component */
@@ -13295,7 +13295,7 @@ static ray_t* exec_connected_comp(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (comp_vec && !RAY_IS_ERR(comp_vec)) ray_release(comp_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -13313,7 +13313,7 @@ static ray_t* exec_connected_comp(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec);
         ray_release(comp_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13425,26 +13425,26 @@ static double dijkstra_masked(
 static ray_t* exec_dijkstra(ray_graph_t* g, ray_op_t* op,
                              ray_t* src_val, ray_t* dst_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (!rel->fwd.props) return RAY_ERR_PTR(RAY_ERR_SCHEMA); /* need edge properties */
+    if (!rel) return ray_error("schema", NULL);
+    if (!rel->fwd.props) return ray_error("schema", NULL); /* need edge properties */
 
     int64_t n = rel->fwd.n_nodes;
     int64_t m = rel->fwd.n_edges;
     int64_t src_id = ray_is_atom(src_val) ? src_val->i64 : ((int64_t*)ray_data(src_val))[0];
     int64_t dst_id = !dst_val ? -1 : ray_is_atom(dst_val) ? dst_val->i64 : ((int64_t*)ray_data(dst_val))[0];
 
-    if (src_id < 0 || src_id >= n) return RAY_ERR_PTR(RAY_ERR_RANGE);
-    if (dst_id != -1 && (dst_id < 0 || dst_id >= n)) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (src_id < 0 || src_id >= n) return ray_error("range", NULL);
+    if (dst_id != -1 && (dst_id < 0 || dst_id >= n)) return ray_error("range", NULL);
 
     /* Find weight column in edge properties */
     int64_t weight_sym = ext->graph.weight_col_sym;
     ray_t* props = rel->fwd.props;
     ray_t* weight_vec = ray_table_get_col(props, weight_sym);
-    if (!weight_vec || RAY_IS_ERR(weight_vec)) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (weight_vec->type != RAY_F64) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!weight_vec || RAY_IS_ERR(weight_vec)) return ray_error("schema", NULL);
+    if (weight_vec->type != RAY_F64) return ray_error("schema", NULL);
     double* weights = (double*)ray_data(weight_vec);
 
     /* Allocate working arrays.
@@ -13463,7 +13463,7 @@ static ray_t* exec_dijkstra(ray_graph_t* g, ray_op_t* op,
                               (size_t)heap_cap * sizeof(dijk_entry_t));
     if (!dist || !visited || !depth || !heap) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     memset(visited, 0, (size_t)n * sizeof(bool));
     memset(depth, 0, (size_t)n * sizeof(int64_t));
@@ -13517,7 +13517,7 @@ static ray_t* exec_dijkstra(ray_graph_t* g, ray_op_t* op,
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (dist_vec && !RAY_IS_ERR(dist_vec)) ray_release(dist_vec);
         if (depth_vec && !RAY_IS_ERR(depth_vec)) ray_release(depth_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -13543,7 +13543,7 @@ static ray_t* exec_dijkstra(ray_graph_t* g, ray_op_t* op,
         ray_release(node_vec);
         ray_release(dist_vec);
         ray_release(depth_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13558,26 +13558,26 @@ static ray_t* exec_dijkstra(ray_graph_t* g, ray_op_t* op,
 /* exec_wco_join: Worst-Case Optimal Join via general Leapfrog Triejoin */
 static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t** rels = (ray_rel_t**)ext->wco.rels;
     uint8_t n_rels = ext->wco.n_rels;
     uint8_t n_vars = ext->wco.n_vars;
 
-    if (!rels || n_rels == 0) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (n_vars > LFTJ_MAX_VARS) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!rels || n_rels == 0) return ray_error("schema", NULL);
+    if (n_vars > LFTJ_MAX_VARS) return ray_error("nyi", NULL);
 
     /* Validate sorted CSR (both fwd and rev, since LFTJ may use either) */
     for (uint8_t r = 0; r < n_rels; r++) {
         if (!rels[r] || !rels[r]->fwd.sorted || !rels[r]->rev.sorted)
-            return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+            return ray_error("domain", NULL);
     }
 
     /* Build binding plan */
     lftj_enum_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     if (!lftj_build_default_plan(&ctx, rels, n_rels, n_vars))
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
 
     /* Allocate output buffers */
     int64_t out_cap = 4096;
@@ -13586,7 +13586,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
                               (size_t)n_vars * sizeof(int64_t*));
     if (!col_data) {
         scratch_free(col_data_block);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     for (uint8_t v = 0; v < n_vars; v++) {
@@ -13594,7 +13594,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
         if (!h) {
             for (uint8_t j = 0; j < v; j++) ray_free(ctx.buf_hdrs[j]);
             scratch_free(col_data_block);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         ctx.buf_hdrs[v] = h;
         col_data[v] = (int64_t*)ray_data(h);
@@ -13611,7 +13611,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
     if (ctx.oom) {
         for (uint8_t v = 0; v < n_vars; v++) ray_free(ctx.buf_hdrs[v]);
         scratch_free(col_data_block);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Build output table */
@@ -13619,7 +13619,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         for (uint8_t v = 0; v < n_vars; v++) ray_free(ctx.buf_hdrs[v]);
         scratch_free(col_data_block);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     for (uint8_t v = 0; v < n_vars; v++) {
@@ -13629,7 +13629,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
             for (uint8_t j = v + 1; j < n_vars; j++) ray_free(ctx.buf_hdrs[j]);
             scratch_free(col_data_block);
             ray_release(result);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         char name_buf[12];
         int n = snprintf(name_buf, sizeof(name_buf), "_v%d", v);
@@ -13640,7 +13640,7 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
             for (uint8_t j = v + 1; j < n_vars; j++) ray_free(ctx.buf_hdrs[j]);
             scratch_free(col_data_block);
             ray_release(result);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         result = new_result;
     }
@@ -13657,16 +13657,16 @@ static ray_t* exec_wco_join(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     int64_t m = rel->fwd.n_edges;
     uint16_t max_iter = ext->graph.max_iter;
 
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     /* Arena for all scratch memory — freed in one shot */
     ray_scratch_arena_t arena;
@@ -13677,7 +13677,7 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
     int64_t* comm_tot  = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!community || !degree || !comm_tot) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
@@ -13702,7 +13702,7 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
     int64_t* touched = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!k_i_in || !touched) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     memset(k_i_in, 0, (size_t)n * sizeof(int64_t));
 
@@ -13762,7 +13762,7 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
     int64_t* remap = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!remap) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     for (int64_t i = 0; i < n; i++) remap[i] = -1;
     int64_t next_id = 0;
@@ -13779,7 +13779,7 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (comm_vec && !RAY_IS_ERR(comm_vec)) ray_release(comm_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -13797,7 +13797,7 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec);
         ray_release(comm_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13812,13 +13812,13 @@ static ray_t* exec_louvain(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_degree_cent(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
     int64_t* rev_off = (int64_t*)ray_data(rel->rev.offsets);
@@ -13835,7 +13835,7 @@ static ray_t* exec_degree_cent(ray_graph_t* g, ray_op_t* op) {
         if (in_vec   && !RAY_IS_ERR(in_vec))   ray_release(in_vec);
         if (out_vec  && !RAY_IS_ERR(out_vec))  ray_release(out_vec);
         if (deg_vec  && !RAY_IS_ERR(deg_vec))  ray_release(deg_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata   = (int64_t*)ray_data(node_vec);
@@ -13858,7 +13858,7 @@ static ray_t* exec_degree_cent(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec); ray_release(in_vec);
         ray_release(out_vec);  ray_release(deg_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13878,13 +13878,13 @@ static ray_t* exec_degree_cent(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
     int64_t* fwd_tgt = (int64_t*)ray_data(rel->fwd.targets);
@@ -13898,7 +13898,7 @@ static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
     int64_t* order  = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!in_deg || !queue || !order) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Compute in-degrees from reverse CSR */
@@ -13928,7 +13928,7 @@ static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
     /* Cycle detection: not all nodes processed */
     if (count < n) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_DOMAIN);  /* cycle detected */
+        return ray_error("domain", NULL);  /* cycle detected */
     }
 
     /* Build result */
@@ -13938,7 +13938,7 @@ static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (order_vec && !RAY_IS_ERR(order_vec)) ray_release(order_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -13955,7 +13955,7 @@ static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
     ray_t* result = ray_table_new(2);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec); ray_release(order_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -13971,13 +13971,13 @@ static ray_t* exec_topsort(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_cluster_coeff(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     ray_scratch_arena_t arena;
     ray_scratch_arena_init(&arena);
@@ -13988,7 +13988,7 @@ static ray_t* exec_cluster_coeff(ray_graph_t* g, ray_op_t* op) {
     uint8_t* in_nbr = (uint8_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(uint8_t));
     if (!nbrs || !in_nbr) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     memset(in_nbr, 0, (size_t)n * sizeof(uint8_t));
 
@@ -14004,7 +14004,7 @@ static ray_t* exec_cluster_coeff(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (lcc_vec  && !RAY_IS_ERR(lcc_vec))  ray_release(lcc_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata = (int64_t*)ray_data(node_vec);
@@ -14058,7 +14058,7 @@ static ray_t* exec_cluster_coeff(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec);
         ray_release(lcc_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -14074,12 +14074,12 @@ static ray_t* exec_cluster_coeff(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_betweenness(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
     uint16_t sample = ext->graph.max_iter;
     int64_t n_sources = (sample > 0 && (int64_t)sample < n) ? (int64_t)sample : n;
 
@@ -14113,7 +14113,7 @@ static ray_t* exec_betweenness(ray_graph_t* g, ray_op_t* op) {
     if (!cb || !sigma || !delta || !dist || !queue || !stack ||
         !pred_data || !pred_off || !pred_cursor || !seen_epoch) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     memset(cb, 0, (size_t)n * sizeof(double));
@@ -14228,7 +14228,7 @@ static ray_t* exec_betweenness(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (cent_vec && !RAY_IS_ERR(cent_vec)) ray_release(cent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     int64_t* ndata = (int64_t*)ray_data(node_vec);
     double*  cdata = (double*)ray_data(cent_vec);
@@ -14240,15 +14240,15 @@ static ray_t* exec_betweenness(ray_graph_t* g, ray_op_t* op) {
     ray_t* result = ray_table_new(2);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec); ray_release(cent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     ray_t* tmp = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); ray_release(cent_vec); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); ray_release(cent_vec); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, sym_intern_safe("_centrality", 11), cent_vec);
     ray_release(cent_vec);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     return result;
 }
@@ -14260,12 +14260,12 @@ static ray_t* exec_betweenness(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_closeness(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
     uint16_t sample = ext->graph.max_iter;
     int64_t n_sources = (sample > 0 && (int64_t)sample < n) ? (int64_t)sample : n;
 
@@ -14283,7 +14283,7 @@ static ray_t* exec_closeness(ray_graph_t* g, ray_op_t* op) {
 
     if (!closeness || !dist || !queue) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     memset(closeness, 0, (size_t)n * sizeof(double));
@@ -14345,7 +14345,7 @@ static ray_t* exec_closeness(ray_graph_t* g, ray_op_t* op) {
         ray_scratch_arena_reset(&arena);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (cent_vec && !RAY_IS_ERR(cent_vec)) ray_release(cent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     int64_t* ndata = (int64_t*)ray_data(node_vec);
     double*  cdata = (double*)ray_data(cent_vec);
@@ -14365,15 +14365,15 @@ static ray_t* exec_closeness(ray_graph_t* g, ray_op_t* op) {
     ray_t* result = ray_table_new(2);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec); ray_release(cent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     ray_t* tmp = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); ray_release(cent_vec); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); ray_release(cent_vec); return ray_error("oom", NULL); }
     result = tmp;
     tmp = ray_table_add_col(result, sym_intern_safe("_centrality", 11), cent_vec);
     ray_release(cent_vec);
-    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!tmp || RAY_IS_ERR(tmp)) { ray_release(result); return ray_error("oom", NULL); }
     result = tmp;
     return result;
 }
@@ -14407,17 +14407,17 @@ static bool uf_union(int64_t* parent, int64_t* rank_arr, int64_t a, int64_t b) {
 
 static ray_t* exec_mst(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel || !rel->fwd.props) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel || !rel->fwd.props) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     int64_t m = rel->fwd.n_edges;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     int64_t weight_sym = ext->graph.weight_col_sym;
     ray_t* weight_vec = ray_table_get_col(rel->fwd.props, weight_sym);
-    if (!weight_vec || weight_vec->type != RAY_F64) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!weight_vec || weight_vec->type != RAY_F64) return ray_error("schema", NULL);
     double* weights = (double*)ray_data(weight_vec);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
@@ -14433,7 +14433,7 @@ static ray_t* exec_mst(ray_graph_t* g, ray_op_t* op) {
     int64_t* uf_rank   = (int64_t*)ray_scratch_arena_push(&arena, (size_t)n * sizeof(int64_t));
     if (!edges_arr || !uf_parent || !uf_rank) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     /* Fill edge array from forward CSR */
@@ -14466,7 +14466,7 @@ static ray_t* exec_mst(ray_graph_t* g, ray_op_t* op) {
         if (src_vec && !RAY_IS_ERR(src_vec)) ray_release(src_vec);
         if (dst_vec && !RAY_IS_ERR(dst_vec)) ray_release(dst_vec);
         if (wt_vec  && !RAY_IS_ERR(wt_vec))  ray_release(wt_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* sdata = (int64_t*)ray_data(src_vec);
@@ -14491,7 +14491,7 @@ static ray_t* exec_mst(ray_graph_t* g, ray_op_t* op) {
     ray_t* result = ray_table_new(3);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(src_vec); ray_release(dst_vec); ray_release(wt_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_src", 4), src_vec);
     ray_release(src_vec);
@@ -14507,13 +14507,13 @@ static ray_t* exec_mst(ray_graph_t* g, ray_op_t* op) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_random_walk(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     uint16_t walk_len = ext->graph.max_iter;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     int64_t start_node;
     if (ray_is_atom(src_val)) {
@@ -14521,7 +14521,7 @@ static ray_t* exec_random_walk(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     } else {
         start_node = ((int64_t*)ray_data(src_val))[0];
     }
-    if (start_node < 0 || start_node >= n) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (start_node < 0 || start_node >= n) return ray_error("range", NULL);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
     int64_t* fwd_tgt = (int64_t*)ray_data(rel->fwd.targets);
@@ -14532,7 +14532,7 @@ static ray_t* exec_random_walk(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     if (!step_vec || RAY_IS_ERR(step_vec) || !node_vec || RAY_IS_ERR(node_vec)) {
         if (step_vec && !RAY_IS_ERR(step_vec)) ray_release(step_vec);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* sdata = (int64_t*)ray_data(step_vec);
@@ -14563,7 +14563,7 @@ static ray_t* exec_random_walk(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     ray_t* result = ray_table_new(2);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(step_vec); ray_release(node_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_step", 5), step_vec);
     ray_release(step_vec);
@@ -14577,14 +14577,14 @@ static ray_t* exec_random_walk(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     uint8_t max_depth = ext->graph.max_depth;
-    if (n <= 0) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (n <= 0) return ray_error("length", NULL);
 
     /* Get source node ID */
     int64_t start_node;
@@ -14593,7 +14593,7 @@ static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     } else {
         start_node = ((int64_t*)ray_data(src_val))[0];
     }
-    if (start_node < 0 || start_node >= n) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (start_node < 0 || start_node >= n) return ray_error("range", NULL);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
     int64_t* fwd_tgt = (int64_t*)ray_data(rel->fwd.targets);
@@ -14615,7 +14615,7 @@ static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     if (!stack_node || !stack_depth || !stack_parent || !visited ||
         !res_node || !res_depth || !res_parent) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     memset(visited, 0, (size_t)n);
@@ -14670,7 +14670,7 @@ static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (depth_vec && !RAY_IS_ERR(depth_vec)) ray_release(depth_vec);
         if (parent_vec && !RAY_IS_ERR(parent_vec)) ray_release(parent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     memcpy(ray_data(node_vec),   res_node,   (size_t)count * sizeof(int64_t));
@@ -14685,7 +14685,7 @@ static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
     ray_t* result = ray_table_new(3);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(node_vec); ray_release(depth_vec); ray_release(parent_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -14701,33 +14701,33 @@ static ray_t* exec_dfs(ray_graph_t* g, ray_op_t* op, ray_t* src_val) {
 static ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
                          ray_t* src_val, ray_t* dst_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (!rel->fwd.props) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel) return ray_error("schema", NULL);
+    if (!rel->fwd.props) return ray_error("schema", NULL);
 
     ray_t* np = (ray_t*)ext->graph.node_props;
-    if (!np) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!np) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     int64_t m = rel->fwd.n_edges;
     int64_t src_id = src_val->i64;
     int64_t dst_id = dst_val->i64;
 
-    if (src_id < 0 || src_id >= n) return RAY_ERR_PTR(RAY_ERR_RANGE);
-    if (dst_id < 0 || dst_id >= n) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (src_id < 0 || src_id >= n) return ray_error("range", NULL);
+    if (dst_id < 0 || dst_id >= n) return ray_error("range", NULL);
 
     /* Resolve weight column from edge properties */
     int64_t weight_sym = ext->graph.weight_col_sym;
     ray_t* weight_vec = ray_table_get_col(rel->fwd.props, weight_sym);
-    if (!weight_vec || RAY_IS_ERR(weight_vec)) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!weight_vec || RAY_IS_ERR(weight_vec)) return ray_error("schema", NULL);
     double* weights_arr = (double*)ray_data(weight_vec);
 
     /* Resolve coordinate columns from node properties */
     ray_t* lat_vec = ray_table_get_col(np, ext->graph.coord_col_syms[0]);
     ray_t* lon_vec = ray_table_get_col(np, ext->graph.coord_col_syms[1]);
-    if (!lat_vec || !lon_vec) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!lat_vec || !lon_vec) return ray_error("schema", NULL);
     double* lat = (double*)ray_data(lat_vec);
     double* lon = (double*)ray_data(lon_vec);
 
@@ -14743,7 +14743,7 @@ static ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
                               (size_t)heap_cap * sizeof(dijk_entry_t));
     if (!dist_a || !visited || !depth_a || !heap) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     memset(visited, 0, (size_t)n * sizeof(bool));
     memset(depth_a, 0, (size_t)n * sizeof(int64_t));
@@ -14803,7 +14803,7 @@ static ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (dist_vec && !RAY_IS_ERR(dist_vec)) ray_release(dist_vec);
         if (depth_vec && !RAY_IS_ERR(depth_vec)) ray_release(depth_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* ndata_a = (int64_t*)ray_data(node_vec);
@@ -14829,7 +14829,7 @@ static ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
         ray_release(node_vec);
         ray_release(dist_vec);
         ray_release(depth_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_node", 5), node_vec);
     ray_release(node_vec);
@@ -14845,10 +14845,10 @@ static ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
 static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
                                ray_t* src_val, ray_t* dst_val) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_rel_t* rel = (ray_rel_t*)ext->graph.rel;
-    if (!rel || !rel->fwd.props) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!rel || !rel->fwd.props) return ray_error("schema", NULL);
 
     int64_t n = rel->fwd.n_nodes;
     int64_t m = rel->fwd.n_edges;
@@ -14857,11 +14857,11 @@ static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
     uint16_t K = ext->graph.max_iter;
 
     if (src_id < 0 || src_id >= n || dst_id < 0 || dst_id >= n)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     int64_t weight_sym = ext->graph.weight_col_sym;
     ray_t* weight_vec = ray_table_get_col(rel->fwd.props, weight_sym);
-    if (!weight_vec || RAY_IS_ERR(weight_vec)) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!weight_vec || RAY_IS_ERR(weight_vec)) return ray_error("schema", NULL);
     double* weights_k = (double*)ray_data(weight_vec);
 
     int64_t* fwd_off = (int64_t*)ray_data(rel->fwd.offsets);
@@ -14901,7 +14901,7 @@ static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
         !paths_data || !path_lens || !path_costs ||
         !cand_data || !cand_lens || !cand_costs || !tmp_path) {
         ray_scratch_arena_reset(&arena);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t num_found = 0;
@@ -15087,7 +15087,7 @@ static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
         if (pid_vec  && !RAY_IS_ERR(pid_vec))  ray_release(pid_vec);
         if (node_vec && !RAY_IS_ERR(node_vec)) ray_release(node_vec);
         if (dist_vec && !RAY_IS_ERR(dist_vec)) ray_release(dist_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* pids  = (int64_t*)ray_data(pid_vec);
@@ -15126,7 +15126,7 @@ static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
     ray_t* result = ray_table_new(3);
     if (!result || RAY_IS_ERR(result)) {
         ray_release(pid_vec); ray_release(node_vec); ray_release(dist_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_path_id", 8), pid_vec);
     ray_release(pid_vec);
@@ -15145,17 +15145,17 @@ static ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
  * -------------------------------------------------------------------------- */
 static ray_t* exec_cosine_sim(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     const float* query = ext->vector.query_vec;
     int32_t dim = ext->vector.dim;
 
-    if (!query || dim <= 0) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (emb_vec->type != RAY_F32) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!query || dim <= 0) return ray_error("schema", NULL);
+    if (emb_vec->type != RAY_F32) return ray_error("type", NULL);
 
     int64_t total = emb_vec->len;
     int64_t nrows = total / dim;
-    if (nrows * dim != total) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (nrows * dim != total) return ray_error("length", NULL);
 
     const float* data = (const float*)ray_data(emb_vec);
 
@@ -15168,7 +15168,7 @@ static ray_t* exec_cosine_sim(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
 
     /* Compute per-row similarity */
     ray_t* result = ray_vec_new(RAY_F64, nrows);
-    if (!result || RAY_IS_ERR(result)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result || RAY_IS_ERR(result)) return ray_error("oom", NULL);
     result->len = nrows;
     double* out = (double*)ray_data(result);
 
@@ -15194,22 +15194,22 @@ static ray_t* exec_cosine_sim(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
  * -------------------------------------------------------------------------- */
 static ray_t* exec_euclidean_dist(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     const float* query = ext->vector.query_vec;
     int32_t dim = ext->vector.dim;
 
-    if (!query || dim <= 0) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (emb_vec->type != RAY_F32) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!query || dim <= 0) return ray_error("schema", NULL);
+    if (emb_vec->type != RAY_F32) return ray_error("type", NULL);
 
     int64_t total = emb_vec->len;
     int64_t nrows = total / dim;
-    if (nrows * dim != total) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (nrows * dim != total) return ray_error("length", NULL);
 
     const float* data = (const float*)ray_data(emb_vec);
 
     ray_t* result = ray_vec_new(RAY_F64, nrows);
-    if (!result || RAY_IS_ERR(result)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!result || RAY_IS_ERR(result)) return ray_error("oom", NULL);
     result->len = nrows;
     double* out = (double*)ray_data(result);
 
@@ -15269,18 +15269,18 @@ static void knn_heap_insert(knn_entry_t* heap, int64_t k, int64_t* size,
 
 static ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     const float* query = ext->vector.query_vec;
     int32_t dim = ext->vector.dim;
     int64_t k = ext->vector.k;
 
-    if (!query || dim <= 0 || k <= 0) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
-    if (emb_vec->type != RAY_F32) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!query || dim <= 0 || k <= 0) return ray_error("schema", NULL);
+    if (emb_vec->type != RAY_F32) return ray_error("type", NULL);
 
     int64_t total = emb_vec->len;
     int64_t nrows = total / dim;
-    if (nrows * dim != total) return RAY_ERR_PTR(RAY_ERR_LENGTH);
+    if (nrows * dim != total) return ray_error("length", NULL);
     if (k > nrows) k = nrows;
 
     const float* data = (const float*)ray_data(emb_vec);
@@ -15293,7 +15293,7 @@ static ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
     /* Min-heap for top-K */
     ray_t* heap_hdr = NULL;
     knn_entry_t* heap = (knn_entry_t*)scratch_alloc(&heap_hdr, (size_t)k * sizeof(knn_entry_t));
-    if (!heap) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!heap) return ray_error("oom", NULL);
     int64_t heap_size = 0;
 
     for (int64_t i = 0; i < nrows; i++) {
@@ -15327,7 +15327,7 @@ static ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
         scratch_free(heap_hdr);
         if (rowid_vec && !RAY_IS_ERR(rowid_vec)) ray_release(rowid_vec);
         if (sim_vec && !RAY_IS_ERR(sim_vec)) ray_release(sim_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* rdata = (int64_t*)ray_data(rowid_vec);
@@ -15345,7 +15345,7 @@ static ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(rowid_vec);
         ray_release(sim_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_rowid", 6), rowid_vec);
     ray_release(rowid_vec);
@@ -15357,7 +15357,7 @@ static ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec) {
 
 static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
     ray_op_ext_t* ext = find_ext(g, op->id);
-    if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!ext) return ray_error("nyi", NULL);
 
     ray_hnsw_t* idx = (ray_hnsw_t*)ext->hnsw.hnsw_idx;
     const float* query = ext->hnsw.query_vec;
@@ -15365,16 +15365,16 @@ static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
     int64_t k = ext->hnsw.k;
     int32_t ef = ext->hnsw.ef_search;
 
-    if (!idx || !query || dim <= 0 || k <= 0) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+    if (!idx || !query || dim <= 0 || k <= 0) return ray_error("schema", NULL);
 
     /* Pre-allocate output arrays */
     ray_t* ids_hdr = NULL;
     int64_t* out_ids = (int64_t*)scratch_alloc(&ids_hdr, (size_t)k * sizeof(int64_t));
-    if (!out_ids) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!out_ids) return ray_error("oom", NULL);
 
     ray_t* dists_hdr = NULL;
     double* out_dists = (double*)scratch_alloc(&dists_hdr, (size_t)k * sizeof(double));
-    if (!out_dists) { scratch_free(ids_hdr); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!out_dists) { scratch_free(ids_hdr); return ray_error("oom", NULL); }
 
     int64_t n_found = ray_hnsw_search(idx, query, dim, k, ef, out_ids, out_dists);
 
@@ -15386,7 +15386,7 @@ static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
         scratch_free(dists_hdr);
         if (rowid_vec && !RAY_IS_ERR(rowid_vec)) ray_release(rowid_vec);
         if (sim_vec && !RAY_IS_ERR(sim_vec)) ray_release(sim_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
 
     int64_t* rdata = (int64_t*)ray_data(rowid_vec);
@@ -15405,7 +15405,7 @@ static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
     if (!result || RAY_IS_ERR(result)) {
         ray_release(rowid_vec);
         ray_release(sim_vec);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     result = ray_table_add_col(result, sym_intern_safe("_rowid", 6), rowid_vec);
     ray_release(rowid_vec);
@@ -15416,9 +15416,9 @@ static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
 }
 
 /* Broadcast a scalar atom to a column vector of nrows elements.
- * Returns a new vector (caller owns).  On failure returns RAY_ERR_PTR. */
+ * Returns a new vector (caller owns).  On failure returns ray_error(). */
 static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
-    if (!atom) return RAY_ERR_PTR(RAY_ERR_DOMAIN);
+    if (!atom) return ray_error("domain", NULL);
     if (nrows <= 0) {
         /* Empty table: return an empty vector of the matching type */
         int8_t at = atom->type;
@@ -15428,7 +15428,7 @@ static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
         else if (at == -RAY_F64)  vt = RAY_F64;
         else if (at == -RAY_BOOL) vt = RAY_BOOL;
         else if (at == -RAY_SYM)  vt = RAY_SYM;
-        else return RAY_ERR_PTR(RAY_ERR_TYPE);
+        else return ray_error("type", NULL);
         return ray_vec_new(vt, 0);
     }
     int8_t at = atom->type;
@@ -15452,7 +15452,7 @@ static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
     else if (at == -RAY_F64)  vt = RAY_F64;
     else if (at == -RAY_BOOL) vt = RAY_BOOL;
     else if (at == -RAY_SYM)  vt = RAY_SYM;
-    else return RAY_ERR_PTR(RAY_ERR_TYPE);
+    else return ray_error("type", NULL);
 
     size_t esz = (vt == RAY_BOOL) ? 1 : 8;
     ray_t* vec = ray_vec_new(vt, nrows);
@@ -15479,7 +15479,7 @@ static inline bool op_is_heavy(uint16_t opc) {
 }
 
 static ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
-    if (!op) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!op) return ray_error("nyi", NULL);
 
     bool profiling = g_ray_profile.active && op_is_heavy(op->opcode);
     const char* oname = NULL;
@@ -15497,12 +15497,12 @@ static ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
 }
 
 static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
-    if (!op) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!op) return ray_error("nyi", NULL);
 
     switch (op->opcode) {
         case OP_SCAN: {
             ray_op_ext_t* ext = find_ext(g, op->id);
-            if (!ext) return RAY_ERR_PTR(RAY_ERR_NYI);
+            if (!ext) return ray_error("nyi", NULL);
 
             /* Resolve table: pad[0..1] stores table_id+1 (0 = default g->table) */
             uint16_t stored_table_id = 0;
@@ -15513,9 +15513,9 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
             } else {
                 scan_tbl = g->table;
             }
-            if (!scan_tbl) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+            if (!scan_tbl) return ray_error("schema", NULL);
             ray_t* col = ray_table_get_col(scan_tbl, ext->sym);
-            if (!col) return RAY_ERR_PTR(RAY_ERR_SCHEMA);
+            if (!col) return ray_error("schema", NULL);
             if (col->type == RAY_MAPCOMMON)
                 return materialize_mapcommon(col);
             if (RAY_IS_PARTED(col->type)) {
@@ -15526,7 +15526,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
                             ? sps[0]->attrs : 0;
                 int64_t total = ray_parted_nrows(col);
                 ray_t* flat = typed_vec_new(base, sba, total);
-                if (!flat || RAY_IS_ERR(flat)) return RAY_ERR_PTR(RAY_ERR_OOM);
+                if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
                 flat->len = total;
                 ray_t** segs = sps;
                 size_t esz = (size_t)ray_sym_elem_size(base, sba);
@@ -15546,7 +15546,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
 
         case OP_CONST: {
             ray_op_ext_t* ext = find_ext(g, op->id);
-            if (!ext || !ext->literal) return RAY_ERR_PTR(RAY_ERR_NYI);
+            if (!ext || !ext->literal) return ray_error("nyi", NULL);
             ray_retain(ext->literal);
             return ext->literal;
         }
@@ -16140,10 +16140,10 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
             if (!input || RAY_IS_ERR(input)) return input;
             if (input->type != RAY_TABLE) {
                 ray_release(input);
-                return RAY_ERR_PTR(RAY_ERR_NYI);
+                return ray_error("nyi", NULL);
             }
             ray_op_ext_t* ext = find_ext(g, op->id);
-            if (!ext) { ray_release(input); return RAY_ERR_PTR(RAY_ERR_NYI); }
+            if (!ext) { ray_release(input); return ray_error("nyi", NULL); }
             uint8_t n_cols = ext->sort.n_cols;
             ray_op_t** columns = ext->sort.columns;
             ray_t* result = ray_table_new(n_cols);
@@ -16171,7 +16171,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
                         ray_release(result);
                         g->table = saved_table;
                         ray_release(input);
-                        return vec ? vec : RAY_ERR_PTR(RAY_ERR_NYI);
+                        return vec ? vec : ray_error("nyi", NULL);
                     }
                     /* Broadcast scalar atoms to full column vectors */
                     if (vec->type < 0) {
@@ -16183,7 +16183,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
                             ray_release(result);
                             g->table = saved_table;
                             ray_release(input);
-                            return vec ? vec : RAY_ERR_PTR(RAY_ERR_NYI);
+                            return vec ? vec : ray_error("nyi", NULL);
                         }
                     }
                     /* Synthetic name: _expr_0, _expr_1, ... */
@@ -16347,7 +16347,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
         }
 
         default:
-            return RAY_ERR_PTR(RAY_ERR_NYI);
+            return ray_error("nyi", NULL);
     }
 }
 
@@ -16356,7 +16356,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
  * ============================================================================ */
 
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
-    if (!g || !root) return RAY_ERR_PTR(RAY_ERR_NYI);
+    if (!g || !root) return ray_error("nyi", NULL);
 
     /* Lazy-init the global thread pool on first call */
     ray_pool_t* pool = ray_pool_get();

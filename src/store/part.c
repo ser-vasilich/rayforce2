@@ -117,16 +117,16 @@ static int64_t parse_int_dir(const char* s) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_part_load(const char* db_root, const char* table_name) {
-    if (!db_root || !table_name) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!db_root || !table_name) return ray_error("io", NULL);
 
     /* Validate table_name: no path separators or traversal */
     if (strchr(table_name, '/') || strchr(table_name, '\\') ||
         strstr(table_name, "..") || table_name[0] == '.')
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
 
     /* Scan db_root for partition directories (YYYY.MM.DD format) */
     DIR* d = opendir(db_root);
-    if (!d) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!d) return ray_error("io", NULL);
 
     /* Collect partition directory names */
     char** part_dirs = NULL;
@@ -167,7 +167,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
     if (part_count == 0) {
         /* No partition directories found in db_root */
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
 
     /* Sort partition names for deterministic order.
@@ -188,7 +188,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
     if (sn < 0 || (size_t)sn >= sizeof(sym_path)) {
         for (int64_t i = 0; i < part_count; i++) ray_sys_free(part_dirs[i]);
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
 
     /* Load first partition to get schema. */
@@ -197,7 +197,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
     if (n < 0 || (size_t)n >= sizeof(path)) {
         for (int64_t i = 0; i < part_count; i++) ray_sys_free(part_dirs[i]);
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
     ray_t* first = ray_splay_load(path, sym_path);
     if (!first || RAY_IS_ERR(first)) {
@@ -220,7 +220,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
         ray_release(first);
         for (int64_t i = 0; i < part_count; i++) ray_sys_free(part_dirs[i]);
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     }
     all_dfs[0] = first;
 
@@ -243,7 +243,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
         }
         ray_sys_free(all_dfs);
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
 
     /* Build combined table by concatenating columns */
@@ -287,7 +287,7 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
     ray_sys_free(all_dfs);
     ray_sys_free(part_dirs);
 
-    return result ? result : RAY_ERR_PTR(RAY_ERR_OOM);
+    return result ? result : ray_error("oom", NULL);
 }
 
 /* --------------------------------------------------------------------------
@@ -299,18 +299,18 @@ ray_t* ray_part_load(const char* db_root, const char* table_name) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_read_parted(const char* db_root, const char* table_name) {
-    if (!db_root || !table_name) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!db_root || !table_name) return ray_error("io", NULL);
 
     /* Validate table_name: no path separators or traversal */
     if (strchr(table_name, '/') || strchr(table_name, '\\') ||
         strstr(table_name, "..") || table_name[0] == '.')
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
 
     /* Build sym_path. */
     char sym_path[1024];
     int sn = snprintf(sym_path, sizeof(sym_path), "%s/sym", db_root);
     if (sn < 0 || (size_t)sn >= sizeof(sym_path))
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
 
     /* Load global symfile */
     ray_err_t sym_err = ray_sym_load(sym_path);
@@ -318,7 +318,7 @@ ray_t* ray_read_parted(const char* db_root, const char* table_name) {
 
     /* Scan db_root for partition directories */
     DIR* d = opendir(db_root);
-    if (!d) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!d) return ray_error("io", NULL);
 
     char** part_dirs = NULL;
     int64_t part_count = 0;
@@ -355,7 +355,7 @@ ray_t* ray_read_parted(const char* db_root, const char* table_name) {
     if (part_count == 0) {
         /* No partition directories found in db_root */
         ray_sys_free(part_dirs);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
 
     /* Sort partition names for deterministic order.
@@ -526,5 +526,5 @@ fail_dirs:
         ray_sys_free(part_dirs[p]);
     ray_sys_free(part_dirs);
 
-    return RAY_ERR_PTR(RAY_ERR_IO);
+    return ray_error("io", NULL);
 }

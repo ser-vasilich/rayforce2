@@ -40,7 +40,7 @@ ray_t* ray_nfo_create(const char* filename, size_t fname_len,
 
     /* Build the nfo list: alloc 4-slot list, set elements directly. */
     ray_t* nfo = ray_alloc(4 * sizeof(ray_t*));
-    if (!nfo || RAY_IS_ERR(nfo)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!nfo || RAY_IS_ERR(nfo)) return ray_error("oom", NULL);
     nfo->type = RAY_LIST;
     nfo->len = 4;
     ray_t** elems = (ray_t**)ray_data(nfo);

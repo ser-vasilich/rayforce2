@@ -40,9 +40,9 @@ static int64_t list_capacity(ray_t* list) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_list_new(int64_t capacity) {
-    if (capacity < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (capacity < 0) return ray_error("range", NULL);
     if ((uint64_t)capacity > SIZE_MAX / sizeof(ray_t*))
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     size_t data_size = (size_t)capacity * sizeof(ray_t*);
 
     ray_t* list = ray_alloc(data_size);
@@ -76,7 +76,7 @@ ray_t* ray_list_append(ray_t* list, ray_t* item) {
         else {
             size_t s = 32;
             while (s < new_data_size) {
-                if (s > SIZE_MAX / 2) return RAY_ERR_PTR(RAY_ERR_OOM);
+                if (s > SIZE_MAX / 2) return ray_error("oom", NULL);
                 s *= 2;
             }
             new_data_size = s;
@@ -114,7 +114,7 @@ ray_t* ray_list_get(ray_t* list, int64_t idx) {
 ray_t* ray_list_set(ray_t* list, int64_t idx, ray_t* item) {
     if (!list || RAY_IS_ERR(list)) return list;
     if (idx < 0 || idx >= list->len)
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
 
     /* COW if shared */
     list = ray_cow(list);

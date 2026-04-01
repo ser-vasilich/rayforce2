@@ -57,7 +57,7 @@ void ray_ftable_free(ray_ftable_t* ft) {
 }
 
 ray_t* ray_ftable_materialize(ray_ftable_t* ft) {
-    if (!ft || ft->n_cols == 0) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!ft || ft->n_cols == 0) return ray_error("type", NULL);
 
     ray_t* tbl = ray_table_new(ft->n_cols);
     if (!tbl || RAY_IS_ERR(tbl)) return tbl;
@@ -69,12 +69,12 @@ ray_t* ray_ftable_materialize(ray_ftable_t* ft) {
         ray_t* col;
         if (fv->cur_idx >= 0) {
             /* Flat: replicate single value */
-            if (fv->cardinality <= 0) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+            if (fv->cardinality <= 0) { ray_release(tbl); return ray_error("range", NULL); }
             col = ray_vec_new(fv->vec->type, fv->cardinality);
-            if (!col || RAY_IS_ERR(col)) { ray_release(tbl); return col ? col : RAY_ERR_PTR(RAY_ERR_OOM); }
+            if (!col || RAY_IS_ERR(col)) { ray_release(tbl); return col ? col : ray_error("oom", NULL); }
             col->len = fv->cardinality;
             void* val = ray_vec_get(fv->vec, fv->cur_idx);
-            if (!val) { ray_release(col); ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_RANGE); }
+            if (!val) { ray_release(col); ray_release(tbl); return ray_error("range", NULL); }
             uint8_t esz = ray_sym_elem_size(fv->vec->type, fv->vec->attrs);
             char* dst = (char*)ray_data(col);
             for (int64_t r = 0; r < fv->cardinality; r++)
@@ -92,7 +92,7 @@ ray_t* ray_ftable_materialize(ray_ftable_t* ft) {
         ray_release(col);
         if (!new_tbl || RAY_IS_ERR(new_tbl)) {
             if (new_tbl != tbl) ray_release(tbl);
-            return new_tbl ? new_tbl : RAY_ERR_PTR(RAY_ERR_OOM);
+            return new_tbl ? new_tbl : ray_error("oom", NULL);
         }
         tbl = new_tbl;
     }

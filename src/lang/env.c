@@ -30,7 +30,7 @@
 
 ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {
     ray_t* obj = ray_alloc(0);  /* atom, no data beyond header */
-    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!obj) return ray_error("oom", NULL);
     obj->type = RAY_UNARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
@@ -40,7 +40,7 @@ ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {
 
 ray_t* ray_fn_binary(const char* name, uint8_t fn_attrs, ray_binary_fn fn) {
     ray_t* obj = ray_alloc(0);
-    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!obj) return ray_error("oom", NULL);
     obj->type = RAY_BINARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
@@ -50,7 +50,7 @@ ray_t* ray_fn_binary(const char* name, uint8_t fn_attrs, ray_binary_fn fn) {
 
 ray_t* ray_fn_vary(const char* name, uint8_t fn_attrs, ray_vary_fn fn) {
     ray_t* obj = ray_alloc(0);
-    if (!obj) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!obj) return ray_error("oom", NULL);
     obj->type = RAY_VARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;

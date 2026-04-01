@@ -1576,7 +1576,7 @@ ray_op_t* ray_graph_input_vec(ray_graph_t* g, ray_t* vec) {
 
 ray_t* ray_lazy_wrap(ray_graph_t* g, ray_op_t* op) {
     ray_t* h = ray_alloc(0);
-    if (!h) { ray_graph_free(g); return RAY_ERR_PTR(RAY_ERR_OOM); }
+    if (!h) { ray_graph_free(g); return ray_error("oom", NULL); }
     h->type  = RAY_LAZY;
     h->attrs = 0;
     RAY_LAZY_GRAPH(h) = g;
@@ -1608,7 +1608,7 @@ ray_t* ray_lazy_append(ray_t* lazy, uint16_t opcode) {
     }
 
     ray_op_t* op = make_unary(g, opcode, prev, out_type);
-    if (!op) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!op) return ray_error("oom", NULL);
     RAY_LAZY_OP(lazy) = op;
     return lazy;
 }

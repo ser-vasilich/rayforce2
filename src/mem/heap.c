@@ -755,12 +755,12 @@ ray_t* ray_alloc_copy(ray_t* v) {
     if (ray_is_atom(v)) {
         data_size = 0;
     } else if (v->type == RAY_TABLE) {
-        if (v->len < 0) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (v->len < 0) return ray_error("oom", NULL);
         data_size = (size_t)(ray_len(v) + 1) * sizeof(ray_t*);
     } else if (RAY_IS_PARTED(v->type) || v->type == RAY_MAPCOMMON) {
         int64_t n_ptrs = v->len;
         if (v->type == RAY_MAPCOMMON) n_ptrs = 2;
-        if (n_ptrs < 0) return RAY_ERR_PTR(RAY_ERR_OOM);
+        if (n_ptrs < 0) return ray_error("oom", NULL);
         data_size = (size_t)n_ptrs * sizeof(ray_t*);
     } else {
         int8_t t = ray_type(v);
@@ -769,7 +769,7 @@ ray_t* ray_alloc_copy(ray_t* v) {
         else {
             uint8_t esz = ray_sym_elem_size(t, v->attrs);
             if (v->len < 0 || (esz > 0 && (uint64_t)v->len > SIZE_MAX / esz))
-                return RAY_ERR_PTR(RAY_ERR_OOM);
+                return ray_error("oom", NULL);
             data_size = (size_t)ray_len(v) * esz;
         }
     }

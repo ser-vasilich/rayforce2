@@ -52,9 +52,9 @@ static ray_t** tbl_col_slots(ray_t* tbl) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_table_new(int64_t ncols) {
-    if (ncols < 0) return RAY_ERR_PTR(RAY_ERR_RANGE);
+    if (ncols < 0) return ray_error("range", NULL);
     if ((uint64_t)ncols > SIZE_MAX / sizeof(ray_t*) - 1)
-        return RAY_ERR_PTR(RAY_ERR_OOM);
+        return ray_error("oom", NULL);
     /* Allocate: 1 schema pointer + ncols column pointers */
     size_t data_size = (size_t)(1 + ncols) * sizeof(ray_t*);
 
@@ -86,7 +86,7 @@ ray_t* ray_table_new(int64_t ncols) {
 
 ray_t* ray_table_add_col(ray_t* tbl, int64_t name_id, ray_t* col_vec) {
     if (!tbl || RAY_IS_ERR(tbl)) return tbl;
-    if (!col_vec || RAY_IS_ERR(col_vec)) return RAY_ERR_PTR(RAY_ERR_TYPE);
+    if (!col_vec || RAY_IS_ERR(col_vec)) return ray_error("type", NULL);
 
     /* COW the tbl */
     tbl = ray_cow(tbl);
@@ -110,7 +110,7 @@ ray_t* ray_table_add_col(ray_t* tbl, int64_t name_id, ray_t* col_vec) {
     /* Append name_id to schema vector */
     ray_t* schema = *tbl_schema_slot(tbl);
     schema = ray_vec_append(schema, &name_id);
-    if (!schema || RAY_IS_ERR(schema)) return RAY_ERR_PTR(RAY_ERR_OOM);
+    if (!schema || RAY_IS_ERR(schema)) return ray_error("oom", NULL);
 
     /* vec_append returns the owned schema reference (possibly moved). */
     *tbl_schema_slot(tbl) = schema;

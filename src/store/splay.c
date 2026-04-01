@@ -121,7 +121,7 @@ ray_err_t ray_splay_save(ray_t* tbl, const char* dir, const char* sym_path) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_splay_load(const char* dir, const char* sym_path) {
-    if (!dir) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!dir) return ray_error("io", NULL);
 
     /* Load symbol table if sym_path provided */
     if (sym_path) {
@@ -133,7 +133,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
     char path[1024];
     int path_len = snprintf(path, sizeof(path), "%s/.d", dir);
     if (path_len < 0 || (size_t)path_len >= sizeof(path))
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
     ray_t* schema = ray_col_load(path);
     if (!schema || RAY_IS_ERR(schema)) return schema;
 
@@ -155,7 +155,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
              * is stale or wrong for this data. */
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
 
         const char* name = ray_str_ptr(name_atom);
@@ -168,21 +168,21 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
             memchr(name, '\0', name_len)) {
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
 
         path_len = snprintf(path, sizeof(path), "%s/%.*s", dir, (int)name_len, name);
         if (path_len < 0 || (size_t)path_len >= sizeof(path)) {
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_RANGE);
+            return ray_error("range", NULL);
         }
 
         ray_t* col = ray_col_load(path);
         if (!col || RAY_IS_ERR(col)) {
             ray_release(schema);
             ray_release(tbl);
-            return col ? col : RAY_ERR_PTR(RAY_ERR_IO);
+            return col ? col : ray_error("io", NULL);
         }
 
         ray_t* new_df = ray_table_add_col(tbl, name_id, col);
@@ -190,7 +190,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
             ray_release(col);
             ray_release(schema);
             ray_release(tbl);
-            return new_df ? new_df : RAY_ERR_PTR(RAY_ERR_OOM);
+            return new_df ? new_df : ray_error("oom", NULL);
         }
         ray_release(col); /* table_add_col retains; drop our ref */
         tbl = new_df;
@@ -215,7 +215,7 @@ ray_t* ray_splay_load(const char* dir, const char* sym_path) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
-    if (!dir) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!dir) return ray_error("io", NULL);
 
     /* Load symbol table if sym_path provided — failure is fatal */
     if (sym_path) {
@@ -227,7 +227,7 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
     char path[1024];
     int path_len = snprintf(path, sizeof(path), "%s/.d", dir);
     if (path_len < 0 || (size_t)path_len >= sizeof(path))
-        return RAY_ERR_PTR(RAY_ERR_RANGE);
+        return ray_error("range", NULL);
     ray_t* schema = ray_col_load(path);
     if (!schema || RAY_IS_ERR(schema)) return schema;
 
@@ -247,7 +247,7 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
         if (!name_atom) {
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
 
         const char* name = ray_str_ptr(name_atom);
@@ -258,21 +258,21 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
             memchr(name, '\0', name_len)) {
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
 
         path_len = snprintf(path, sizeof(path), "%s/%.*s", dir, (int)name_len, name);
         if (path_len < 0 || (size_t)path_len >= sizeof(path)) {
             ray_release(schema);
             ray_release(tbl);
-            return RAY_ERR_PTR(RAY_ERR_RANGE);
+            return ray_error("range", NULL);
         }
 
         ray_t* col = ray_col_mmap(path);
         if (!col || RAY_IS_ERR(col)) {
             ray_release(schema);
             ray_release(tbl);
-            return col ? col : RAY_ERR_PTR(RAY_ERR_IO);
+            return col ? col : ray_error("io", NULL);
         }
 
         ray_t* new_df = ray_table_add_col(tbl, name_id, col);
@@ -280,7 +280,7 @@ ray_t* ray_read_splayed(const char* dir, const char* sym_path) {
             ray_release(col);
             ray_release(schema);
             ray_release(tbl);
-            return new_df ? new_df : RAY_ERR_PTR(RAY_ERR_OOM);
+            return new_df ? new_df : ray_error("oom", NULL);
         }
         ray_release(col); /* table_add_col retains; drop our ref */
         tbl = new_df;

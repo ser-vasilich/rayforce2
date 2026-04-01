@@ -156,24 +156,24 @@ static ray_err_t col_save_str_list(ray_t* list, FILE* f) {
  * -------------------------------------------------------------------------- */
 
 static ray_t* col_load_str_list(const uint8_t* ptr, size_t remaining) {
-    if (remaining < 8) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+    if (remaining < 8) return ray_error("corrupt", NULL);
     int64_t count;
     memcpy(&count, ptr, 8);
     ptr += 8; remaining -= 8;
 
     if (count < 0 || (uint64_t)count > remaining / 4)
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
 
     ray_t* list = ray_list_new(count);
     if (!list || RAY_IS_ERR(list)) return list;
 
     for (int64_t i = 0; i < count; i++) {
-        if (remaining < 4) { ray_release(list); return RAY_ERR_PTR(RAY_ERR_CORRUPT); }
+        if (remaining < 4) { ray_release(list); return ray_error("corrupt", NULL); }
         uint32_t slen;
         memcpy(&slen, ptr, 4);
         ptr += 4; remaining -= 4;
 
-        if (slen > remaining) { ray_release(list); return RAY_ERR_PTR(RAY_ERR_CORRUPT); }
+        if (slen > remaining) { ray_release(list); return ray_error("corrupt", NULL); }
         ray_t* s = ray_str((const char*)ptr, (size_t)slen);
         if (!s || RAY_IS_ERR(s)) { ray_release(list); return s; }
         ptr += slen; remaining -= slen;
@@ -270,7 +270,7 @@ static ray_err_t col_write_recursive(ray_t* obj, FILE* f) {
 static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining);
 
 static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
-    if (*remaining < 1) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+    if (*remaining < 1) return ray_error("corrupt", NULL);
     int8_t type;
     memcpy(&type, *pp, 1);
     *pp += 1; *remaining -= 1;
@@ -278,17 +278,17 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
     if (type < 0) {
         /* Atom */
         if (type == -RAY_STR) {
-            if (*remaining < 4) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            if (*remaining < 4) return ray_error("corrupt", NULL);
             uint32_t slen;
             memcpy(&slen, *pp, 4);
             *pp += 4; *remaining -= 4;
-            if (slen > *remaining) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            if (slen > *remaining) return ray_error("corrupt", NULL);
             ray_t* s = ray_str((const char*)*pp, (size_t)slen);
             *pp += slen; *remaining -= slen;
             return s;
         } else {
             /* Fixed atom: 8 bytes */
-            if (*remaining < 8) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            if (*remaining < 8) return ray_error("corrupt", NULL);
             int64_t val;
             memcpy(&val, *pp, 8);
             *pp += 8; *remaining -= 8;
@@ -303,25 +303,25 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
 
     if (is_serializable_type(type)) {
         /* Fixed-size vector */
-        if (*remaining < 8) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (*remaining < 8) return ray_error("corrupt", NULL);
         int64_t len;
         memcpy(&len, *pp, 8);
         *pp += 8; *remaining -= 8;
-        if (len < 0) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (len < 0) return ray_error("corrupt", NULL);
 
         /* RAY_SYM: read attrs byte for adaptive width */
         uint8_t attrs = 0;
         if (type == RAY_SYM) {
-            if (*remaining < 1) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            if (*remaining < 1) return ray_error("corrupt", NULL);
             memcpy(&attrs, *pp, 1);
             *pp += 1; *remaining -= 1;
         }
 
         uint8_t esz = ray_sym_elem_size(type, attrs);
         if (esz > 0 && (uint64_t)len > SIZE_MAX / esz)
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         size_t data_size = (size_t)len * esz;
-        if (data_size > *remaining) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (data_size > *remaining) return ray_error("corrupt", NULL);
 
         ray_t* vec = (type == RAY_SYM)
             ? ray_sym_vec_new(attrs & RAY_SYM_W_MASK, len)
@@ -341,11 +341,11 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
     }
 
     if (type == RAY_LIST) {
-        if (*remaining < 8) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (*remaining < 8) return ray_error("corrupt", NULL);
         int64_t count;
         memcpy(&count, *pp, 8);
         *pp += 8; *remaining -= 8;
-        if (count < 0) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (count < 0) return ray_error("corrupt", NULL);
 
         ray_t* list = ray_list_new(count);
         if (!list || RAY_IS_ERR(list)) return list;
@@ -360,7 +360,7 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
     }
 
     if (type == RAY_TABLE) {
-        if (*remaining < 16) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (*remaining < 16) return ray_error("corrupt", NULL);
         int64_t ncols, nrows;
         memcpy(&ncols, *pp, 8);
         *pp += 8; *remaining -= 8;
@@ -368,12 +368,12 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
         *pp += 8; *remaining -= 8;
         (void)nrows;  /* nrows is reconstructed from columns */
 
-        if (ncols < 0) return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        if (ncols < 0) return ray_error("corrupt", NULL);
         ray_t* tbl = ray_table_new(ncols);
         if (!tbl || RAY_IS_ERR(tbl)) return tbl;
 
         for (int64_t c = 0; c < ncols; c++) {
-            if (*remaining < 8) { ray_release(tbl); return RAY_ERR_PTR(RAY_ERR_CORRUPT); }
+            if (*remaining < 8) { ray_release(tbl); return ray_error("corrupt", NULL); }
             int64_t name_sym;
             memcpy(&name_sym, *pp, 8);
             *pp += 8; *remaining -= 8;
@@ -387,7 +387,7 @@ static ray_t* col_read_recursive(const uint8_t** pp, size_t* remaining) {
         return tbl;
     }
 
-    return RAY_ERR_PTR(RAY_ERR_NYI);
+    return ray_error("nyi", NULL);
 }
 
 /* --------------------------------------------------------------------------
@@ -546,13 +546,13 @@ fsync_and_rename:;
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_col_load(const char* path) {
-    if (!path) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!path) return ray_error("io", NULL);
 
     /* Read file into temp mmap for validation, then copy to buddy block.
      * This avoids the mmap lifecycle problem (mmod=1 blocks are never freed). */
     size_t mapped_size = 0;
     void* ptr = ray_vm_map_file(path, &mapped_size);
-    if (!ptr) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!ptr) return ray_error("io", NULL);
 
     /* Check for extended format magic numbers (first 4 bytes) */
     if (mapped_size >= 4) {
@@ -575,7 +575,7 @@ ray_t* ray_col_load(const char* path) {
 
     if (mapped_size < 32) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     ray_t* tmp = (ray_t*)ptr;
@@ -583,26 +583,26 @@ ray_t* ray_col_load(const char* path) {
     /* Validate type from untrusted file data -- allowlist only */
     if (!is_serializable_type(tmp->type)) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
     }
     if (tmp->len < 0) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     uint8_t esz = ray_sym_elem_size(tmp->type, tmp->attrs);
     if (esz == 0 && tmp->len > 0) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_TYPE);
+        return ray_error("type", NULL);
     }
     if ((uint64_t)tmp->len * esz > SIZE_MAX - 32) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
     size_t data_size = (size_t)tmp->len * esz;
     if (32 + data_size > mapped_size) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     /* Check for appended ext_nullmap bitmap */
@@ -611,7 +611,7 @@ ray_t* ray_col_load(const char* path) {
     size_t bitmap_len = has_ext_nullmap ? ((size_t)tmp->len + 7) / 8 : 0;
     if (has_ext_nullmap && 32 + data_size + bitmap_len > mapped_size) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     /* RAY_SYM: fast-reject via sym count in header rc field.
@@ -622,7 +622,7 @@ ray_t* ray_col_load(const char* path) {
         uint32_t cur_sc = ray_sym_count();
         if (saved_sc > 0 && cur_sc > 0 && cur_sc < saved_sc) {
             ray_vm_unmap_file(ptr, mapped_size);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
     }
 
@@ -630,7 +630,7 @@ ray_t* ray_col_load(const char* path) {
     ray_t* vec = ray_alloc(data_size);
     if (!vec || RAY_IS_ERR(vec)) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return vec ? vec : RAY_ERR_PTR(RAY_ERR_OOM);
+        return vec ? vec : ray_error("oom", NULL);
     }
     uint8_t saved_order = vec->order;  /* preserve buddy order */
     memcpy(vec, ptr, 32 + data_size);
@@ -641,7 +641,7 @@ ray_t* ray_col_load(const char* path) {
         if (!ext || RAY_IS_ERR(ext)) {
             ray_vm_unmap_file(ptr, mapped_size);
             ray_free(vec);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         ext->len = (int64_t)bitmap_len;
         memcpy(ray_data(ext), (char*)ptr + 32 + data_size, bitmap_len);
@@ -682,15 +682,15 @@ ray_t* ray_col_load(const char* path) {
  * -------------------------------------------------------------------------- */
 
 ray_t* ray_col_mmap(const char* path) {
-    if (!path) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!path) return ray_error("io", NULL);
 
     size_t mapped_size = 0;
     void* ptr = ray_vm_map_file(path, &mapped_size);
-    if (!ptr) return RAY_ERR_PTR(RAY_ERR_IO);
+    if (!ptr) return ray_error("io", NULL);
 
     if (mapped_size < 32) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     ray_t* vec = (ray_t*)ptr;
@@ -698,23 +698,23 @@ ray_t* ray_col_mmap(const char* path) {
     /* Validate type from untrusted file data -- allowlist only */
     if (!is_serializable_type(vec->type)) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_NYI);
+        return ray_error("nyi", NULL);
     }
     if (vec->len < 0) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     uint8_t esz = ray_sym_elem_size(vec->type, vec->attrs);
     /* Overflow check: ensure len*esz fits in size_t with 32-byte header room */
     if ((uint64_t)vec->len > (SIZE_MAX - 32) / (esz ? esz : 1)) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
     size_t data_size = (size_t)vec->len * esz;
     if (32 + data_size > mapped_size) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+        return ray_error("corrupt", NULL);
     }
 
     /* Validate that file size matches expected layout.
@@ -725,7 +725,7 @@ ray_t* ray_col_mmap(const char* path) {
     size_t expected = 32 + data_size + bitmap_len;
     if (expected != mapped_size) {
         ray_vm_unmap_file(ptr, mapped_size);
-        return RAY_ERR_PTR(RAY_ERR_IO);
+        return ray_error("io", NULL);
     }
 
     /* RAY_SYM: fast-reject via sym count in header rc field + bounds check.
@@ -736,7 +736,7 @@ ray_t* ray_col_mmap(const char* path) {
         uint32_t cur_sc = ray_sym_count();
         if (saved_sc > 0 && cur_sc > 0 && cur_sc < saved_sc) {
             ray_vm_unmap_file(ptr, mapped_size);
-            return RAY_ERR_PTR(RAY_ERR_CORRUPT);
+            return ray_error("corrupt", NULL);
         }
         ray_err_t sym_err = validate_sym_bounds(
             (const char*)ptr + 32, vec->len, vec->attrs, cur_sc);
@@ -752,7 +752,7 @@ ray_t* ray_col_mmap(const char* path) {
         ray_t* ext = ray_vec_new(RAY_U8, (int64_t)bitmap_len);
         if (!ext || RAY_IS_ERR(ext)) {
             ray_vm_unmap_file(ptr, mapped_size);
-            return RAY_ERR_PTR(RAY_ERR_OOM);
+            return ray_error("oom", NULL);
         }
         ext->len = (int64_t)bitmap_len;
         memcpy(ray_data(ext), (char*)ptr + 32 + data_size, bitmap_len);
