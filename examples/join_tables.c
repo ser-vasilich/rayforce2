@@ -105,7 +105,7 @@ int main(void) {
 
     ray_t* result = ray_execute(g, join_op);
     if (RAY_IS_ERR(result)) {
-        printf("ERROR: %s\n", ray_err_str(RAY_ERR_CODE(result)));
+        printf("ERROR: %s\n", ray_err_code(result));
         ray_graph_free(g);
         ray_release(orders);
         ray_release(customers);

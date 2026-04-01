@@ -105,12 +105,9 @@ typedef enum {
     RAY_ERR_LIMIT
 } ray_err_t;
 
-/* DEPRECATED — legacy sentinel-pointer error macro (migration in progress) */
-#define RAY_ERR_CODE(p)  ((ray_err_t)(uintptr_t)(p)) /* DEPRECATED */
-
 #define RAY_IS_ERR(p)    ((p) != NULL && (uintptr_t)(p) > 31 && ((ray_t*)(p))->type == RAY_ERROR)
 
-const char* ray_err_str(ray_err_t e); /* DEPRECATED */
+const char* ray_err_str(ray_err_t e);
 
 /* ===== Core Type: ray_t (32-byte block/object header) ===== */
 
@@ -155,6 +152,7 @@ typedef union ray_t {
 /* Error object creation (defined in core/runtime.c) */
 ray_t* ray_error(const char* code, const char* fmt, ...);
 const char* ray_err_code_str(ray_err_t e);
+ray_err_t ray_err_from_obj(ray_t* err);
 const char* ray_err_code(ray_t* err);
 
 /* ===== Accessor Macros ===== */

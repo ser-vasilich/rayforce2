@@ -565,7 +565,7 @@ ray_err_t ray_sym_save(const char* path) {
                 ray_file_close(probe_fd);
                 ray_file_unlock(lock_fd);
                 ray_file_close(lock_fd);
-                return RAY_IS_ERR(existing) ? RAY_ERR_CODE(existing) : RAY_ERR_IO;
+                return RAY_IS_ERR(existing) ? ray_err_from_obj(existing) : RAY_ERR_IO;
             }
             if (errno != ENOENT) {
                 /* File may exist but we can't open it (EACCES, EMFILE,
@@ -710,7 +710,7 @@ ray_err_t ray_sym_load(const char* path) {
     /* Load the sym file as a RAY_LIST of -RAY_STR */
     ray_t* list = ray_col_load(path);
     if (!list || RAY_IS_ERR(list)) {
-        ray_err_t code = RAY_IS_ERR(list) ? RAY_ERR_CODE(list) : RAY_ERR_IO;
+        ray_err_t code = RAY_IS_ERR(list) ? ray_err_from_obj(list) : RAY_ERR_IO;
         ray_file_unlock(lock_fd);
         ray_file_close(lock_fd);
         return code;

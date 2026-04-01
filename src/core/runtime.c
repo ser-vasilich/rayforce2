@@ -60,6 +60,24 @@ const char* ray_err_code_str(ray_err_t e) {
     return codes[e];
 }
 
+ray_err_t ray_err_from_obj(ray_t* err) {
+    if (!err || err->type != RAY_ERROR) return RAY_ERR_DOMAIN;
+    const char* s = err->sdata;
+    int n = err->slen;
+    static const struct { const char* s; int len; ray_err_t e; } map[] = {
+        {"oom",     3, RAY_ERR_OOM},     {"type",    4, RAY_ERR_TYPE},
+        {"range",   5, RAY_ERR_RANGE},   {"length",  6, RAY_ERR_LENGTH},
+        {"rank",    4, RAY_ERR_RANK},    {"domain",  6, RAY_ERR_DOMAIN},
+        {"nyi",     3, RAY_ERR_NYI},     {"io",      2, RAY_ERR_IO},
+        {"schema",  6, RAY_ERR_SCHEMA},  {"corrupt", 7, RAY_ERR_CORRUPT},
+        {"cancel",  6, RAY_ERR_CANCEL},  {"parse",   5, RAY_ERR_PARSE},
+        {"name",    4, RAY_ERR_NAME},    {"limit",   5, RAY_ERR_LIMIT},
+    };
+    for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++)
+        if (n == map[i].len && memcmp(s, map[i].s, n) == 0) return map[i].e;
+    return RAY_ERR_DOMAIN;
+}
+
 /* ===== Error API ===== */
 
 ray_t* ray_verror(const char* code, const char* fmt, va_list ap) {
