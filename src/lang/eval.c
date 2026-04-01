@@ -6147,7 +6147,8 @@ static int8_t resolve_type_name(int64_t sym_id) {
     else if (len == 2 && memcmp(name, "B8", 2) == 0) result = RAY_BOOL;
     else if (len == 2 && memcmp(name, "U8", 2) == 0) result = RAY_U8;
     else if (len == 6 && memcmp(name, "SYMBOL", 6) == 0) result = RAY_SYM;
-    else if (len == 2 && memcmp(name, "C8", 2) == 0) result = RAY_STR;
+    else if (len == 3 && memcmp(name, "STR", 3) == 0) result = RAY_STR;
+    else if (len == 3 && memcmp(name, "F32", 3) == 0) result = RAY_F32;
     else if (len == 4 && memcmp(name, "DATE", 4) == 0) result = RAY_DATE;
     else if (len == 4 && memcmp(name, "TIME", 4) == 0) result = RAY_TIME;
     else if (len == 9 && memcmp(name, "TIMESTAMP", 9) == 0) result = RAY_TIMESTAMP;
