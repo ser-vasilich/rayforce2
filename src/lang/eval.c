@@ -274,7 +274,7 @@ ray_t* ray_add_fn(ray_t* a, ray_t* b) {
 
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot add %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) + as_f64(b));
@@ -324,7 +324,7 @@ ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
 
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot subtract %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) {
@@ -352,7 +352,7 @@ ray_t* ray_mul_fn(ray_t* a, ray_t* b) {
 
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot multiply %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) * as_f64(b));
@@ -398,7 +398,7 @@ ray_t* ray_div_fn(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot divide %s by %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     /* u8: unsigned byte division, no null sentinel — div by 0 returns 0 */
     if (a->type == -RAY_U8) {
         uint8_t bv = (uint8_t)as_i64(b);
@@ -488,7 +488,7 @@ ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot mod %s by %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
 
     /* u8: unsigned byte modulo, no null sentinel — mod by 0 returns 0 */
     if (b->type == -RAY_U8) {
@@ -577,7 +577,7 @@ ray_t* ray_gt_fn(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot compare %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(0);       /* null == null → not > */
     if (na) return make_bool(0);             /* null > X → false */
@@ -596,7 +596,7 @@ ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot compare %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(0);       /* null == null → not < */
     if (na) return make_bool(1);             /* null < X → true */
@@ -616,7 +616,7 @@ ray_t* ray_gte(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot compare %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(1);       /* null == null → >= true */
     if (na) return make_bool(0);             /* null >= X → false */
@@ -636,7 +636,7 @@ ray_t* ray_lte(ray_t* a, ray_t* b) {
     }
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot compare %s and %s",
-                         ray_type_name(a->type), ray_type_name(b->type));
+                         ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(1);       /* null == null → <= true */
     if (na) return make_bool(1);             /* null <= X → true */
