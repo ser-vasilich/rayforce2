@@ -22,16 +22,15 @@
  */
 
 #include "app/repl.h"
-#include "lang/eval.h"
-#include "mem/heap.h"
+#include "core/runtime.h"
 #include <rayforce.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 int main(int argc, char** argv) {
-    ray_heap_init();
-    ray_sym_init();
-    ray_lang_init();
+    ray_runtime_t* rt = ray_runtime_create(argc, argv);
+    if (!rt) { fprintf(stderr, "failed to create runtime\n"); return 1; }
 
     int rc = 0;
     int interactive = 0;
@@ -62,8 +61,6 @@ int main(int argc, char** argv) {
     }
 
 done:
-    ray_lang_destroy();
-    ray_sym_destroy();
-    ray_heap_destroy();
+    ray_runtime_destroy(rt);
     return rc;
 }

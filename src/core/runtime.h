@@ -68,7 +68,7 @@ typedef struct {
 
 /* ===== Runtime ===== */
 
-typedef struct {
+typedef struct ray_runtime_s {
     ray_vm_t       **vms;
     int32_t          n_vms;
     void            *pool;

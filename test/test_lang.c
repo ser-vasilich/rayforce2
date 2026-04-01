@@ -32,6 +32,13 @@
 #include "lang/eval.h"
 #include "app/format.h"
 
+/* Forward-declare runtime API to avoid ray_vm_t redefinition from runtime.h */
+struct ray_runtime_s;
+typedef struct ray_runtime_s ray_runtime_t;
+extern ray_runtime_t* ray_runtime_create(int argc, char** argv);
+extern void           ray_runtime_destroy(ray_runtime_t* rt);
+extern ray_runtime_t *__RUNTIME;
+
 /* ═══════════════════════════════════════════════════════════════
  * String-roundtrip assertion macros (mirrors rayforce test style)
  * ═══════════════════════════════════════════════════════════════ */
@@ -101,17 +108,13 @@
 
 static void* lang_setup(const void* params, void* user_data) {
     (void)params; (void)user_data;
-    ray_heap_init();
-    (void)ray_sym_init();
-    (void)ray_lang_init();
+    ray_runtime_create(0, NULL);
     return NULL;
 }
 
 static void lang_teardown(void* fixture) {
     (void)fixture;
-    ray_lang_destroy();
-    ray_sym_destroy();
-    ray_heap_destroy();
+    ray_runtime_destroy(__RUNTIME);
 }
 
 /* ---- Dummy function for testing ---- */

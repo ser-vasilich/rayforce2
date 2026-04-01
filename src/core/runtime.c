@@ -22,8 +22,14 @@
  */
 
 #include "runtime.h"
+#include "mem/heap.h"
+#include "mem/sys.h"
 #include <stdio.h>
 #include <string.h>
+
+/* Forward-declare lang init/destroy to avoid eval.h ray_vm_t conflict */
+extern ray_err_t ray_lang_init(void);
+extern void      ray_lang_destroy(void);
 
 /* ===== Global state ===== */
 
@@ -118,13 +124,56 @@ void ray_error_clear(void) {
     if (__VM) __VM->err.msg[0] = '\0';
 }
 
-/* ===== Lifecycle stubs (filled in Task 8) ===== */
+/* ===== Lifecycle ===== */
 
 ray_runtime_t* ray_runtime_create(int argc, char** argv) {
     (void)argc; (void)argv;
-    return NULL;
+
+    /* Init subsystems */
+    ray_heap_init();
+    ray_sym_init();
+
+    /* Allocate runtime via system allocator */
+    ray_runtime_t* rt = (ray_runtime_t*)ray_sys_alloc(sizeof(ray_runtime_t));
+    if (!rt) return NULL;
+    memset(rt, 0, sizeof(*rt));
+
+    /* Create main VM (id=0) */
+    rt->n_vms = 1;
+    rt->vms = (ray_vm_t**)ray_sys_alloc(sizeof(ray_vm_t*));
+    if (!rt->vms) { ray_sys_free(rt); return NULL; }
+    rt->vms[0] = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    if (!rt->vms[0]) { ray_sys_free(rt->vms); ray_sys_free(rt); return NULL; }
+    memset(rt->vms[0], 0, sizeof(ray_vm_t));
+    rt->vms[0]->id = 0;
+    __VM = rt->vms[0];
+
+    /* Init language (env + builtins) — must be after __VM is set */
+    ray_lang_init();
+
+    __RUNTIME = rt;
+    return rt;
 }
 
 void ray_runtime_destroy(ray_runtime_t* rt) {
-    (void)rt;
+    if (!rt) return;
+
+    ray_lang_destroy();
+
+    /* Free VMs */
+    for (int32_t i = 0; i < rt->n_vms; i++) {
+        ray_vm_t* vm = rt->vms[i];
+        if (vm->raise_val) ray_release(vm->raise_val);
+        if (vm->trace) { ray_release(vm->trace); vm->trace = NULL; }
+        ray_sys_free(vm);
+    }
+    ray_sys_free(rt->vms);
+
+    __VM = NULL;
+    __RUNTIME = NULL;
+
+    ray_sym_destroy();
+    ray_heap_destroy();
+
+    ray_sys_free(rt);
 }
