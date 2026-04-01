@@ -229,6 +229,10 @@ static void fmt_f64(fmt_buf_t* b, double val) {
     fmt_putn(b, tmp, (int32_t)n);
 }
 
+static void fmt_f32(fmt_buf_t* b, float val) {
+    fmt_f64(b, (double)val);
+}
+
 static void fmt_guid(fmt_buf_t* b, const uint8_t* bytes) {
     static const char hex[] = "0123456789abcdef";
     /* Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
@@ -384,6 +388,7 @@ static void fmt_raw_elem(fmt_buf_t* b, ray_t* vec, int64_t idx) {
         case RAY_I64:       fmt_puts(b, "0Nl"); return;
         case RAY_TIMESTAMP: fmt_puts(b, "0Np"); return;
         case RAY_F64:       fmt_puts(b, "0Nf"); return;
+        case RAY_F32:       fmt_puts(b, "0Ne"); return;
         case RAY_SYM:       fmt_puts(b, "0Ns"); return;
         default:            fmt_puts(b, "null"); return;
         }
@@ -396,6 +401,7 @@ static void fmt_raw_elem(fmt_buf_t* b, ray_t* vec, int64_t idx) {
     case RAY_I16:       fmt_i16(b, ((int16_t*)ray_data(vec))[idx]); break;
     case RAY_I32:       fmt_i32(b, ((int32_t*)ray_data(vec))[idx]); break;
     case RAY_I64:       fmt_i64(b, ((int64_t*)ray_data(vec))[idx]); break;
+    case RAY_F32:       fmt_f32(b, ((float*)ray_data(vec))[idx]); break;
     case RAY_F64:       fmt_f64(b, ((double*)ray_data(vec))[idx]); break;
     case RAY_DATE:      fmt_date(b, ((int32_t*)ray_data(vec))[idx]); break;
     case RAY_TIME:      fmt_time(b, ((int32_t*)ray_data(vec))[idx]); break;
@@ -929,6 +935,7 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
         case RAY_I16:  fmt_i16(b, obj->i16); break;
         case RAY_I32:  fmt_i32(b, obj->i32); break;
         case RAY_I64:  fmt_i64(b, obj->i64); break;
+        case RAY_F32:       fmt_f32(b, (float)obj->f64); break;
         case RAY_F64:       fmt_f64(b, obj->f64); break;
         case RAY_DATE:      fmt_date(b, obj->i32); break;
         case RAY_TIME:      fmt_time(b, obj->i32); break;
