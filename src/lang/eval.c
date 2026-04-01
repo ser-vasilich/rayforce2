@@ -25,6 +25,7 @@
 #include "lang/env.h"
 #include "lang/nfo.h"
 #include "lang/parse.h"
+#include "core/types.h"
 #include "io/csv.h"
 #include "ops/ops.h"
 #include "ops/pool.h"
@@ -3360,6 +3361,222 @@ ray_t* ray_reverse(ray_t* x) {
     }
     if (_bx) ray_release(_bx);
     return result;
+}
+
+/* ══════════════════════════════════════════
+ * Sorting builtins
+ * ══════════════════════════════════════════ */
+
+/* Reorder vector elements by an index array */
+static ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
+    int8_t type = vec->type;
+
+    if (type == RAY_STR) {
+        ray_t* result = ray_vec_new(type, n);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = n;
+        for (int64_t i = 0; i < n; i++) {
+            size_t slen;
+            const char* s = ray_str_vec_get(vec, idx[i], &slen);
+            result = ray_str_vec_set(result, i, s ? s : "", s ? slen : 0);
+        }
+        return result;
+    }
+
+    /* RAY_SYM: use adaptive width, create with matching width */
+    if (type == RAY_SYM) {
+        uint8_t w = vec->attrs & RAY_SYM_W_MASK;
+        ray_t* result = ray_sym_vec_new(w, n);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = n;
+        uint8_t esz = (uint8_t)RAY_SYM_ELEM(w);
+        char* src = (char*)ray_data(vec);
+        char* dst = (char*)ray_data(result);
+        for (int64_t i = 0; i < n; i++)
+            memcpy(dst + i * esz, src + idx[i] * esz, esz);
+        if (vec->sym_dict) {
+            ray_retain(vec->sym_dict);
+            result->sym_dict = vec->sym_dict;
+        }
+        return result;
+    }
+
+    ray_t* result = ray_vec_new(type, n);
+    if (RAY_IS_ERR(result)) return result;
+    result->len = n;
+    uint8_t esz = ray_type_sizes[type];
+    char* src = (char*)ray_data(vec);
+    char* dst = (char*)ray_data(result);
+    for (int64_t i = 0; i < n; i++)
+        memcpy(dst + i * esz, src + idx[i] * esz, esz);
+
+    return result;
+}
+
+/* (asc v) — sort vector ascending */
+static ray_t* ray_asc_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
+    if (!ray_is_vec(x)) return ray_error("type", "asc expects a vector");
+
+    int64_t n = ray_len(x);
+    if (n <= 1) { ray_retain(x); return x; }
+
+    uint8_t desc = 0;
+    ray_t* idx = ray_sort_indices(&x, &desc, NULL, 1, n);
+    if (RAY_IS_ERR(idx)) return idx;
+
+    ray_t* result = gather_by_idx(x, (int64_t*)ray_data(idx), n);
+    ray_release(idx);
+    return result;
+}
+
+/* (desc v) — sort vector descending */
+static ray_t* ray_desc_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (ray_is_atom(x)) { ray_retain(x); return x; }
+    if (!ray_is_vec(x)) return ray_error("type", "desc expects a vector");
+
+    int64_t n = ray_len(x);
+    if (n <= 1) { ray_retain(x); return x; }
+
+    uint8_t desc = 1;
+    ray_t* idx = ray_sort_indices(&x, &desc, NULL, 1, n);
+    if (RAY_IS_ERR(idx)) return idx;
+
+    ray_t* result = gather_by_idx(x, (int64_t*)ray_data(idx), n);
+    ray_release(idx);
+    return result;
+}
+
+/* (iasc v) — ascending sort indices */
+static ray_t* ray_iasc_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (!ray_is_vec(x)) return ray_error("type", "iasc expects a vector");
+
+    int64_t n = ray_len(x);
+    uint8_t desc = 0;
+    return ray_sort_indices(&x, &desc, NULL, 1, n);
+}
+
+/* (idesc v) — descending sort indices */
+static ray_t* ray_idesc_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (!ray_is_vec(x)) return ray_error("type", "idesc expects a vector");
+
+    int64_t n = ray_len(x);
+    uint8_t desc = 1;
+    return ray_sort_indices(&x, &desc, NULL, 1, n);
+}
+
+/* (rank v) — rank positions (inverse permutation of iasc) */
+static ray_t* ray_rank_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return x;
+    if (!ray_is_vec(x)) return ray_error("type", "rank expects a vector");
+
+    int64_t n = ray_len(x);
+    uint8_t desc = 0;
+    ray_t* idx = ray_sort_indices(&x, &desc, NULL, 1, n);
+    if (RAY_IS_ERR(idx)) return idx;
+
+    ray_t* result = ray_vec_new(RAY_I64, n);
+    if (RAY_IS_ERR(result)) { ray_release(idx); return result; }
+    result->len = n;
+
+    int64_t* idx_data = (int64_t*)ray_data(idx);
+    int64_t* rank_data = (int64_t*)ray_data(result);
+    for (int64_t i = 0; i < n; i++)
+        rank_data[idx_data[i]] = i;
+
+    ray_release(idx);
+    return result;
+}
+
+/* Helper: resolve key symbols to table columns for xasc/xdesc */
+static ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
+    if (!tbl || tbl->type != RAY_TABLE)
+        return ray_error("type", "xasc/xdesc expects a table as first argument");
+
+    /* keys can be a SYM atom, a SYM vector, or a list of SYM atoms */
+    int64_t n_keys = 0;
+    int64_t key_ids[16];
+
+    if (keys->type == -RAY_SYM) {
+        /* Single symbol atom */
+        key_ids[0] = keys->i64;
+        n_keys = 1;
+    } else if (keys->type == RAY_SYM) {
+        /* SYM vector */
+        int64_t* syms = (int64_t*)ray_data(keys);
+        n_keys = ray_len(keys);
+        if (n_keys > 16) return ray_error("limit", "xasc/xdesc: max 16 key columns");
+        for (int64_t i = 0; i < n_keys; i++) key_ids[i] = syms[i];
+    } else if (is_list(keys)) {
+        /* List of symbol atoms */
+        ray_t** elems = (ray_t**)ray_data(keys);
+        n_keys = ray_len(keys);
+        if (n_keys > 16) return ray_error("limit", "xasc/xdesc: max 16 key columns");
+        for (int64_t i = 0; i < n_keys; i++) {
+            if (elems[i]->type != -RAY_SYM)
+                return ray_error("type", "xasc/xdesc key must be a symbol");
+            key_ids[i] = elems[i]->i64;
+        }
+    } else {
+        return ray_error("type", "xasc/xdesc key must be a symbol or list of symbols");
+    }
+
+    if (n_keys == 0) { ray_retain(tbl); return tbl; }
+
+    int64_t nrows = ray_table_nrows(tbl);
+    if (nrows <= 1) { ray_retain(tbl); return tbl; }
+
+    /* Resolve key columns */
+    ray_t* key_cols[16];
+    for (int64_t i = 0; i < n_keys; i++) {
+        key_cols[i] = ray_table_get_col(tbl, key_ids[i]);
+        if (!key_cols[i])
+            return ray_error("domain", "xasc/xdesc: key column not found in table");
+    }
+
+    /* Build descs array */
+    uint8_t descs[16];
+    for (int64_t i = 0; i < n_keys; i++) descs[i] = descending;
+
+    ray_t* idx = ray_sort_indices(key_cols, descs, NULL, (uint8_t)n_keys, nrows);
+    if (RAY_IS_ERR(idx)) return idx;
+
+    int64_t* idx_data = (int64_t*)ray_data(idx);
+    int64_t ncols = ray_table_ncols(tbl);
+
+    ray_t* result = ray_table_new(ncols);
+    if (RAY_IS_ERR(result)) { ray_release(idx); return result; }
+
+    for (int64_t c = 0; c < ncols; c++) {
+        ray_t* col = ray_table_get_col_idx(tbl, c);
+        int64_t name_id = ray_table_col_name(tbl, c);
+        ray_t* gathered = gather_by_idx(col, idx_data, nrows);
+        if (RAY_IS_ERR(gathered)) {
+            ray_release(idx);
+            ray_release(result);
+            return gathered;
+        }
+        result = ray_table_add_col(result, name_id, gathered);
+        ray_release(gathered);
+        if (RAY_IS_ERR(result)) { ray_release(idx); return result; }
+    }
+
+    ray_release(idx);
+    return result;
+}
+
+/* (xasc tbl keys) — sort table ascending by key columns */
+static ray_t* ray_xasc_fn(ray_t* tbl, ray_t* keys) {
+    return sort_table_by_keys(tbl, keys, 0);
+}
+
+/* (xdesc tbl keys) — sort table descending by key columns */
+static ray_t* ray_xdesc_fn(ray_t* tbl, ray_t* keys) {
+    return sort_table_by_keys(tbl, keys, 1);
 }
 
 /* ══════════════════════════════════════════
@@ -9215,6 +9432,15 @@ static void ray_register_builtins(void) {
     register_binary("find",    RAY_FN_NONE, ray_find);
     register_unary("reverse",  RAY_FN_NONE, ray_reverse);
     register_unary("til",      RAY_FN_NONE, ray_til);
+
+    /* Sorting operations */
+    register_unary("asc",      RAY_FN_NONE, ray_asc_fn);
+    register_unary("desc",     RAY_FN_NONE, ray_desc_fn);
+    register_unary("iasc",     RAY_FN_NONE, ray_iasc_fn);
+    register_unary("idesc",    RAY_FN_NONE, ray_idesc_fn);
+    register_unary("rank",     RAY_FN_NONE, ray_rank_fn);
+    register_binary("xasc",    RAY_FN_NONE, ray_xasc_fn);
+    register_binary("xdesc",   RAY_FN_NONE, ray_xdesc_fn);
 
     /* Table operations */
     register_vary("list",      RAY_FN_NONE, ray_list);
