@@ -47,14 +47,6 @@ ray_t* ray_u8(uint8_t val) {
     return v;
 }
 
-ray_t* ray_char(char val) {
-    ray_t* v = ray_alloc(0);
-    if (RAY_IS_ERR(v)) return v;
-    v->type = -RAY_CHAR;
-    v->c8 = val;
-    return v;
-}
-
 ray_t* ray_i16(int16_t val) {
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
@@ -110,7 +102,7 @@ ray_t* ray_str(const char* s, size_t len) {
     size_t data_size = len + 1;
     ray_t* chars = ray_alloc(data_size);
     if (!chars || RAY_IS_ERR(chars)) return chars;
-    chars->type = RAY_CHAR;
+    chars->type = RAY_U8;
     chars->len = (int64_t)len;
     memcpy(ray_data(chars), s, len);
     ((char*)ray_data(chars))[len] = '\0';

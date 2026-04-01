@@ -443,14 +443,14 @@ static ray_t* parse_symbol(ray_parser_t *p) {
         if (esc[esc_len] == '\'') {
             /* Closing quote found — it's a char literal */
             p->pos = esc + esc_len + 1;
-            return ray_char(ch);
+            return ray_str(&ch, 1);
         }
         /* Not a char literal — fall through to symbol parsing */
     } else if (start[1] == '\'') {
         /* Simple char literal like 'a' */
         char ch = *start;
         p->pos = start + 2; /* skip char + closing quote */
-        return ray_char(ch);
+        return ray_str(&ch, 1);
     }
 
     /* Regular symbol */
