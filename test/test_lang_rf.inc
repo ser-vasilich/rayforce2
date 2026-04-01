@@ -3887,7 +3887,7 @@ static MunitResult test_rf_in(const void* params, void* fixture) {
     ASSERT_EQ("(in 2 2)", "true");
     ASSERT_EQ("(in false [true false])", "true");
     ASSERT_EQ("(in 0x12 [0x12 0x11 0x10])", "true");
-    ASSERT_EQ("(in 'e' \"test\")", "true");
+    ASSERT_EQ("(in 'e' \"test\")", "[true]");
     ASSERT_EQ("(in \"asd\" \"asd\")", "[true true true]");
     ASSERT_EQ("(in \"asd\" 'a')", "[true false false]");
     ASSERT_EQ("(in 1h [2h 3h])", "false");
@@ -3917,8 +3917,8 @@ static MunitResult test_rf_in(const void* params, void* fixture) {
     ASSERT_EQ("(in (list 3h 2i 5 0Nl) [1 0Nl 2 3])", "(list true true false true)");
     ASSERT_EQ("(in [0 1 0Nl] 0Nl)", "[false false true]");
     ASSERT_EQ("(in [3] (list 3i 2 5))", "[true]");
-    ASSERT_EQ("(in 'a' (list \"iu\" \"asd\"))", "false");
-    ASSERT_EQ("(in 'a' (list \"iu\" \"asd\" 'a'))", "true");
+    ASSERT_EQ("(in 'a' (list \"iu\" \"asd\"))", "[false]");
+    ASSERT_EQ("(in 'a' (list \"iu\" \"asd\" 'a'))", "[true]");
     ASSERT_EQ("(in \"asd\" (list \"iu\" \"asd\"))", "[false false false]");
     ASSERT_EQ("(in \"asd\" (list 'd' \"asd\"))", "[false false true]");
     ASSERT_EQ("(in (list \"asd\") (list \"iu\" \"asd\"))", "(list [false false false])");      //(list true);
@@ -4954,15 +4954,15 @@ static MunitResult test_rf_cast(const void* params, void* fixture) {
     ASSERT_EQ("(as 'C8 2024.03.20)", "\"2024.03.20\"");
     ASSERT_EQ("(as 'C8 12:30:45.123)", "\"12:30:45.123\"");
 
-    // ========== CHAR ATOM CASTS ==========
-    // c8 <- symbol (get first character)
-    ASSERT_EQ("(as 'c8 'a)", "'a'");
-    ASSERT_EQ("(as 'c8 'hello)", "'h'");
-    ASSERT_EQ("(as 'c8 'XYZ)", "'X'");
-    // c8 <- C8 (get first character)
-    ASSERT_EQ("(as 'c8 \"a\")", "'a'");
-    ASSERT_EQ("(as 'c8 \"hello\")", "'h'");
-    ASSERT_EQ("(as 'c8 \"XYZ\")", "'X'");
+    // ========== SINGLE-CHAR STRING CASTS ==========
+    // c8 <- symbol (get first character as 1-char string)
+    ASSERT_EQ("(as 'c8 'a)", "\"a\"");
+    ASSERT_EQ("(as 'c8 'hello)", "\"h\"");
+    ASSERT_EQ("(as 'c8 'XYZ)", "\"X\"");
+    // c8 <- string (get first character as 1-char string)
+    ASSERT_EQ("(as 'c8 \"a\")", "\"a\"");
+    ASSERT_EQ("(as 'c8 \"hello\")", "\"h\"");
+    ASSERT_EQ("(as 'c8 \"XYZ\")", "\"X\"");
 
     // ========== GUID CASTS ==========
     ASSERT_EQ("(type (as 'guid \"d49f18a4-1969-49e8-9b8a-6bb9a4832eea\"))", "'guid");

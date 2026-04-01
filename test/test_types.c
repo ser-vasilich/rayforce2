@@ -33,7 +33,6 @@ static MunitResult test_type_sizes_known_types(const void* params, void* fixture
 
     munit_assert_uint(ray_type_sizes[RAY_BOOL], ==, 1);
     munit_assert_uint(ray_type_sizes[RAY_U8],   ==, 1);
-    munit_assert_uint(ray_type_sizes[RAY_CHAR], ==, 1);
     munit_assert_uint(ray_type_sizes[RAY_I16],  ==, 2);
     munit_assert_uint(ray_type_sizes[RAY_I32],  ==, 4);
     munit_assert_uint(ray_type_sizes[RAY_I64],  ==, 8);

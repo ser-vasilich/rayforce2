@@ -76,16 +76,17 @@ static MunitResult test_atom_u8(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
-/* ---- Char atom --------------------------------------------------------- */
+/* ---- Single-char string atom ------------------------------------------ */
 
-static MunitResult test_atom_char(const void* params, void* fixture) {
+static MunitResult test_atom_single_char_str(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    ray_t* v = ray_char('Z');
+    ray_t* v = ray_str("Z", 1);
     munit_assert_ptr_not_null(v);
     munit_assert_true(ray_is_atom(v));
-    munit_assert_int(v->type, ==, -RAY_CHAR);
-    munit_assert_int(v->c8, ==, 'Z');
+    munit_assert_int(v->type, ==, -RAY_STR);
+    munit_assert_uint(v->slen, ==, 1);
+    munit_assert_int(v->sdata[0], ==, 'Z');
     ray_release(v);
 
     return MUNIT_OK;
@@ -198,7 +199,7 @@ static MunitResult test_atom_str_long(const void* params, void* fixture) {
     /* For long strings, obj points to a CHAR vector */
     ray_t* chars = v->obj;
     munit_assert_ptr_not_null(chars);
-    munit_assert_int(chars->type, ==, RAY_CHAR);
+    munit_assert_int(chars->type, ==, RAY_U8);
     munit_assert_int(chars->len, ==, (int64_t)len);
     munit_assert_memory_equal(len, ray_data(chars), s);
 
@@ -328,7 +329,7 @@ static MunitResult test_is_atom(const void* params, void* fixture) {
 static MunitTest atom_tests[] = {
     { "/bool",      test_atom_bool,      atom_setup, atom_teardown, 0, NULL },
     { "/u8",        test_atom_u8,        atom_setup, atom_teardown, 0, NULL },
-    { "/char",      test_atom_char,      atom_setup, atom_teardown, 0, NULL },
+    { "/single_char_str", test_atom_single_char_str, atom_setup, atom_teardown, 0, NULL },
     { "/i16",       test_atom_i16,       atom_setup, atom_teardown, 0, NULL },
     { "/i32",       test_atom_i32,       atom_setup, atom_teardown, 0, NULL },
     { "/i64",       test_atom_i64,       atom_setup, atom_teardown, 0, NULL },
