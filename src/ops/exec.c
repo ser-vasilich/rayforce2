@@ -1959,7 +1959,7 @@ static ray_t* exec_count_distinct(ray_graph_t* g, ray_op_t* op, ray_t* input) {
 
     /* Only numeric/ordinal/sym column types are supported */
     switch (in_type) {
-    case RAY_BOOL: case RAY_U8: case RAY_CHAR:
+    case RAY_BOOL: case RAY_U8:
     case RAY_I16: case RAY_I32: case RAY_I64:
     case RAY_F64: case RAY_DATE: case RAY_TIME: case RAY_TIMESTAMP:
     case RAY_SYM:

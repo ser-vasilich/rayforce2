@@ -273,7 +273,7 @@ ray_t* ray_vec_concat(ray_t* a, ray_t* b) {
                 ray_release(result);
                 return ray_error("oom", NULL);
             }
-            result->str_pool->type = RAY_CHAR;
+            result->str_pool->type = RAY_U8;
             result->str_pool->len = total_pool;
             char* pool_dst = (char*)ray_data(result->str_pool);
             if (a_pool_size > 0)
@@ -583,7 +583,7 @@ ray_t* ray_str_vec_append(ray_t* vec, const char* s, size_t len) {
                 vec->str_pool = NULL;
                 goto fail_oom;
             }
-            vec->str_pool->type = RAY_CHAR;
+            vec->str_pool->type = RAY_U8;
             vec->str_pool->len = 0;
         }
 
@@ -718,7 +718,7 @@ ray_t* ray_str_vec_set(ray_t* vec, int64_t idx, const char* s, size_t len) {
                 vec->str_pool = NULL;
                 goto fail_oom;
             }
-            vec->str_pool->type = RAY_CHAR;
+            vec->str_pool->type = RAY_U8;
             vec->str_pool->len = 0;
         }
 
@@ -801,7 +801,7 @@ ray_t* ray_str_vec_compact(ray_t* vec) {
 
     ray_t* new_pool = ray_alloc(live_size);
     if (!new_pool || RAY_IS_ERR(new_pool)) return vec;
-    new_pool->type = RAY_CHAR;
+    new_pool->type = RAY_U8;
     new_pool->len = 0;
     memset(new_pool->nullmap, 0, 16);
 

@@ -95,7 +95,7 @@ static ray_t* sym_str_arena(ray_arena_t* arena, const char* s, size_t len) {
     size_t chars_block = ((32 + data_size) + 31) & ~(size_t)31;  /* align up to 32 */
     ray_t* chars = ray_arena_alloc(arena, chars_block + 32 - 32);  /* chars_block - 32 (header) + 32 (str header) */
     if (!chars) return NULL;
-    chars->type = RAY_CHAR;
+    chars->type = RAY_U8;
     chars->len = (int64_t)len;
     memcpy(ray_data(chars), s, len);
     ((char*)ray_data(chars))[len] = '\0';

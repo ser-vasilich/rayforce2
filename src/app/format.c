@@ -143,7 +143,7 @@ const char* ray_type_name(int8_t type) {
     case RAY_LIST:      return "list";
     case RAY_BOOL:      return "b8";
     case RAY_U8:        return "u8";
-    case RAY_CHAR:      return "c8";
+
     case RAY_I16:       return "i16";
     case RAY_I32:       return "i32";
     case RAY_I64:       return "i64";
@@ -171,19 +171,6 @@ static void fmt_u8(fmt_buf_t* b, uint8_t val) {
     fmt_printf(b, "0x%02x", val);
 }
 
-static void fmt_char(fmt_buf_t* b, char val, int full) {
-    (void)full;
-    fmt_putc(b, '\'');
-    switch (val) {
-    case '\0': /* empty char literal */ break;
-    case '\n': fmt_puts(b, "\\n"); break;
-    case '\t': fmt_puts(b, "\\t"); break;
-    case '\r': fmt_puts(b, "\\r"); break;
-    case '"':  fmt_puts(b, "\\\""); break;
-    default:   fmt_putc(b, val); break;
-    }
-    fmt_putc(b, '\'');
-}
 
 static void fmt_i16(fmt_buf_t* b, int16_t val) {
     if (val == INT16_MIN) { fmt_puts(b, "0Nh"); return; }
@@ -405,7 +392,7 @@ static void fmt_raw_elem(fmt_buf_t* b, ray_t* vec, int64_t idx) {
     switch (vec->type) {
     case RAY_BOOL:      fmt_bool(b, ((bool*)ray_data(vec))[idx]); break;
     case RAY_U8:        fmt_u8(b, ((uint8_t*)ray_data(vec))[idx]); break;
-    case RAY_CHAR:      fmt_char(b, ((char*)ray_data(vec))[idx], 0); break;
+
     case RAY_I16:       fmt_i16(b, ((int16_t*)ray_data(vec))[idx]); break;
     case RAY_I32:       fmt_i32(b, ((int32_t*)ray_data(vec))[idx]); break;
     case RAY_I64:       fmt_i64(b, ((int64_t*)ray_data(vec))[idx]); break;
@@ -938,7 +925,7 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
         switch (-type) {
         case RAY_BOOL: fmt_bool(b, obj->b8); break;
         case RAY_U8:   fmt_u8(b, obj->u8); break;
-        case RAY_CHAR: fmt_char(b, obj->c8, mode > 0); break;
+
         case RAY_I16:  fmt_i16(b, obj->i16); break;
         case RAY_I32:  fmt_i32(b, obj->i32); break;
         case RAY_I64:  fmt_i64(b, obj->i64); break;
