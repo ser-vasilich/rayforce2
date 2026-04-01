@@ -9971,11 +9971,403 @@ static ray_t* ray_modify_fn(ray_t** args, int64_t n) {
     return result;
 }
 
-/* (pivot table index_col column_col value_col agg_fn) — pivot table (stub) */
+/* Convert a scalar value to a symbol ID for use as a column name.
+ * SYM atoms return their ID directly; others are formatted as strings. */
+static int64_t pivot_val_to_sym(ray_t* val) {
+    if (val->type == -RAY_SYM) return val->i64;
+    /* For other types, format as string and intern */
+    char buf[128];
+    int len = 0;
+    if (val->type == -RAY_I64) {
+        len = snprintf(buf, sizeof(buf), "%ld", (long)val->i64);
+    } else if (val->type == -RAY_F64) {
+        len = snprintf(buf, sizeof(buf), "%g", val->f64);
+    } else if (val->type == -RAY_BOOL) {
+        len = snprintf(buf, sizeof(buf), "%s", val->b8 ? "true" : "false");
+    } else if ((-val->type) == RAY_STR) {
+        const char* s = ray_str_ptr(val);
+        size_t slen = ray_str_len(val);
+        len = (int)(slen < sizeof(buf) - 1 ? slen : sizeof(buf) - 1);
+        memcpy(buf, s, (size_t)len);
+    } else {
+        len = snprintf(buf, sizeof(buf), "col%ld", (long)val->i64);
+    }
+    return ray_sym_intern(buf, (size_t)len);
+}
+
+/* (pivot table index_col pivot_col value_col agg_fn) — pivot table */
 static ray_t* ray_pivot_fn(ray_t** args, int64_t n) {
-    (void)args;
-    if (n < 5) return ray_error("arity", "pivot expects 5 arguments");
-    return ray_error("nyi", "pivot not yet implemented -- use select with group for now");
+    if (n != 5) return ray_error("arity", "pivot expects 5 arguments: table, index, pivot-col, value-col, agg-fn");
+    ray_t* tbl            = args[0];
+    ray_t* index_arg      = args[1];   /* sym atom or list of syms */
+    ray_t* pivot_col_name = args[2];   /* sym atom */
+    ray_t* value_col_name = args[3];   /* sym atom */
+    ray_t* agg_fn         = args[4];   /* function */
+
+    if (tbl->type != RAY_TABLE)
+        return ray_error("type", "pivot: first argument must be a table");
+    if (pivot_col_name->type != -RAY_SYM)
+        return ray_error("type", "pivot: pivot-col must be a symbol");
+    if (value_col_name->type != -RAY_SYM)
+        return ray_error("type", "pivot: value-col must be a symbol");
+    if (agg_fn->type != RAY_UNARY && agg_fn->type != RAY_LAMBDA &&
+        agg_fn->type != RAY_VARY)
+        return ray_error("type", "pivot: agg-fn must be a function");
+
+    /* Determine index columns */
+    int64_t idx_syms[16];
+    int64_t n_idx = 0;
+    if (index_arg->type == -RAY_SYM) {
+        idx_syms[0] = index_arg->i64;
+        n_idx = 1;
+    } else if (index_arg->type == RAY_LIST || ray_is_vec(index_arg)) {
+        int64_t len = ray_len(index_arg);
+        if (len > 16) return ray_error("limit", "pivot: too many index columns");
+        for (int64_t i = 0; i < len; i++) {
+            int alloc = 0;
+            ray_t* elem = collection_elem(index_arg, i, &alloc);
+            if (RAY_IS_ERR(elem)) return elem;
+            if (elem->type != -RAY_SYM) {
+                if (alloc) ray_release(elem);
+                return ray_error("type", "pivot: index columns must be symbols");
+            }
+            idx_syms[i] = elem->i64;
+            if (alloc) ray_release(elem);
+        }
+        n_idx = len;
+    } else {
+        return ray_error("type", "pivot: index must be a symbol or list of symbols");
+    }
+
+    /* Get pivot column, value column */
+    ray_t* pcol = ray_table_get_col(tbl, pivot_col_name->i64);
+    if (!pcol) return ray_error("domain", "pivot: pivot column not found");
+    ray_t* vcol = ray_table_get_col(tbl, value_col_name->i64);
+    if (!vcol) return ray_error("domain", "pivot: value column not found");
+
+    /* Get index columns */
+    ray_t* icols[16];
+    for (int64_t i = 0; i < n_idx; i++) {
+        icols[i] = ray_table_get_col(tbl, idx_syms[i]);
+        if (!icols[i]) return ray_error("domain", "pivot: index column not found");
+    }
+
+    /* Get distinct values of pivot column */
+    ray_retain(pcol);
+    ray_t* dvals = ray_distinct_fn(pcol);
+    ray_release(pcol);
+    if (RAY_IS_ERR(dvals)) return dvals;
+
+    int64_t ndist = ray_len(dvals);
+    if (ndist == 0) { ray_release(dvals); return ray_table_new(0); }
+
+    /* Build result table incrementally via left-joins.
+     * Start with NULL result, build per-pivot-value sub-tables. */
+    ray_t* result = NULL;
+
+    for (int64_t d = 0; d < ndist; d++) {
+        /* Get the d-th distinct value as an atom */
+        int alloc_dv = 0;
+        ray_t* dval = collection_elem(dvals, d, &alloc_dv);
+        if (RAY_IS_ERR(dval)) {
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return dval;
+        }
+
+        /* Create boolean mask: pivot_col == dval (element-wise) */
+        ray_retain(pcol);
+        ray_t* mask = atomic_map_binary(ray_eq_fn, pcol, dval);
+        ray_release(pcol);
+        if (RAY_IS_ERR(mask)) {
+            if (alloc_dv) ray_release(dval);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return mask;
+        }
+
+        /* Get indices where mask is true */
+        ray_t* widx = ray_where_fn(mask);
+        ray_release(mask);
+        if (RAY_IS_ERR(widx)) {
+            if (alloc_dv) ray_release(dval);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return widx;
+        }
+
+        int64_t nsel = widx->len;
+        if (nsel == 0) {
+            ray_release(widx);
+            if (alloc_dv) ray_release(dval);
+            continue;
+        }
+        int64_t* widx_data = (int64_t*)ray_data(widx);
+
+        /* Gather value column by indices */
+        ray_t* gval = gather_by_idx(vcol, widx_data, nsel);
+        if (RAY_IS_ERR(gval)) {
+            ray_release(widx);
+            if (alloc_dv) ray_release(dval);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return gval;
+        }
+
+        /* Gather index columns by indices */
+        ray_t* gidx[16] = {0};
+        for (int64_t i = 0; i < n_idx; i++) {
+            gidx[i] = gather_by_idx(icols[i], widx_data, nsel);
+            if (RAY_IS_ERR(gidx[i])) {
+                for (int64_t j = 0; j < i; j++) ray_release(gidx[j]);
+                ray_release(gval); ray_release(widx);
+                if (alloc_dv) ray_release(dval);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return gidx[i];
+            }
+        }
+        ray_release(widx);
+
+        /* Group by index column(s).
+         * For single index, group directly. For multi-index, we need to
+         * create a composite key. For simplicity, use the first index column. */
+        ray_t* grp_col = gidx[0];
+        if (n_idx > 1) {
+            /* Multi-index: create a list of tuples for grouping */
+            ray_t* keys_list = ray_alloc(nsel * sizeof(ray_t*));
+            if (!keys_list) {
+                for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                ray_release(gval);
+                if (alloc_dv) ray_release(dval);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return ray_error("oom", NULL);
+            }
+            keys_list->type = RAY_LIST;
+            keys_list->len = nsel;
+            ray_t** kl = (ray_t**)ray_data(keys_list);
+            for (int64_t r = 0; r < nsel; r++) {
+                /* Build a list key from all index columns */
+                ray_t* key = ray_list_new((int32_t)n_idx);
+                if (RAY_IS_ERR(key)) {
+                    for (int64_t rr = 0; rr < r; rr++) ray_release(kl[rr]);
+                    ray_release(keys_list);
+                    for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                    ray_release(gval);
+                    if (alloc_dv) ray_release(dval);
+                    if (result) ray_release(result);
+                    ray_release(dvals);
+                    return key;
+                }
+                for (int64_t ci = 0; ci < n_idx; ci++) {
+                    int alloc_e = 0;
+                    ray_t* e = collection_elem(gidx[ci], r, &alloc_e);
+                    if (!alloc_e) ray_retain(e);
+                    key = ray_list_append(key, e);
+                    ray_release(e);
+                }
+                kl[r] = key;
+            }
+            grp_col = keys_list;
+        } else {
+            ray_retain(grp_col);
+        }
+
+        ray_t* groups = ray_group_fn(grp_col);
+        ray_release(grp_col);
+        if (RAY_IS_ERR(groups)) {
+            for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+            ray_release(gval);
+            if (alloc_dv) ray_release(dval);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return groups;
+        }
+
+        /* groups is a dict: {key: [indices], ...}
+         * Iterate to build aggregated column */
+        ray_t** g_items = (ray_t**)ray_data(groups);
+        int64_t g_len = groups->len;
+        int64_t ngroups = g_len / 2;
+
+        /* Column name from pivot value */
+        int64_t col_name_id = pivot_val_to_sym(dval);
+        if (alloc_dv) ray_release(dval);
+
+        /* Build sub-table: index cols + one aggregated value column */
+        ray_t* sub = ray_table_new(n_idx + 1);
+        if (RAY_IS_ERR(sub)) {
+            for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+            ray_release(gval); ray_release(groups);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return sub;
+        }
+
+        /* For each index column, gather the first element from each group
+         * (all elements in a group have the same index value) */
+        for (int64_t ci = 0; ci < n_idx; ci++) {
+            ray_t* idx_out;
+            if (ngroups > 0) {
+                ray_t* fi_block = ray_alloc(ngroups * sizeof(int64_t));
+                if (!fi_block) {
+                    ray_release(sub);
+                    for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                    ray_release(gval); ray_release(groups);
+                    if (result) ray_release(result);
+                    ray_release(dvals);
+                    return ray_error("oom", NULL);
+                }
+                int64_t* first_idx2 = (int64_t*)ray_data(fi_block);
+                for (int64_t g = 0; g < ngroups; g++) {
+                    ray_t* idxv = g_items[g * 2 + 1]; /* index vector for group g */
+                    int64_t first = ((int64_t*)ray_data(idxv))[0];
+                    first_idx2[g] = first;
+                }
+                idx_out = gather_by_idx(gidx[ci], first_idx2, ngroups);
+                ray_free(fi_block);
+            } else {
+                idx_out = ray_vec_new(gidx[ci]->type, 0);
+            }
+            if (RAY_IS_ERR(idx_out)) {
+                ray_release(sub);
+                for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                ray_release(gval); ray_release(groups);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return idx_out;
+            }
+            sub = ray_table_add_col(sub, idx_syms[ci], idx_out);
+            ray_release(idx_out);
+            if (RAY_IS_ERR(sub)) {
+                for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                ray_release(gval); ray_release(groups);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return sub;
+            }
+        }
+
+        /* Build the aggregated value column */
+        ray_t* agg_results = ray_alloc(ngroups * sizeof(ray_t*));
+        if (!agg_results) {
+            ray_release(sub);
+            for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+            ray_release(gval); ray_release(groups);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return ray_error("oom", NULL);
+        }
+        agg_results->type = RAY_LIST;
+        agg_results->len = ngroups;
+        ray_t** agg_out = (ray_t**)ray_data(agg_results);
+
+        for (int64_t g = 0; g < ngroups; g++) {
+            ray_t* idxv = g_items[g * 2 + 1];
+            int64_t gi_n = idxv->len;
+            int64_t* gi_data = (int64_t*)ray_data(idxv);
+
+            /* Gather value column elements for this group */
+            ray_t* subset = gather_by_idx(gval, gi_data, gi_n);
+            if (RAY_IS_ERR(subset)) {
+                for (int64_t gg = 0; gg < g; gg++) ray_release(agg_out[gg]);
+                ray_release(agg_results); ray_release(sub);
+                for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                ray_release(gval); ray_release(groups);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return subset;
+            }
+
+            /* Apply aggregation function */
+            ray_t* agg_val = call_fn1(agg_fn, subset);
+            ray_release(subset);
+            if (RAY_IS_ERR(agg_val)) {
+                for (int64_t gg = 0; gg < g; gg++) ray_release(agg_out[gg]);
+                ray_release(agg_results); ray_release(sub);
+                for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+                ray_release(gval); ray_release(groups);
+                if (result) ray_release(result);
+                ray_release(dvals);
+                return agg_val;
+            }
+            agg_out[g] = agg_val;
+        }
+
+        /* Convert agg_results list to a typed vector if possible */
+        int8_t agg_type = RAY_I64; /* default */
+        if (ngroups > 0) {
+            ray_t* first = agg_out[0];
+            if (first->type == -RAY_F64) agg_type = RAY_F64;
+            else if (first->type == -RAY_I64) agg_type = RAY_I64;
+            else if (first->type == -RAY_BOOL) agg_type = RAY_BOOL;
+            else if (first->type == -RAY_SYM) agg_type = RAY_SYM;
+        }
+        ray_t* agg_vec = list_to_typed_vec(agg_results, agg_type);
+        /* list_to_typed_vec takes ownership of agg_results — do not release */
+        if (RAY_IS_ERR(agg_vec)) {
+            ray_release(sub);
+            for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+            ray_release(gval); ray_release(groups);
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return agg_vec;
+        }
+
+        sub = ray_table_add_col(sub, col_name_id, agg_vec);
+        ray_release(agg_vec);
+        ray_release(groups);
+        for (int64_t i = 0; i < n_idx; i++) ray_release(gidx[i]);
+        ray_release(gval);
+
+        if (RAY_IS_ERR(sub)) {
+            if (result) ray_release(result);
+            ray_release(dvals);
+            return sub;
+        }
+
+        /* Left-join with running result */
+        if (!result) {
+            result = sub;
+        } else {
+            /* Build key list for left-join */
+            ray_t* key_list = ray_list_new((int32_t)n_idx);
+            if (RAY_IS_ERR(key_list)) {
+                ray_release(result); ray_release(sub); ray_release(dvals);
+                return key_list;
+            }
+            for (int64_t ci = 0; ci < n_idx; ci++) {
+                ray_t* ks = ray_sym(idx_syms[ci]);
+                if (RAY_IS_ERR(ks)) {
+                    ray_release(key_list); ray_release(result);
+                    ray_release(sub); ray_release(dvals);
+                    return ks;
+                }
+                key_list = ray_list_append(key_list, ks);
+                ray_release(ks);
+                if (RAY_IS_ERR(key_list)) {
+                    ray_release(result); ray_release(sub); ray_release(dvals);
+                    return key_list;
+                }
+            }
+
+            ray_t* join_args[3] = { result, sub, key_list };
+            ray_t* joined = ray_left_join(join_args, 3);
+            ray_release(result);
+            ray_release(sub);
+            ray_release(key_list);
+            if (RAY_IS_ERR(joined)) {
+                ray_release(dvals);
+                return joined;
+            }
+            result = joined;
+        }
+    }
+
+    ray_release(dvals);
+    if (!result) return ray_table_new(0);
+    return result;
 }
 
 /* (sysinfo) — return system information */
