@@ -925,9 +925,10 @@ static void fmt_table(fmt_buf_t* b, ray_t* tbl, int mode) {
 static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
     if (!obj) { fmt_puts(b, "null"); return; }
     if (RAY_IS_ERR(obj)) {
-        ray_err_t code = RAY_ERR_CODE(obj);
+        char code[8] = {0};
+        memcpy(code, obj->sdata, obj->slen < 7 ? obj->slen : 7);
         fmt_puts(b, "error: ");
-        fmt_puts(b, ray_err_str(code));
+        fmt_puts(b, code);
         return;
     }
 

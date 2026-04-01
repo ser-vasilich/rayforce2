@@ -58,6 +58,8 @@
 #include <sys/sysctl.h>
 #endif
 
+/* Forward declaration — defined in core/runtime.c */
+const char* ray_error_msg(void);
 
 /* ===== Progress bar renderer (DuckDB-style) ===== */
 
@@ -221,13 +223,14 @@ static void print_banner(void) {
 
 /* Format a rich error message with source snippet, carets, and stack trace. */
 static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_color) {
-    ray_err_t code = RAY_ERR_CODE(err);
-    const char* msg = ray_err_str(code);
+    char err_code[8] = {0};
+    memcpy(err_code, err->sdata, err->slen < 7 ? err->slen : 7);
+    const char* detail = ray_error_msg();
 
     /* Header: "  x Error: type" */
     fprintf(fp, "\n");
     if (use_color) fprintf(fp, "\033[1;31m");
-    fprintf(fp, "  \xc3\x97 Error: %s", msg);
+    fprintf(fp, "  \xc3\x97 Error: %s", err_code);
     if (use_color) fprintf(fp, "\033[0m");
     fprintf(fp, "\n");
 
@@ -311,7 +314,10 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
         if (use_color) fprintf(fp, "\033[35m");
         fprintf(fp, "\xe2\x95\xb0\xe2\x94\x80 ");
         if (use_color) fprintf(fp, "\033[1;31m");
-        if (fi == 0) fprintf(fp, "%s", msg);
+        if (fi == 0) {
+            fprintf(fp, "%s", err_code);
+            if (detail) fprintf(fp, ": %s", detail);
+        }
         if (use_color) fprintf(fp, "\033[0m");
         fprintf(fp, "\n");
 
@@ -346,9 +352,12 @@ static void repl_print_result(FILE* fp, ray_t* val, bool use_color) {
             fmt_error_with_trace(fp, val, trace, use_color);
             ray_clear_error_trace();
         } else {
-            ray_err_t code = RAY_ERR_CODE(val);
+            char err_code[8] = {0};
+            memcpy(err_code, val->sdata, val->slen < 7 ? val->slen : 7);
             if (use_color) fprintf(fp, "\033[1;31m");
-            fprintf(fp, "error: %s", ray_err_str(code));
+            fprintf(fp, "error: %s", err_code);
+            const char* detail = ray_error_msg();
+            if (detail) fprintf(fp, ": %s", detail);
             if (use_color) fprintf(fp, "\033[0m");
             fprintf(fp, "\n");
         }
