@@ -9849,6 +9849,238 @@ static ray_t* ray_scan_right(ray_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * del, internals, memstat, modify, pivot,
+ * sysinfo, unify, xrank builtins
+ * ══════════════════════════════════════════ */
+
+/* (del name) — delete variable from environment (special form, unevaluated arg) */
+static ray_t* ray_del_fn(ray_t** args, int64_t n) {
+    if (n < 1) return ray_error("arity", "del expects 1 argument");
+    ray_t* name = args[0];
+    if (name->type != -RAY_SYM)
+        return ray_error("type", "del expects a symbol");
+    ray_env_set(name->i64, NULL);
+    return ray_i64(0);
+}
+
+/* (internals) — return dict with internal build information */
+static ray_t* ray_internals_fn(ray_t* x) {
+    (void)x;
+    ray_t* dict = ray_list_new(4);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    int64_t ver_sym = ray_sym_intern("version", 7);
+    ray_t* k1 = ray_sym(ver_sym);
+    dict = ray_list_append(dict, k1); ray_release(k1);
+#ifdef RAYFORCE_VERSION
+    ray_t* v1 = ray_str(RAYFORCE_VERSION, strlen(RAYFORCE_VERSION));
+#else
+    ray_t* v1 = ray_str("unknown", 7);
+#endif
+    dict = ray_list_append(dict, v1); ray_release(v1);
+
+    int64_t date_sym = ray_sym_intern("build-date", 10);
+    ray_t* k2 = ray_sym(date_sym);
+    dict = ray_list_append(dict, k2); ray_release(k2);
+#ifdef RAYFORCE_BUILD_DATE
+    ray_t* v2 = ray_str(RAYFORCE_BUILD_DATE, strlen(RAYFORCE_BUILD_DATE));
+#else
+    ray_t* v2 = ray_str("unknown", 7);
+#endif
+    dict = ray_list_append(dict, v2); ray_release(v2);
+
+    return dict;
+}
+
+/* (memstat) — return dict with memory allocator statistics */
+static ray_t* ray_memstat_fn(ray_t* x) {
+    (void)x;
+    ray_mem_stats_t st;
+    ray_mem_stats(&st);
+
+    ray_t* dict = ray_list_new(10);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    /* alloc-count */
+    int64_t s1 = ray_sym_intern("alloc-count", 11);
+    ray_t* k1 = ray_sym(s1); dict = ray_list_append(dict, k1); ray_release(k1);
+    ray_t* v1 = make_i64((int64_t)st.alloc_count);
+    dict = ray_list_append(dict, v1); ray_release(v1);
+
+    /* bytes-allocated */
+    int64_t s2 = ray_sym_intern("bytes-allocated", 15);
+    ray_t* k2 = ray_sym(s2); dict = ray_list_append(dict, k2); ray_release(k2);
+    ray_t* v2 = make_i64((int64_t)st.bytes_allocated);
+    dict = ray_list_append(dict, v2); ray_release(v2);
+
+    /* peak-bytes */
+    int64_t s3 = ray_sym_intern("peak-bytes", 10);
+    ray_t* k3 = ray_sym(s3); dict = ray_list_append(dict, k3); ray_release(k3);
+    ray_t* v3 = make_i64((int64_t)st.peak_bytes);
+    dict = ray_list_append(dict, v3); ray_release(v3);
+
+    /* slab-hits */
+    int64_t s4 = ray_sym_intern("slab-hits", 9);
+    ray_t* k4 = ray_sym(s4); dict = ray_list_append(dict, k4); ray_release(k4);
+    ray_t* v4 = make_i64((int64_t)st.slab_hits);
+    dict = ray_list_append(dict, v4); ray_release(v4);
+
+    /* sys-current */
+    int64_t s5 = ray_sym_intern("sys-current", 11);
+    ray_t* k5 = ray_sym(s5); dict = ray_list_append(dict, k5); ray_release(k5);
+    ray_t* v5 = make_i64((int64_t)st.sys_current);
+    dict = ray_list_append(dict, v5); ray_release(v5);
+
+    return dict;
+}
+
+/* (modify tbl col_name fn) — apply fn to the named column, return new table */
+static ray_t* ray_modify_fn(ray_t** args, int64_t n) {
+    if (n < 3) return ray_error("arity", "modify expects 3 arguments: table, column, function");
+    ray_t* tbl = args[0];
+    ray_t* col_name = args[1];
+    ray_t* fn = args[2];
+
+    if (tbl->type != RAY_TABLE)
+        return ray_error("type", "modify: first arg must be a table");
+    if (col_name->type != -RAY_SYM)
+        return ray_error("type", "modify: second arg must be a symbol");
+
+    int64_t target_sym = col_name->i64;
+    ray_t* col = ray_table_get_col(tbl, target_sym);
+    if (!col) return ray_error("domain", "modify: column not found");
+
+    /* Apply fn to the entire column vector (atomic fns will map element-wise) */
+    ray_t* new_col = call_fn1(fn, col);
+    if (RAY_IS_ERR(new_col)) return new_col;
+
+    /* Build new table: copy all columns, replacing the target */
+    int64_t ncols = ray_table_ncols(tbl);
+    ray_t* result = ray_table_new(ncols);
+    if (RAY_IS_ERR(result)) { ray_release(new_col); return result; }
+
+    for (int64_t i = 0; i < ncols; i++) {
+        int64_t cname = ray_table_col_name(tbl, i);
+        ray_t* cvec = (cname == target_sym) ? new_col : ray_table_get_col_idx(tbl, i);
+        result = ray_table_add_col(result, cname, cvec);
+        if (RAY_IS_ERR(result)) { ray_release(new_col); return result; }
+    }
+    ray_release(new_col);
+    return result;
+}
+
+/* (pivot table index_col column_col value_col agg_fn) — pivot table (stub) */
+static ray_t* ray_pivot_fn(ray_t** args, int64_t n) {
+    (void)args;
+    if (n < 5) return ray_error("arity", "pivot expects 5 arguments");
+    return ray_error("nyi", "pivot not yet implemented -- use select with group for now");
+}
+
+/* (sysinfo) — return system information */
+static ray_t* ray_sysinfo_fn(ray_t* x) {
+    (void)x;
+    ray_t* dict = ray_list_new(6);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+#if !defined(_WIN32)
+    int64_t s1 = ray_sym_intern("cores", 5);
+    ray_t* k1 = ray_sym(s1); dict = ray_list_append(dict, k1); ray_release(k1);
+    ray_t* v1 = make_i64(sysconf(_SC_NPROCESSORS_ONLN));
+    dict = ray_list_append(dict, v1); ray_release(v1);
+
+    int64_t s2 = ray_sym_intern("page-size", 9);
+    ray_t* k2 = ray_sym(s2); dict = ray_list_append(dict, k2); ray_release(k2);
+    ray_t* v2 = make_i64(sysconf(_SC_PAGESIZE));
+    dict = ray_list_append(dict, v2); ray_release(v2);
+
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long psize = sysconf(_SC_PAGESIZE);
+    int64_t s3 = ray_sym_intern("total-mem", 9);
+    ray_t* k3 = ray_sym(s3); dict = ray_list_append(dict, k3); ray_release(k3);
+    ray_t* v3 = make_i64((int64_t)pages * (int64_t)psize);
+    dict = ray_list_append(dict, v3); ray_release(v3);
+#else
+    int64_t s1 = ray_sym_intern("cores", 5);
+    ray_t* k1 = ray_sym(s1); dict = ray_list_append(dict, k1); ray_release(k1);
+    ray_t* v1 = make_i64(1);
+    dict = ray_list_append(dict, v1); ray_release(v1);
+#endif
+
+    return dict;
+}
+
+/* (unify a b) — return list of two vectors promoted to a common type */
+static ray_t* ray_unify_fn(ray_t* a, ray_t* b) {
+    /* Build a 2-element list containing both values */
+    ray_t* result = ray_list_new(2);
+    if (RAY_IS_ERR(result)) return result;
+
+    if (a->type == b->type || ray_is_atom(a) || ray_is_atom(b)) {
+        /* Same type or atoms: return as-is */
+        ray_retain(a); ray_retain(b);
+        result = ray_list_append(result, a); ray_release(a);
+        result = ray_list_append(result, b); ray_release(b);
+        return result;
+    }
+
+    /* Different vector types: attempt numeric promotion */
+    /* For now: wrap both without conversion */
+    ray_retain(a); ray_retain(b);
+    result = ray_list_append(result, a); ray_release(a);
+    result = ray_list_append(result, b); ray_release(b);
+    return result;
+}
+
+/* (xrank n vec) — assign each element to one of n rank groups */
+static ray_t* ray_xrank_fn(ray_t* n_obj, ray_t* vec) {
+    if (!is_numeric(n_obj))
+        return ray_error("type", "xrank: first arg must be integer");
+    if (!ray_is_vec(vec))
+        return ray_error("type", "xrank: second arg must be a vector");
+
+    int64_t n_groups = as_i64(n_obj);
+    int64_t len = ray_len(vec);
+    if (n_groups <= 0 || len == 0) return ray_vec_new(RAY_I64, 0);
+
+    /* Build index array and sort by value */
+    int64_t* idx = (int64_t*)ray_sys_alloc(len * sizeof(int64_t));
+    if (!idx) return ray_error("oom", NULL);
+    for (int64_t i = 0; i < len; i++) idx[i] = i;
+
+    /* Simple insertion sort on values (works for all numeric types) */
+    for (int64_t i = 1; i < len; i++) {
+        int64_t key = idx[i];
+        ray_t* key_elem = ray_vec_get(vec, key);
+        int64_t j = i - 1;
+        while (j >= 0) {
+            ray_t* cmp_elem = ray_vec_get(vec, idx[j]);
+            double kv = key_elem ? (is_numeric(key_elem) ? (key_elem->type == -RAY_F64 ? key_elem->f64 : (double)as_i64(key_elem)) : 0.0) : 0.0;
+            double cv = cmp_elem ? (is_numeric(cmp_elem) ? (cmp_elem->type == -RAY_F64 ? cmp_elem->f64 : (double)as_i64(cmp_elem)) : 0.0) : 0.0;
+            if (cmp_elem) ray_release(cmp_elem);
+            if (cv <= kv) break;
+            idx[j + 1] = idx[j];
+            j--;
+        }
+        idx[j + 1] = key;
+        if (key_elem) ray_release(key_elem);
+    }
+
+    /* Assign groups: element at sorted position i gets group (i * n_groups / len) */
+    ray_t* result = ray_vec_new(RAY_I64, len);
+    if (RAY_IS_ERR(result)) { ray_sys_free(idx); return result; }
+    result->len = len;
+    int64_t* out = (int64_t*)ray_data(result);
+    for (int64_t i = 0; i < len; i++) {
+        out[idx[i]] = i * n_groups / len;
+    }
+    ray_sys_free(idx);
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -10074,6 +10306,16 @@ static void ray_register_builtins(void) {
     register_vary("fold-right",  RAY_FN_NONE, ray_fold_right);
     register_vary("scan-left",   RAY_FN_NONE, ray_scan_left);
     register_vary("scan-right",  RAY_FN_NONE, ray_scan_right);
+
+    /* del, internals, memstat, modify, pivot, sysinfo, unify, xrank */
+    register_vary("del",          RAY_FN_SPECIAL_FORM, ray_del_fn);
+    register_unary("internals",   RAY_FN_NONE, ray_internals_fn);
+    register_unary("memstat",     RAY_FN_NONE, ray_memstat_fn);
+    register_vary("modify",      RAY_FN_NONE, ray_modify_fn);
+    register_vary("pivot",       RAY_FN_NONE, ray_pivot_fn);
+    register_unary("sysinfo",    RAY_FN_NONE, ray_sysinfo_fn);
+    register_binary("unify",     RAY_FN_NONE, ray_unify_fn);
+    register_binary("xrank",     RAY_FN_NONE, ray_xrank_fn);
 }
 
 /* ══════════════════════════════════════════
