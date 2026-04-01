@@ -7258,8 +7258,10 @@ static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
 
     int64_t param_count = ray_len(params_list);
 
-    if (argc != param_count)
+    if (argc != param_count) {
+        add_error_frame(lambda, 0);
         return ray_error("arity", "expected %" PRId64 " args, got %" PRId64, param_count, argc);
+    }
 
     if (ray_env_push_scope() != RAY_OK) return ray_error("oom", NULL);
 
@@ -7324,8 +7326,10 @@ static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc) {
     /* Arity check before allocating VM state */
     {
         int64_t param_count = ray_len(LAMBDA_PARAMS(lambda));
-        if (argc != param_count)
+        if (argc != param_count) {
+            add_error_frame(lambda, 0);
             return ray_error("arity", "expected %" PRId64 " args, got %" PRId64, param_count, argc);
+        }
     }
 
     ray_t *vm_block = ray_alloc(sizeof(ray_vm_t));
@@ -7353,6 +7357,7 @@ static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc) {
     uint8_t *code = (uint8_t *)ray_data(LAMBDA_BC(lambda));
     ray_t **cpool = (ray_t **)ray_data(LAMBDA_CONSTS(lambda));
     int32_t ip = 0;
+    ray_t *vm_err_obj = NULL;
 
 #define DISPATCH() goto *dispatch[code[ip++]]
 #define PUSH(v)    (vm.ps[vm.sp++] = (v))
@@ -7464,7 +7469,7 @@ op_call1: {
         result = fn(arg);
     ray_release(arg);
     ray_release(fn_obj);
-    if (RAY_IS_ERR(result)) goto vm_error;
+    if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
     PUSH(result);
     DISPATCH();
 }
@@ -7484,7 +7489,7 @@ op_call2: {
     ray_release(left);
     ray_release(right);
     ray_release(fn_obj);
-    if (RAY_IS_ERR(result)) goto vm_error;
+    if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
     PUSH(result);
     DISPATCH();
 }
@@ -7501,7 +7506,7 @@ op_calln: {
     for (int32_t i = 0; i < n; i++)
         ray_release(fn_args[i]);
     ray_release(fn_obj);
-    if (RAY_IS_ERR(result)) goto vm_error;
+    if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
     PUSH(result);
     DISPATCH();
 }
@@ -7582,7 +7587,7 @@ op_callf: {
             break;
         }
         ray_release(fn_obj);
-        if (RAY_IS_ERR(result)) goto vm_error;
+        if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
         PUSH(result);
         DISPATCH();
     }
@@ -7621,7 +7626,7 @@ op_calld: {
         ray_t *ast = POP();
         ray_t *result = ray_eval(ast);
         ray_release(ast);
-        if (RAY_IS_ERR(result)) goto vm_error;
+        if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
         PUSH(result);
         DISPATCH();
     }
@@ -7646,7 +7651,7 @@ op_calld: {
 
     ray_t *result = ray_eval(call_list);
     ray_release(call_list);
-    if (RAY_IS_ERR(result)) goto vm_error;
+    if (RAY_IS_ERR(result)) { vm_err_obj = result; goto vm_error; }
     PUSH(result);
     DISPATCH();
 }
@@ -7788,6 +7793,8 @@ vm_error_cleanup: {
     __VM = NULL;
 #undef vm
     ray_free(vm_block);
+    if (vm_err_obj)
+        return vm_err_obj;
     if (vm_err_detail)
         return ray_error(vm_err_str, "%s", vm_err_detail);
     return ray_error(vm_err_str, NULL);

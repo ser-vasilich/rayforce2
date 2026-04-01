@@ -321,6 +321,9 @@ static void compile_list(compiler_t *c, ray_t *ast) {
     for (int64_t i = 1; i < n; i++)
         compile_expr(c, elems[i]);
 
+    /* Record call-site span so errors point to the call expression, not the last arg */
+    EMIT_DBG(c, ast);
+
     if (fn) {
         switch (fn->type) {
         case RAY_UNARY:
