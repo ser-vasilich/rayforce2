@@ -83,6 +83,7 @@ const char* ray_version_string(void);
 #define RAY_UNARY     101   /* Unary builtin: ray_t* (*)(ray_t*) */
 #define RAY_BINARY    102   /* Binary builtin: ray_t* (*)(ray_t*, ray_t*) */
 #define RAY_VARY      103   /* Variadic builtin: ray_t* (*)(ray_t**, int64_t) */
+#define RAY_ERROR     127   /* Error object: 8-byte packed ASCII code in sdata */
 
 /* ===== Error Handling ===== */
 
@@ -104,11 +105,13 @@ typedef enum {
     RAY_ERR_LIMIT
 } ray_err_t;
 
-#define RAY_ERR_PTR(e)   ((ray_t*)(uintptr_t)(e))
-#define RAY_IS_ERR(p)    ((uintptr_t)(p) < 32)
-#define RAY_ERR_CODE(p)  ((ray_err_t)(uintptr_t)(p))
+/* DEPRECATED — legacy sentinel-pointer error macros (migration in progress) */
+#define RAY_ERR_PTR(e)   ((ray_t*)(uintptr_t)(e))   /* DEPRECATED */
+#define RAY_ERR_CODE(p)  ((ray_err_t)(uintptr_t)(p)) /* DEPRECATED */
 
-const char* ray_err_str(ray_err_t e);
+#define RAY_IS_ERR(p)    ((p) != NULL && (uintptr_t)(p) > 31 && ((ray_t*)(p))->type == RAY_ERROR)
+
+const char* ray_err_str(ray_err_t e); /* DEPRECATED */
 
 /* ===== Core Type: ray_t (32-byte block/object header) ===== */
 

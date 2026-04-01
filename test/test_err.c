@@ -55,27 +55,33 @@ static MunitResult test_err_str_unknown(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
-/* ---- RAY_ERR_PTR / RAY_IS_ERR / RAY_ERR_CODE macro tests ------------------ */
+/* ---- DEPRECATED RAY_ERR_PTR / RAY_ERR_CODE macro tests -------------------- */
+
+/* Legacy sentinel-pointer check (pre-RAY_ERROR migration) */
+#define RAY_IS_ERR_LEGACY(p)  ((uintptr_t)(p) < 32)
 
 static MunitResult test_err_ptr_encoding(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    /* Error pointers should be detected as errors */
+    /* Legacy sentinel pointers detected via RAY_IS_ERR_LEGACY */
     ray_t* err_oom = RAY_ERR_PTR(RAY_ERR_OOM);
-    munit_assert_true(RAY_IS_ERR(err_oom));
+    munit_assert_true(RAY_IS_ERR_LEGACY(err_oom));
     munit_assert_int(RAY_ERR_CODE(err_oom), ==, RAY_ERR_OOM);
 
     ray_t* err_type = RAY_ERR_PTR(RAY_ERR_TYPE);
-    munit_assert_true(RAY_IS_ERR(err_type));
+    munit_assert_true(RAY_IS_ERR_LEGACY(err_type));
     munit_assert_int(RAY_ERR_CODE(err_type), ==, RAY_ERR_TYPE);
 
     ray_t* err_corrupt = RAY_ERR_PTR(RAY_ERR_CORRUPT);
-    munit_assert_true(RAY_IS_ERR(err_corrupt));
+    munit_assert_true(RAY_IS_ERR_LEGACY(err_corrupt));
     munit_assert_int(RAY_ERR_CODE(err_corrupt), ==, RAY_ERR_CORRUPT);
 
-    /* NULL is also detected as error (value 0 < 32) */
-    munit_assert_true(RAY_IS_ERR(NULL));
+    /* NULL is detected by legacy check (value 0 < 32) */
+    munit_assert_true(RAY_IS_ERR_LEGACY(NULL));
     munit_assert_int(RAY_ERR_CODE(NULL), ==, RAY_OK);
+
+    /* New RAY_IS_ERR checks for first-class RAY_ERROR objects */
+    munit_assert_false(RAY_IS_ERR(NULL));
 
     return MUNIT_OK;
 }
