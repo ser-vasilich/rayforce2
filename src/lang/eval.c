@@ -9628,6 +9628,227 @@ static ray_t* ray_setenv_fn(ray_t* name, ray_t* val) {
 }
 
 /* ══════════════════════════════════════════
+ * New builtins: quote, return, args, rc, diverse, get, remove, row, timer, env,
+ * fold-left, fold-right, scan-left, scan-right
+ * ══════════════════════════════════════════ */
+
+/* (quote expr) — special form, returns argument unevaluated */
+static ray_t* ray_quote_fn(ray_t** args, int64_t n) {
+    if (n < 1) return ray_error("domain", "quote expects 1 argument");
+    ray_retain(args[0]);
+    return args[0];
+}
+
+/* (return x) — early return from function (identity in Rayfall) */
+static ray_t* ray_return_fn(ray_t* x) {
+    ray_retain(x);
+    return x;
+}
+
+/* (args) — return command-line arguments as a list of strings */
+static ray_t* ray_args_fn(ray_t* x) {
+    (void)x;
+    /* Return empty list — CLI args not wired into eval context */
+    ray_t* list = ray_list_new(0);
+    if (!list) return ray_error("oom", NULL);
+    return list;
+}
+
+/* (rc x) — return reference count of object */
+static ray_t* ray_rc_fn(ray_t* x) {
+    if (!x || RAY_IS_ERR(x)) return make_i64(0);
+    return make_i64((int64_t)x->rc);
+}
+
+/* (diverse x) — check if all elements in a collection are unique */
+static ray_t* ray_diverse_fn(ray_t* x) {
+    if (ray_is_atom(x)) return make_bool(1);
+    if (!is_collection(x)) return ray_error("type", "diverse expects a collection");
+
+    int64_t n = ray_len(x);
+    if (n <= 1) return make_bool(1);
+
+    ray_t* d = ray_distinct_fn(x);
+    if (RAY_IS_ERR(d)) return d;
+    int64_t dn = ray_len(d);
+    ray_release(d);
+    return make_bool(dn == n ? 1 : 0);
+}
+
+/* (get dict key) — dictionary/table lookup (alias for at) */
+static ray_t* ray_get_fn(ray_t* dict, ray_t* key) {
+    return ray_at(dict, key);
+}
+
+/* (remove dict key) — remove key from dict, return new dict */
+static ray_t* ray_remove_fn(ray_t* dict, ray_t* key) {
+    if (dict->type != RAY_LIST || !(dict->attrs & RAY_ATTR_DICT))
+        return ray_error("type", "remove expects a dict");
+    if (key->type != -RAY_SYM)
+        return ray_error("type", "remove key must be a symbol");
+
+    ray_t** items = (ray_t**)ray_data(dict);
+    int64_t n = dict->len;
+    ray_t* result = ray_list_new(0);
+    if (RAY_IS_ERR(result)) return result;
+    result->attrs |= RAY_ATTR_DICT;
+
+    for (int64_t i = 0; i < n; i += 2) {
+        if (items[i]->type == -RAY_SYM && items[i]->i64 == key->i64)
+            continue; /* skip this key-value pair */
+        result = ray_list_append(result, items[i]);
+        if (RAY_IS_ERR(result)) return result;
+        if (i + 1 < n) {
+            result = ray_list_append(result, items[i + 1]);
+            if (RAY_IS_ERR(result)) return result;
+        }
+    }
+    return result;
+}
+
+/* (row table idx) — extract a single row from a table as a dict */
+static ray_t* ray_row_fn(ray_t* tbl, ray_t* idx) {
+    if (tbl->type != RAY_TABLE) return ray_error("type", "row expects a table");
+    if (!is_numeric(idx)) return ray_error("type", "row index must be integer");
+    /* Delegate to at — it already handles table integer indexing */
+    return ray_at(tbl, idx);
+}
+
+/* (timer) — return high-res timestamp in nanoseconds for benchmarking */
+static ray_t* ray_timer_fn(ray_t* x) {
+    (void)x;
+    clock_t t = clock();
+    int64_t nanos = (int64_t)((double)t / (double)CLOCKS_PER_SEC * 1e9);
+    return make_i64(nanos);
+}
+
+/* (env) — return dict of all global environment bindings */
+static ray_t* ray_env_fn(ray_t* x) {
+    (void)x;
+    int64_t sym_ids[1024];
+    ray_t* vals[1024];
+    int32_t count = ray_env_list(sym_ids, vals, 1024);
+
+    ray_t* dict = ray_list_new(0);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    for (int32_t i = 0; i < count; i++) {
+        ray_t* k = ray_sym(sym_ids[i]);
+        if (RAY_IS_ERR(k)) { ray_release(dict); return k; }
+        dict = ray_list_append(dict, k);
+        ray_release(k);
+        if (RAY_IS_ERR(dict)) return dict;
+        ray_retain(vals[i]);
+        dict = ray_list_append(dict, vals[i]);
+        if (RAY_IS_ERR(dict)) { ray_release(vals[i]); return dict; }
+    }
+    return dict;
+}
+
+/* (fold-left fn init coll) — left fold with explicit initial value */
+static ray_t* ray_fold_left(ray_t** args, int64_t n) {
+    /* Same as (fold fn init coll) — fold already goes left-to-right */
+    return ray_fold(args, n);
+}
+
+/* (fold-right fn init coll) — right fold */
+static ray_t* ray_fold_right(ray_t** args, int64_t n) {
+    if (n < 2) return ray_error("domain", NULL);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
+
+    ray_t* fn = args[0];
+    ray_t* _bx = NULL;
+    ray_t* acc;
+    ray_t* vec;
+
+    if (n == 2) {
+        /* (fold-right fn vec) — use last element as initial value */
+        vec = unbox_vec_arg(args[1], &_bx);
+        if (RAY_IS_ERR(vec)) return vec;
+        if (!is_list(vec)) { if (_bx) ray_release(_bx); return ray_error("type", NULL); }
+        int64_t len = ray_len(vec);
+        if (len == 0) { if (_bx) ray_release(_bx); return ray_error("domain", NULL); }
+        ray_t** elems = (ray_t**)ray_data(vec);
+        ray_retain(elems[len - 1]);
+        acc = elems[len - 1];
+        for (int64_t i = len - 2; i >= 0; i--) {
+            ray_t* next = call_fn2(fn, elems[i], acc);
+            ray_release(acc);
+            if (RAY_IS_ERR(next)) { if (_bx) ray_release(_bx); return next; }
+            acc = next;
+        }
+        if (_bx) ray_release(_bx);
+        return acc;
+    }
+
+    /* (fold-right fn init coll) */
+    ray_retain(args[1]);
+    acc = args[1];
+    vec = unbox_vec_arg(args[2], &_bx);
+    if (RAY_IS_ERR(vec)) { ray_release(acc); return vec; }
+    if (!is_list(vec)) { ray_release(acc); if (_bx) ray_release(_bx); return ray_error("type", NULL); }
+    int64_t len = ray_len(vec);
+    ray_t** elems = (ray_t**)ray_data(vec);
+    for (int64_t i = len - 1; i >= 0; i--) {
+        ray_t* next = call_fn2(fn, elems[i], acc);
+        ray_release(acc);
+        if (RAY_IS_ERR(next)) { if (_bx) ray_release(_bx); return next; }
+        acc = next;
+    }
+    if (_bx) ray_release(_bx);
+    return acc;
+}
+
+/* (scan-left fn vec) — running left fold (same as scan) */
+static ray_t* ray_scan_left(ray_t** args, int64_t n) {
+    return ray_scan_fn(args, n);
+}
+
+/* (scan-right fn vec) — running right fold, returns vector of partial results */
+static ray_t* ray_scan_right(ray_t** args, int64_t n) {
+    if (n < 2) return ray_error("domain", NULL);
+    for (int64_t i = 0; i < n; i++)
+        if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
+
+    ray_t* fn = args[0];
+    ray_t* _bx = NULL;
+    ray_t* vec = unbox_vec_arg(args[1], &_bx);
+    if (RAY_IS_ERR(vec)) return vec;
+    if (!is_list(vec)) { if (_bx) ray_release(_bx); return ray_error("type", NULL); }
+    int64_t len = ray_len(vec);
+    if (len == 0) {
+        if (_bx) ray_release(_bx);
+        ray_t* result = ray_alloc(0);
+        if (!result) return ray_error("oom", NULL);
+        result->type = RAY_LIST;
+        result->len = 0;
+        return result;
+    }
+
+    ray_t* result = ray_alloc(len * sizeof(ray_t*));
+    if (!result) { if (_bx) ray_release(_bx); return ray_error("oom", NULL); }
+    result->type = RAY_LIST;
+    result->len = len;
+    ray_t** out = (ray_t**)ray_data(result);
+    ray_t** elems = (ray_t**)ray_data(vec);
+
+    ray_retain(elems[len - 1]);
+    out[len - 1] = elems[len - 1];
+    for (int64_t i = len - 2; i >= 0; i--) {
+        out[i] = call_fn2(fn, elems[i], out[i + 1]);
+        if (RAY_IS_ERR(out[i])) {
+            for (int64_t j = i + 1; j < len; j++) ray_release(out[j]);
+            ray_release(result); if (_bx) ray_release(_bx);
+            return out[i];
+        }
+    }
+    if (_bx) ray_release(_bx);
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -9815,6 +10036,44 @@ static void ray_register_builtins(void) {
     register_unary("system",     RAY_FN_NONE, ray_system_fn);
     register_unary("getenv",     RAY_FN_NONE, ray_getenv_fn);
     register_binary("setenv",    RAY_FN_NONE, ray_setenv_fn);
+    register_unary("os-get-var", RAY_FN_NONE, ray_getenv_fn);
+    register_binary("os-set-var", RAY_FN_NONE, ray_setenv_fn);
+
+    /* quote — special form (unevaluated argument) */
+    register_vary("quote",       RAY_FN_SPECIAL_FORM, ray_quote_fn);
+
+    /* return — early return (identity) */
+    register_unary("return",     RAY_FN_NONE, ray_return_fn);
+
+    /* args — command line arguments */
+    register_unary("args",       RAY_FN_NONE, ray_args_fn);
+
+    /* rc — reference count */
+    register_unary("rc",         RAY_FN_NONE, ray_rc_fn);
+
+    /* diverse — check if all elements unique */
+    register_unary("diverse",    RAY_FN_NONE, ray_diverse_fn);
+
+    /* get — dictionary/table lookup (alias for at) */
+    register_binary("get",       RAY_FN_NONE, ray_get_fn);
+
+    /* remove — remove key from dict */
+    register_binary("remove",    RAY_FN_NONE, ray_remove_fn);
+
+    /* row — single row from table */
+    register_binary("row",       RAY_FN_NONE, ray_row_fn);
+
+    /* timer — high-res monotonic nanosecond timestamp */
+    register_unary("timer",      RAY_FN_NONE, ray_timer_fn);
+
+    /* env — list all global environment bindings */
+    register_unary("env",        RAY_FN_NONE, ray_env_fn);
+
+    /* Directional fold/scan variants */
+    register_vary("fold-left",   RAY_FN_NONE, ray_fold_left);
+    register_vary("fold-right",  RAY_FN_NONE, ray_fold_right);
+    register_vary("scan-left",   RAY_FN_NONE, ray_scan_left);
+    register_vary("scan-right",  RAY_FN_NONE, ray_scan_right);
 }
 
 /* ══════════════════════════════════════════
