@@ -151,7 +151,7 @@ static double as_f64(ray_t* x) {
     if (x->type == -RAY_I32) return (double)x->i32;
     if (x->type == -RAY_I16) return (double)x->i16;
     if (x->type == -RAY_U8)  return (double)x->u8;
-    if (x->type == -RAY_CHAR) return (double)(unsigned char)x->c8;
+    if (x->type == -RAY_STR && ray_str_len(x) == 1) return (double)(unsigned char)x->sdata[0];
     if (x->type == -RAY_BOOL) return (double)x->b8;
     if (x->type == -RAY_DATE || x->type == -RAY_TIME) return (double)x->i32;
     if (x->type == -RAY_TIMESTAMP) return (double)x->i64;
@@ -549,14 +549,11 @@ ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
 static int char_str_cmp(ray_t* a, ray_t* b, int *out) {
     const char *ap, *bp;
     size_t al, bl;
-    char abuf, bbuf;
-    int a_cs = (a->type == -RAY_CHAR || a->type == -RAY_STR);
-    int b_cs = (b->type == -RAY_CHAR || b->type == -RAY_STR);
+    int a_cs = (a->type == -RAY_STR);
+    int b_cs = (b->type == -RAY_STR);
     if (!a_cs || !b_cs) return -1;
-    if (a->type == -RAY_CHAR) { abuf = a->c8; ap = &abuf; al = 1; }
-    else { ap = ray_str_ptr(a); al = ray_str_len(a); }
-    if (b->type == -RAY_CHAR) { bbuf = b->c8; bp = &bbuf; bl = 1; }
-    else { bp = ray_str_ptr(b); bl = ray_str_len(b); }
+    ap = ray_str_ptr(a); al = ray_str_len(a);
+    bp = ray_str_ptr(b); bl = ray_str_len(b);
     size_t mn = al < bl ? al : bl;
     int c = memcmp(ap, bp, mn);
     if (c != 0) { *out = c; return 0; }
@@ -932,7 +929,7 @@ static ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
             const uint8_t* gd = ((uint8_t*)ray_data(coll)) + i * 16;
             return ray_guid(gd);
         }
-        case RAY_CHAR:      return ray_char(((char*)ray_data(coll))[i]);
+        /* RAY_CHAR removed — char vectors no longer exist */
         case RAY_STR: {
             size_t slen = 0;
             const char* sp = ray_str_vec_get(coll, i, &slen);
@@ -1004,7 +1001,7 @@ static int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
         case RAY_I16:       ((int16_t*)ray_data(vec))[i]   = (int16_t)elem_as_i64(elem); return 0;
         case RAY_BOOL:      ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
         case RAY_U8:        ((uint8_t*)ray_data(vec))[i]   = (uint8_t)elem_as_i64(elem); return 0;
-        case RAY_CHAR:      ((char*)ray_data(vec))[i]      = elem->c8; return 0;
+        /* RAY_CHAR removed — char vectors no longer exist */
         case RAY_DATE:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
         case RAY_TIME:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
         case RAY_TIMESTAMP: ((int64_t*)ray_data(vec))[i]   = elem_as_i64(elem); return 0;
@@ -1773,11 +1770,8 @@ ray_t* ray_first_fn(ray_t* x) {
     if (ray_is_atom(x) && (-x->type) == RAY_STR) {
         size_t slen = ray_str_len(x);
         if (slen == 0) return ray_error("domain", NULL);
-        ray_t* c = ray_alloc(0);
-        if (!c) return ray_error("oom", NULL);
-        c->type = -RAY_CHAR;
-        c->c8 = ray_str_ptr(x)[0];
-        return c;
+        const char* p = ray_str_ptr(x);
+        return ray_str(p, 1);
     }
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     /* Table first: return first row as dict */
@@ -1815,11 +1809,8 @@ ray_t* ray_last_fn(ray_t* x) {
     if (ray_is_atom(x) && (-x->type) == RAY_STR) {
         size_t slen = ray_str_len(x);
         if (slen == 0) return ray_error("domain", NULL);
-        ray_t* c = ray_alloc(0);
-        if (!c) return ray_error("oom", NULL);
-        c->type = -RAY_CHAR;
-        c->c8 = ray_str_ptr(x)[slen - 1];
-        return c;
+        const char* p = ray_str_ptr(x);
+        return ray_str(p + slen - 1, 1);
     }
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     /* Table last: return last row as dict */
@@ -2381,8 +2372,6 @@ static int atom_eq(ray_t* a, ray_t* b) {
         return a->i32 == b->i32;
     case -RAY_TIMESTAMP:
         return a->i64 == b->i64;
-    case -RAY_CHAR:
-        return a->c8 == b->c8;
     case -RAY_GUID: {
         const uint8_t* ga = a->obj ? (const uint8_t*)ray_data(a->obj) : (const uint8_t*)ray_data((ray_t*)a);
         const uint8_t* gb = b->obj ? (const uint8_t*)ray_data(b->obj) : (const uint8_t*)ray_data((ray_t*)b);
@@ -2521,15 +2510,6 @@ ray_t* ray_distinct_fn(ray_t* x) {
 ray_t* ray_in(ray_t* val, ray_t* vec) {
     if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
-    /* CHAR in STR: check if character appears in string */
-    if (ray_is_atom(val) && (-val->type) == RAY_CHAR && ray_is_atom(vec) && (-vec->type) == RAY_STR) {
-        const char* sp = ray_str_ptr(vec);
-        size_t slen = ray_str_len(vec);
-        char c = val->c8;
-        for (size_t i = 0; i < slen; i++)
-            if (sp[i] == c) return make_bool(1);
-        return make_bool(0);
-    }
     /* STR in STR: for each char of val, check membership in vec string */
     if (ray_is_atom(val) && (-val->type) == RAY_STR && ray_is_atom(vec) && (-vec->type) == RAY_STR) {
         const char* vp = ray_str_ptr(val);
@@ -2548,19 +2528,6 @@ ray_t* ray_in(ray_t* val, ray_t* vec) {
         }
         return result;
     }
-    /* STR in CHAR: for each char of val, check if it equals vec char */
-    if (ray_is_atom(val) && (-val->type) == RAY_STR && ray_is_atom(vec) && (-vec->type) == RAY_CHAR) {
-        const char* vp = ray_str_ptr(val);
-        size_t vlen = ray_str_len(val);
-        char c = vec->c8;
-        ray_t* result = ray_vec_new(RAY_BOOL, (int64_t)vlen);
-        if (RAY_IS_ERR(result)) return result;
-        result->len = (int64_t)vlen;
-        bool* out = (bool*)ray_data(result);
-        for (size_t i = 0; i < vlen; i++)
-            out[i] = (vp[i] == c);
-        return result;
-    }
     /* Scalar in scalar: equality check */
     if (ray_is_atom(val) && ray_is_atom(vec))
         return make_bool(atom_eq(val, vec) ? 1 : 0);
@@ -2576,7 +2543,7 @@ ray_t* ray_in(ray_t* val, ray_t* vec) {
         int64_t list_len = ray_len(vec);
         for (size_t i = 0; i < vlen; i++) {
             out_b[i] = false;
-            ray_t* ch = ray_char(vp[i]);
+            ray_t* ch = ray_str(&vp[i], 1);
             for (int64_t j = 0; j < list_len; j++) {
                 if (atom_eq(ch, list_elems[j])) { out_b[i] = true; break; }
             }
@@ -3000,16 +2967,16 @@ ray_t* ray_take(ray_t* vec, ray_t* n_obj) {
         return ray_error("type", NULL);
     }
     /* Char take: (take 'a' n) → string of n copies of char */
-    if (ray_is_atom(vec) && (-vec->type) == RAY_CHAR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
+    if (ray_is_atom(vec) && vec->type == -RAY_STR && ray_str_len(vec) == 1 && ray_is_atom(n_obj) && is_numeric(n_obj)) {
         int64_t n = as_i64(n_obj);
         int64_t count = n < 0 ? -n : n;
         char buf[8192];
         if (count > (int64_t)sizeof(buf)) return ray_error("limit", NULL);
-        for (int64_t i = 0; i < count; i++) buf[i] = vec->c8;
+        for (int64_t i = 0; i < count; i++) buf[i] = vec->sdata[0];
         return ray_str(buf, (size_t)count);
     }
     /* Scalar take: (take value n) → repeat value n times */
-    if (ray_is_atom(vec) && (-vec->type) != RAY_STR && (-vec->type) != RAY_CHAR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
+    if (ray_is_atom(vec) && (-vec->type) != RAY_STR && ray_is_atom(n_obj) && is_numeric(n_obj)) {
         int64_t n = as_i64(n_obj);
         int64_t count = n < 0 ? -n : n;
         int8_t vtype = -(vec->type);
@@ -3245,12 +3212,8 @@ ray_t* ray_at(ray_t* vec, ray_t* idx) {
         }
         int64_t i = as_i64(idx);
         if (i < 0 || (size_t)i >= slen) return ray_error("domain", NULL);
-        /* Return char atom */
-        ray_t* c = ray_alloc(0);
-        if (!c) return ray_error("oom", NULL);
-        c->type = -RAY_CHAR;
-        c->c8 = s[i];
-        return c;
+        /* Return 1-char string atom */
+        return ray_str(&s[i], 1);
     }
 
     /* Vector index: (at vec [i j k]) → vector of values */
@@ -3310,10 +3273,10 @@ ray_t* ray_find(ray_t* vec, ray_t* val) {
     if (ray_is_lazy(vec)) vec = ray_lazy_materialize(vec);
     if (ray_is_lazy(val)) val = ray_lazy_materialize(val);
     /* String find: (find "hello" 'l') → index of char in string */
-    if (ray_is_atom(vec) && (-vec->type) == RAY_STR && ray_is_atom(val) && val->type == -RAY_CHAR) {
+    if (ray_is_atom(vec) && (-vec->type) == RAY_STR && ray_is_atom(val) && val->type == -RAY_STR && ray_str_len(val) == 1) {
         const char* s = ray_str_ptr(vec);
         size_t slen = ray_str_len(vec);
-        char c = val->c8;
+        char c = ray_str_ptr(val)[0];
         for (size_t i = 0; i < slen; i++) {
             if (s[i] == c) return make_i64((int64_t)i);
         }
@@ -3505,7 +3468,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
             else if (row_elems[0]->type == -RAY_TIMESTAMP) col_type = RAY_TIMESTAMP;
             else if (row_elems[0]->type == -RAY_DATE) col_type = RAY_DATE;
             else if (row_elems[0]->type == -RAY_TIME) col_type = RAY_TIME;
-            else if (row_elems[0]->type == -RAY_CHAR) col_type = RAY_CHAR;
+            /* RAY_CHAR removed — char atoms are now -RAY_STR */
         }
         /* Promote I64 → F64 if any element is F64 */
         if (col_type == RAY_I64) {
@@ -6464,16 +6427,16 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     /* Cast to c8 (char atom) — get first character */
     if (tlen == 2 && tname[0] == 'c' && tname[1] == '8') {
         ray_release(s);
-        if (val->type == -RAY_CHAR) { ray_retain(val); return val; }
+        if (val->type == -RAY_STR && ray_str_len(val) == 1) { ray_retain(val); return val; }
         if (val->type == -RAY_SYM) {
             ray_t* sym_str = ray_sym_str(val->i64);
-            if (sym_str) { char c = ray_str_ptr(sym_str)[0]; return ray_char(c); }
-            return ray_char('\0');
+            if (sym_str) { const char* p = ray_str_ptr(sym_str); return ray_str(p, 1); }
+            return ray_str("\0", 1);
         }
         if (val->type == -RAY_STR) {
             size_t slen = ray_str_len(val);
-            if (slen > 0) return ray_char(ray_str_ptr(val)[0]);
-            return ray_char('\0');
+            if (slen > 0) { const char* p = ray_str_ptr(val); return ray_str(p, 1); }
+            return ray_str("\0", 1);
         }
         return ray_error("type", NULL);
     }
@@ -6925,7 +6888,7 @@ static const char* type_sym_name(int8_t type) {
     case RAY_SYM:       return type < 0 ? "symbol" : "SYMBOL";
     case RAY_STR:       return type < 0 ? "C8" : "C8";
     case RAY_GUID:      return type < 0 ? "guid" : "GUID";
-    case RAY_CHAR:      return type < 0 ? "c8" : "C8";
+    /* RAY_CHAR removed */
     case RAY_TABLE:     return "TABLE";
     case RAY_DICT:      return "DICT";
     case RAY_LIST:      return "LIST";
@@ -8203,16 +8166,13 @@ gfail:
 static ray_t* ray_concat_fn(ray_t* a, ray_t* b) {
     /* Helper: get string content from atom (STR or CHAR), stripping trailing nulls */
     {
-        int a_is_str = ray_is_atom(a) && ((-a->type) == RAY_STR || (-a->type) == RAY_CHAR);
-        int b_is_str = ray_is_atom(b) && ((-b->type) == RAY_STR || (-b->type) == RAY_CHAR);
+        int a_is_str = ray_is_atom(a) && ((-a->type) == RAY_STR);
+        int b_is_str = ray_is_atom(b) && ((-b->type) == RAY_STR);
         if (a_is_str && b_is_str) {
-            char abuf[2], bbuf[2];
             const char *ap, *bp;
             size_t la, lb;
-            if ((-a->type) == RAY_CHAR) { abuf[0] = a->c8; ap = abuf; la = 1; }
-            else { ap = ray_str_ptr(a); la = ray_str_len(a); }
-            if ((-b->type) == RAY_CHAR) { bbuf[0] = b->c8; bp = bbuf; lb = 1; }
-            else { bp = ray_str_ptr(b); lb = ray_str_len(b); }
+            ap = ray_str_ptr(a); la = ray_str_len(a);
+            bp = ray_str_ptr(b); lb = ray_str_len(b);
             /* Strip trailing null bytes */
             while (la > 0 && ap[la - 1] == '\0') la--;
             while (lb > 0 && bp[lb - 1] == '\0') lb--;
@@ -8902,15 +8862,14 @@ static ray_t* ray_split_fn(ray_t* str, ray_t* delim) {
     /* Normalize str and delim to string pointers */
     const char *sp, *dp;
     size_t slen, dlen;
-    char sbuf, dbuf;
     ray_t* sym_str_s = NULL;
     ray_t* sym_str_d = NULL;
     if (str->type == -RAY_STR) { sp = ray_str_ptr(str); slen = ray_str_len(str); }
     else if (str->type == -RAY_SYM) { sym_str_s = ray_sym_str(str->i64); if (!sym_str_s) return ray_error("domain", NULL); sp = ray_str_ptr(sym_str_s); slen = ray_str_len(sym_str_s); }
-    else if (str->type == -RAY_CHAR) { sbuf = str->c8; sp = &sbuf; slen = 1; }
+    /* RAY_CHAR removed — all chars are now -RAY_STR */
     else return ray_error("type", NULL);
     if (delim->type == -RAY_STR) { dp = ray_str_ptr(delim); dlen = ray_str_len(delim); }
-    else if (delim->type == -RAY_CHAR) { dbuf = delim->c8; dp = &dbuf; dlen = 1; }
+    /* RAY_CHAR removed — all chars are now -RAY_STR */
     else { if (sym_str_s) ray_release(sym_str_s); return ray_error("type", NULL); }
 
     ray_t* result = ray_list_new(8);
