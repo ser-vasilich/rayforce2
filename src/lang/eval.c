@@ -9350,6 +9350,284 @@ static ray_t* ray_alter_fn(ray_t** args, int64_t n) {
 }
 
 /* ══════════════════════════════════════════
+ * Pattern matching (like)
+ * ══════════════════════════════════════════ */
+
+/* Glob-style pattern matching: * (any chars), ? (single char), [abc] (char class) */
+static bool str_glob(const char* s, const char* p) {
+    while (*p) {
+        if (*p == '*') {
+            p++;
+            if (!*p) return true;
+            while (*s) { if (str_glob(s, p)) return true; s++; }
+            return false;
+        }
+        if (*p == '?') { if (!*s) return false; s++; p++; continue; }
+        if (*p == '[') {
+            p++;
+            bool neg = (*p == '!'); if (neg) p++;
+            bool match = false;
+            while (*p && *p != ']') {
+                if (p[1] == '-' && p[2] && p[2] != ']') {
+                    if (*s >= p[0] && *s <= p[2]) match = true;
+                    p += 3;
+                } else {
+                    if (*s == *p) match = true;
+                    p++;
+                }
+            }
+            if (*p == ']') p++;
+            if (neg ? match : !match) return false;
+            s++; continue;
+        }
+        if (*s != *p) return false;
+        s++; p++;
+    }
+    return !*s;
+}
+
+/* (like str pattern) — glob-style pattern matching
+ * Supports: * (any chars), ? (single char), [abc] (char class)
+ * Returns: bool atom or bool vector */
+static ray_t* ray_like_fn(ray_t* x, ray_t* pattern) {
+    /* Pattern must be a string atom */
+    if (pattern->type != -RAY_STR) return ray_error("type", "like: pattern must be a string");
+    const char* pat = ray_str_ptr(pattern);
+
+    /* Atom: single match */
+    if (x->type == -RAY_STR || x->type == -RAY_SYM) {
+        const char* s;
+        if (x->type == -RAY_SYM) {
+            ray_t* sym_str = ray_sym_str(x->i64);
+            s = sym_str ? ray_str_ptr(sym_str) : "";
+        } else {
+            s = ray_str_ptr(x);
+        }
+        return make_bool(str_glob(s, pat) ? 1 : 0);
+    }
+
+    /* Vector: map over elements */
+    if (ray_is_vec(x) && (x->type == RAY_SYM || x->type == RAY_STR)) {
+        int64_t n = ray_len(x);
+        ray_t* result = ray_vec_new(RAY_BOOL, n);
+        if (RAY_IS_ERR(result)) return result;
+        result->len = n;
+        uint8_t* out = (uint8_t*)ray_data(result);
+
+        if (x->type == RAY_SYM) {
+            int64_t* sym_ids = (int64_t*)ray_data(x);
+            for (int64_t i = 0; i < n; i++) {
+                ray_t* sym_str = ray_sym_str(sym_ids[i]);
+                const char* s = sym_str ? ray_str_ptr(sym_str) : "";
+                out[i] = str_glob(s, pat) ? 1 : 0;
+            }
+        } else {
+            /* RAY_STR vector */
+            for (int64_t i = 0; i < n; i++) {
+                size_t slen;
+                const char* s = ray_str_vec_get(x, i, &slen);
+                /* Need null-terminated for glob — str_vec_get may not be */
+                char buf[256];
+                if (s && slen < sizeof(buf)) {
+                    memcpy(buf, s, slen); buf[slen] = '\0';
+                    out[i] = str_glob(buf, pat) ? 1 : 0;
+                } else {
+                    out[i] = 0;
+                }
+            }
+        }
+        return result;
+    }
+
+    return ray_error("type", "like: expects string or symbol");
+}
+
+/* ══════════════════════════════════════════
+ * Temporal clocks (date, time, timestamp)
+ * ══════════════════════════════════════════ */
+
+/* Helper: is the argument the symbol 'global? */
+static bool is_global_arg(ray_t* arg) {
+    if (arg && arg->type == -RAY_SYM) {
+        ray_t* s = ray_sym_str(arg->i64);
+        if (s && ray_str_len(s) == 6 && memcmp(ray_str_ptr(s), "global", 6) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Compute seconds since 2000.01.01 00:00:00 UTC (the rayforce epoch) */
+static time_t ray_epoch_offset(void) {
+    /* 2000-01-01 00:00:00 UTC = 946684800 seconds after 1970 epoch */
+    return (time_t)946684800;
+}
+
+/* (date 'local) or (date 'global) — returns current date as DATE atom (days since 2000.01.01) */
+static ray_t* ray_date_clock(ray_t* arg) {
+    bool local = !is_global_arg(arg);
+    time_t now = time(NULL);
+    struct tm* t = local ? localtime(&now) : gmtime(&now);
+    if (!t) return ray_error("domain", "date: failed to get current time");
+
+    /* Reconstruct midnight of today */
+    struct tm day = *t;
+    day.tm_hour = 0; day.tm_min = 0; day.tm_sec = 0; day.tm_isdst = -1;
+    time_t day_time = mktime(&day);
+
+    /* For UTC (global), mktime interprets as local — adjust via difference */
+    if (!local) {
+        /* Use a simpler approach: total days from epoch */
+        int32_t days = (int32_t)((now - ray_epoch_offset()) / 86400);
+        return ray_date((int64_t)days);
+    }
+
+    /* Local: days since the rayforce epoch, in local time sense */
+    int32_t days = (int32_t)((day_time - ray_epoch_offset()) / 86400);
+    return ray_date((int64_t)days);
+}
+
+/* (time 'local) or (time 'global) — returns current time as TIME atom (ms since midnight) */
+static ray_t* ray_time_clock(ray_t* arg) {
+    bool local = !is_global_arg(arg);
+    time_t now = time(NULL);
+    struct tm* t = local ? localtime(&now) : gmtime(&now);
+    if (!t) return ray_error("domain", "time: failed to get current time");
+
+    int32_t ms = t->tm_hour * 3600000 + t->tm_min * 60000 + t->tm_sec * 1000;
+    return ray_time((int64_t)ms);
+}
+
+/* (timestamp 'local) or (timestamp 'global) — returns current timestamp (ns since 2000.01.01) */
+static ray_t* ray_timestamp_clock(ray_t* arg) {
+    bool local = !is_global_arg(arg);
+    time_t now = time(NULL);
+    struct tm* t = local ? localtime(&now) : gmtime(&now);
+    if (!t) return ray_error("domain", "timestamp: failed to get current time");
+
+    int64_t secs;
+    if (!local) {
+        secs = now - ray_epoch_offset();
+    } else {
+        /* For local, compute offset from rayforce epoch in local terms */
+        struct tm lt = *t;
+        lt.tm_isdst = -1;
+        secs = mktime(&lt) - ray_epoch_offset();
+    }
+
+    int64_t nanos = secs * 1000000000LL;
+    return ray_timestamp(nanos);
+}
+
+/* ══════════════════════════════════════════
+ * Eval, parse, print, system, env builtins
+ * ══════════════════════════════════════════ */
+
+/* (eval expr) — evaluate a parsed expression */
+static ray_t* ray_eval_builtin(ray_t* x) {
+    return ray_eval(x);
+}
+
+/* (parse str) — parse a string into an AST */
+static ray_t* ray_parse_builtin(ray_t* x) {
+    if (x->type != -RAY_STR) return ray_error("type", "parse expects a string");
+    const char* src = ray_str_ptr(x);
+    if (!src) return ray_error("domain", NULL);
+    ray_t* parsed = ray_parse(src);
+    return parsed ? parsed : ray_error("parse", NULL);
+}
+
+/* (print val) — print without newline, return the value */
+static ray_t* ray_print_fn(ray_t* x) {
+    ray_fmt_print(stdout, x, 0);
+    fflush(stdout);
+    return x;
+}
+
+/* (meta x) — return metadata about an object as a dict */
+static ray_t* ray_meta_fn(ray_t* x) {
+    if (!x) return ray_error("type", NULL);
+
+    const char* tname = type_sym_name(x->type);
+    int64_t type_sym = ray_sym_intern("type", 4);
+    int64_t type_id  = ray_sym_intern(tname, strlen(tname));
+
+    if (ray_is_atom(x)) {
+        /* Atom: return {type: <typename>} */
+        ray_t* dict = ray_list_new(2);
+        if (RAY_IS_ERR(dict)) return dict;
+        dict->attrs |= RAY_ATTR_DICT;
+        ray_t* k = ray_sym(type_sym);
+        dict = ray_list_append(dict, k); ray_release(k);
+        ray_t* tv = ray_sym(type_id);
+        dict = ray_list_append(dict, tv); ray_release(tv);
+        return dict;
+    }
+
+    /* Vector/table/list: return {type: <typename>, len: <n>} */
+    ray_t* dict = ray_list_new(4);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    ray_t* k1 = ray_sym(type_sym);
+    dict = ray_list_append(dict, k1); ray_release(k1);
+    if (x->type == RAY_LIST && (x->attrs & RAY_ATTR_DICT)) {
+        int64_t did = ray_sym_intern("DICT", 4);
+        ray_t* tv = ray_sym(did);
+        dict = ray_list_append(dict, tv); ray_release(tv);
+    } else {
+        ray_t* tv = ray_sym(type_id);
+        dict = ray_list_append(dict, tv); ray_release(tv);
+    }
+
+    int64_t len_sym = ray_sym_intern("len", 3);
+    ray_t* k2 = ray_sym(len_sym);
+    dict = ray_list_append(dict, k2); ray_release(k2);
+    ray_t* lv = make_i64(x->len);
+    dict = ray_list_append(dict, lv); ray_release(lv);
+
+    return dict;
+}
+
+/* (gc) — no-op garbage collection trigger, return 0 */
+static ray_t* ray_gc_fn(ray_t* x) { (void)x; return ray_i64(0); }
+
+/* (system cmd) — run shell command, return exit code */
+static ray_t* ray_system_fn(ray_t* x) {
+    if (x->type != -RAY_STR) return ray_error("type", "system expects a string");
+    const char* cmd = ray_str_ptr(x);
+    if (!cmd) return ray_error("domain", NULL);
+    int rc = system(cmd);
+    return make_i64(rc);
+}
+
+/* (getenv name) — get environment variable */
+static ray_t* ray_getenv_fn(ray_t* x) {
+    if (x->type != -RAY_STR) return ray_error("type", "getenv expects a string");
+    const char* name = ray_str_ptr(x);
+    if (!name) return ray_error("domain", NULL);
+    const char* val = getenv(name);
+    return val ? ray_str(val, strlen(val)) : ray_str("", 0);
+}
+
+/* (setenv name val) — set environment variable */
+#if !defined(_WIN32)
+extern int setenv(const char*, const char*, int);
+#endif
+static ray_t* ray_setenv_fn(ray_t* name, ray_t* val) {
+    if (name->type != -RAY_STR || val->type != -RAY_STR)
+        return ray_error("type", "setenv expects two strings");
+    const char* n = ray_str_ptr(name);
+    const char* v = ray_str_ptr(val);
+    if (!n || !v) return ray_error("domain", NULL);
+#if defined(_WIN32)
+    _putenv_s(n, v);
+#else
+    setenv(n, v, 1);
+#endif
+    return val;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -9517,6 +9795,26 @@ static void ray_register_builtins(void) {
 
     /* In-place mutation */
     register_vary("alter",       RAY_FN_SPECIAL_FORM, ray_alter_fn);
+
+    /* Pattern matching */
+    register_binary("like",      RAY_FN_NONE, ray_like_fn);
+
+    /* Temporal clocks */
+    register_unary("date",       RAY_FN_NONE, ray_date_clock);
+    register_unary("time",       RAY_FN_NONE, ray_time_clock);
+    register_unary("timestamp",  RAY_FN_NONE, ray_timestamp_clock);
+
+    /* Eval, parse, print, meta */
+    register_unary("eval",       RAY_FN_NONE, ray_eval_builtin);
+    register_unary("parse",      RAY_FN_NONE, ray_parse_builtin);
+    register_unary("print",      RAY_FN_NONE, ray_print_fn);
+    register_unary("meta",       RAY_FN_NONE, ray_meta_fn);
+
+    /* System builtins */
+    register_unary("gc",         RAY_FN_NONE, ray_gc_fn);
+    register_unary("system",     RAY_FN_NONE, ray_system_fn);
+    register_unary("getenv",     RAY_FN_NONE, ray_getenv_fn);
+    register_binary("setenv",    RAY_FN_NONE, ray_setenv_fn);
 }
 
 /* ══════════════════════════════════════════
