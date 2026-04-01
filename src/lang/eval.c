@@ -1882,8 +1882,8 @@ ray_t* ray_med(ray_t* x) {
         return ray_error("type", NULL);
     }
     int64_t len;
-    ray_t* scratch;
-    double* vals;
+    ray_t* scratch = NULL;
+    double* vals = NULL;
 
     if (ray_is_vec(x)) {
         len = ray_len(x);
@@ -7711,6 +7711,7 @@ vm_error_name:
 
 vm_error:
     vm_err_str = "domain";
+    vm_err_detail = NULL;
 
 vm_error_cleanup: {
     /* Check for trap frame */
