@@ -2627,7 +2627,7 @@ static MunitResult test_rf_take(const void* params, void* fixture) {
     ASSERT_EQ("(take [0x00 0x01 0x02 0x03] -5)", "[0x03 0x00 0x01 0x02 0x03]");
 
     ASSERT_EQ("(take \"abcd\" 0h)", "\"\"");
-    ASSERT_EQ("(type (take \"abcd\" 0i))", "'C8");
+    ASSERT_EQ("(type (take \"abcd\" 0i))", "'str");
     ASSERT_EQ("(take 'a' 2)", "\"aa\"");
     ASSERT_EQ("(take \"abcd\" 3)", "\"abc\"");
     ASSERT_EQ("(take \"abcd\" -3)", "\"bcd\"");

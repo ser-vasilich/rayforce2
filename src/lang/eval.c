@@ -6881,14 +6881,14 @@ static const char* type_sym_name(int8_t type) {
     case RAY_I16:       return type < 0 ? "i16" : "I16";
     case RAY_I32:       return type < 0 ? "i32" : "I32";
     case RAY_I64:       return type < 0 ? "i64" : "I64";
+    case RAY_F32:       return type < 0 ? "f32" : "F32";
     case RAY_F64:       return type < 0 ? "f64" : "F64";
     case RAY_DATE:      return type < 0 ? "date" : "DATE";
     case RAY_TIME:      return type < 0 ? "time" : "TIME";
     case RAY_TIMESTAMP: return type < 0 ? "timestamp" : "TIMESTAMP";
     case RAY_SYM:       return type < 0 ? "symbol" : "SYMBOL";
-    case RAY_STR:       return type < 0 ? "C8" : "C8";
+    case RAY_STR:       return type < 0 ? "str" : "STR";
     case RAY_GUID:      return type < 0 ? "guid" : "GUID";
-    /* RAY_CHAR removed */
     case RAY_TABLE:     return "TABLE";
     case RAY_DICT:      return "DICT";
     case RAY_LIST:      return "LIST";
