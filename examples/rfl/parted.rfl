@@ -11,7 +11,7 @@
                   (take [AAPL GOOG MSFT IBM AMZN FB BABA] n) 
                   (as 'F64 (+ x (til n))) 
                   (take (+ x (til 3)) n)
-                  (map (fn [x] (as 'C8 x)) (take (+ x (til 3)) n))
+                  (map (fn [x] (as 'STR x)) (take (+ x (til 3)) n))
                   (as 'TIMESTAMP (til n)) 
             )
         ))

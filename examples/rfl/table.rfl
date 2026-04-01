@@ -5,7 +5,7 @@
           (take [AAPL GOOG MSFT IBM AMZN FB BABA] n) 
           (as 'F64 (til n)) 
           (take (+ 1 (til 3)) n)
-          (map (fn [x] (as 'C8 x)) (take (til 10) n))
+          (map (fn [x] (as 'STR x)) (take (til 10) n))
           (as 'TIMESTAMP (til n)) 
     ))
 )

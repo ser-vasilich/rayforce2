@@ -5,5 +5,5 @@
 ;; (window-join [Sym Ts] windows trades quotes {a:(avg Ask)})
 
 (set n 10000000)
-(set quotes (table [Sym Ts Bid Ask] (list (take (as 'SYMBOL (map-right as 'C8 (til 18000))) n) (as 'TIME (* 1000 (til n))) (as 'F64 (til n)) (as 'F64 (til n)))))
-(set trades (table [Sym Ts Qty Price] (list (take (as 'SYMBOL (map-right as 'C8 (til 8000))) n) (as 'TIME (+ 2 (* 1000 (til n)))) (til n) (as 'F64 (til n)))))
+(set quotes (table [Sym Ts Bid Ask] (list (take (as 'SYMBOL (map-right as 'STR (til 18000))) n) (as 'TIME (* 1000 (til n))) (as 'F64 (til n)) (as 'F64 (til n)))))
+(set trades (table [Sym Ts Qty Price] (list (take (as 'SYMBOL (map-right as 'STR (til 8000))) n) (as 'TIME (+ 2 (* 1000 (til n)))) (til n) (as 'F64 (til n)))))
