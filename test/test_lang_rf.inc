@@ -38,8 +38,8 @@ static MunitResult test_rf_basic(const void* params, void* fixture) {
     ASSERT_EQ("\"\"", "\"\"");
     ASSERT_EQ("'asd", "'asd");
     ASSERT_EQ("'", "0Ns");
-    ASSERT_EQ("(as 'C8 ')", "\"\"");
-    ASSERT_EQ("(as 'C8 ' )", "\"\"");
+    ASSERT_EQ("(as 'STR ')", "\"\"");
+    ASSERT_EQ("(as 'STR ' )", "\"\"");
     ASSERT_EQ("\"asd\"", "\"asd\"");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3]}", "{a: \"asd\" b: 1 c: [1 2 3]}");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}", "{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}");
@@ -2849,7 +2849,7 @@ static MunitResult test_rf_query(const void* params, void* fixture) {
         "(take [apll good msfk ibmd amznt fbad baba] n)"
         "(as 'F64 (til n))"
         "(take (+ 1 (til 3)) n)"
-        "(map (fn [x] (as 'C8 x)) (take (til 10) n))"
+        "(map (fn [x] (as 'STR x)) (take (til 10) n))"
         "(as 'TIMESTAMP (til n)))))"
         "null",
         "null");
@@ -4944,15 +4944,15 @@ static MunitResult test_rf_cast(const void* params, void* fixture) {
     ASSERT_EQ("(count (as 'SYMBOL (til 1000)))", "1000");
 
     // ========== STRING/CHAR CASTS ==========
-    ASSERT_EQ("(as 'C8 'hello)", "\"hello\"");
-    ASSERT_EQ("(as 'C8 123)", "\"123\"");
-    ASSERT_EQ("(as 'C8 123i)", "\"123\"");
-    ASSERT_EQ("(as 'C8 123h)", "\"123\"");
-    ASSERT_EQ("(as 'C8 123.45)", "\"123.45\"");
-    ASSERT_EQ("(as 'C8 true)", "\"true\"");
-    ASSERT_EQ("(as 'C8 false)", "\"false\"");
-    ASSERT_EQ("(as 'C8 2024.03.20)", "\"2024.03.20\"");
-    ASSERT_EQ("(as 'C8 12:30:45.123)", "\"12:30:45.123\"");
+    ASSERT_EQ("(as 'STR 'hello)", "\"hello\"");
+    ASSERT_EQ("(as 'STR 123)", "\"123\"");
+    ASSERT_EQ("(as 'STR 123i)", "\"123\"");
+    ASSERT_EQ("(as 'STR 123h)", "\"123\"");
+    ASSERT_EQ("(as 'STR 123.45)", "\"123.45\"");
+    ASSERT_EQ("(as 'STR true)", "\"true\"");
+    ASSERT_EQ("(as 'STR false)", "\"false\"");
+    ASSERT_EQ("(as 'STR 2024.03.20)", "\"2024.03.20\"");
+    ASSERT_EQ("(as 'STR 12:30:45.123)", "\"12:30:45.123\"");
 
     // ========== SINGLE-CHAR STRING CASTS ==========
     // c8 <- symbol (get first character as 1-char string)

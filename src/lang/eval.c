@@ -6440,7 +6440,7 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
         }
         return ray_error("type", NULL);
     }
-    if (cast_match(tname, tlen, "STR") || cast_match(tname, tlen, "C8")) {
+    if (cast_match(tname, tlen, "STR") || cast_match(tname, tlen, "str")) {
         ray_release(s);
         if (val->type == -RAY_STR) { ray_retain(val); return val; }
         if (val->type == -RAY_SYM) {
