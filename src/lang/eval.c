@@ -48,8 +48,6 @@
 #include <unistd.h>
 #endif
 
-/* err_code_str removed — use ray_err_code_str() from runtime.c */
-
 /* Maximum recursion depth for ray_eval() to prevent stack overflow */
 #define RAY_EVAL_MAX_DEPTH 512
 _Thread_local static int eval_depth = 0;
@@ -6424,23 +6422,7 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
         }
         return ray_error("type", NULL);
     }
-    /* Cast to C8/STR/str */
-    /* Cast to c8 (char atom) — get first character */
-    if (tlen == 2 && tname[0] == 'c' && tname[1] == '8') {
-        ray_release(s);
-        if (val->type == -RAY_STR && ray_str_len(val) == 1) { ray_retain(val); return val; }
-        if (val->type == -RAY_SYM) {
-            ray_t* sym_str = ray_sym_str(val->i64);
-            if (sym_str) { const char* p = ray_str_ptr(sym_str); return ray_str(p, 1); }
-            return ray_str("\0", 1);
-        }
-        if (val->type == -RAY_STR) {
-            size_t slen = ray_str_len(val);
-            if (slen > 0) { const char* p = ray_str_ptr(val); return ray_str(p, 1); }
-            return ray_str("\0", 1);
-        }
-        return ray_error("type", NULL);
-    }
+    /* Cast to STR/str */
     if (cast_match(tname, tlen, "STR") || cast_match(tname, tlen, "str")) {
         ray_release(s);
         if (val->type == -RAY_STR) { ray_retain(val); return val; }

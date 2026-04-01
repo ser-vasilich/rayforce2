@@ -4954,15 +4954,6 @@ static MunitResult test_rf_cast(const void* params, void* fixture) {
     ASSERT_EQ("(as 'STR 2024.03.20)", "\"2024.03.20\"");
     ASSERT_EQ("(as 'STR 12:30:45.123)", "\"12:30:45.123\"");
 
-    // ========== SINGLE-CHAR STRING CASTS ==========
-    // c8 <- symbol (get first character as 1-char string)
-    ASSERT_EQ("(as 'c8 'a)", "\"a\"");
-    ASSERT_EQ("(as 'c8 'hello)", "\"h\"");
-    ASSERT_EQ("(as 'c8 'XYZ)", "\"X\"");
-    // c8 <- string (get first character as 1-char string)
-    ASSERT_EQ("(as 'c8 \"a\")", "\"a\"");
-    ASSERT_EQ("(as 'c8 \"hello\")", "\"h\"");
-    ASSERT_EQ("(as 'c8 \"XYZ\")", "\"X\"");
 
     // ========== GUID CASTS ==========
     ASSERT_EQ("(type (as 'guid \"d49f18a4-1969-49e8-9b8a-6bb9a4832eea\"))", "'guid");

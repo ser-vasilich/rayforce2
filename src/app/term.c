@@ -621,12 +621,10 @@ static int32_t find_next_utf8(const char* buf, int32_t pos, int32_t len) {
 
 #define CLR_GREEN      "\033[1;32m"
 #define CLR_YELLOW     "\033[1;33m"
-#define CLR_CYAN       "\033[1;36m"
 #define CLR_GRAY       "\033[1;38;5;8m"
 #define CLR_LIGHT_BLUE "\033[1;38;5;39m"
 #define CLR_SALAD      "\033[1;38;5;118m"
 #define CLR_RESET      "\033[0m"
-#define CLR_BOLD       "\033[1m"
 #define CLR_BACK_CYAN  "\033[46m"
 
 /* ===== Syntax highlighting helpers ===== */

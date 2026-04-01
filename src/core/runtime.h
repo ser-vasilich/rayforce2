@@ -2,7 +2,6 @@
 #define RAY_RUNTIME_H
 
 #include <rayforce.h>
-#include <stdarg.h>
 
 /* ===== Error Info (per-VM, ephemeral) ===== */
 
@@ -71,8 +70,6 @@ typedef struct {
 typedef struct ray_runtime_s {
     ray_vm_t       **vms;
     int32_t          n_vms;
-    void            *pool;
-    void            *sym;
 } ray_runtime_t;
 
 /* Global runtime + per-thread VM */
@@ -85,8 +82,6 @@ void           ray_runtime_destroy(ray_runtime_t* rt);
 
 /* Error API — allocates ray_t with type=RAY_ERROR, sets __VM->err.msg */
 ray_t* ray_error(const char* code, const char* fmt, ...);
-ray_t* ray_verror(const char* code, const char* fmt, va_list ap);
-
 /* Read error code from a RAY_ERROR object (returns pointer to sdata) */
 const char* ray_err_code(ray_t* err);
 

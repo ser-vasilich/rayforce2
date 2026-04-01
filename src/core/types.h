@@ -42,16 +42,4 @@ extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];
 /* Element size for a given type tag */
 #define ray_elem_size(t)  (ray_type_sizes[(t)])
 
-/* --------------------------------------------------------------------------
- * Type classification helpers (operate on positive type tags)
- * -------------------------------------------------------------------------- */
-/* Numeric: BOOL, U8, CHAR, I16, I32, I64, F64 */
-#define RAY_IS_NUMERIC(t) ((t) >= RAY_BOOL && (t) <= RAY_F64)
-
-/* Integer: BOOL, U8, CHAR, I16, I32, I64 */
-#define RAY_IS_INTEGER(t) ((t) >= RAY_BOOL && (t) <= RAY_I64)
-
-/* Float: F64 only */
-#define RAY_IS_FLOAT(t)   ((t) == RAY_F64)
-
 #endif /* RAY_TYPES_H */

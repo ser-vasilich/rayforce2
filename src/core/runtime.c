@@ -24,6 +24,7 @@
 #include "runtime.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -80,7 +81,7 @@ ray_err_t ray_err_from_obj(ray_t* err) {
 
 /* ===== Error API ===== */
 
-ray_t* ray_verror(const char* code, const char* fmt, va_list ap) {
+static ray_t* ray_verror(const char* code, const char* fmt, va_list ap) {
     ray_t* err = ray_alloc(0);
     if (!err) return NULL;
     err->type = RAY_ERROR;
