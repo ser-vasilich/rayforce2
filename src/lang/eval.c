@@ -272,7 +272,9 @@ ray_t* ray_add_fn(ray_t* a, ray_t* b) {
     if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME)
         return ray_timestamp(a->i64 + b->i64 * 1000000LL);
 
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot add %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) + as_f64(b));
@@ -320,7 +322,9 @@ ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
     if (a->type == -RAY_TIMESTAMP && b->type == -RAY_DATE)
         return ray_error("type", NULL);
 
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot subtract %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) {
@@ -346,7 +350,9 @@ ray_t* ray_mul_fn(ray_t* a, ray_t* b) {
     if (a->type == -RAY_TIME && b->type == -RAY_TIME)
         return ray_error("type", NULL);
 
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot multiply %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     /* Null propagation */
     if (is_null_atom(a) || is_null_atom(b)) return null_for_promoted(a, b);
     if (is_float_op(a, b)) return make_f64(as_f64(a) * as_f64(b));
@@ -390,7 +396,9 @@ ray_t* ray_div_fn(ray_t* a, ray_t* b) {
         if (a->type == -RAY_DATE)      return ray_date(q);
         return ray_timestamp(q);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot divide %s by %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     /* u8: unsigned byte division, no null sentinel — div by 0 returns 0 */
     if (a->type == -RAY_U8) {
         uint8_t bv = (uint8_t)as_i64(b);
@@ -478,7 +486,9 @@ ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
         if (a->type == -RAY_DATE)      return ray_date(result);
         return ray_timestamp(result);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot mod %s by %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
 
     /* u8: unsigned byte modulo, no null sentinel — mod by 0 returns 0 */
     if (b->type == -RAY_U8) {
@@ -565,7 +575,9 @@ ray_t* ray_gt_fn(ray_t* a, ray_t* b) {
             return make_bool(is_null_atom(b) && !is_null_atom(a) ? 1 : 0);
         return make_bool(temporal_as_ns(a) > temporal_as_ns(b) ? 1 : 0);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot compare %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(0);       /* null == null → not > */
     if (na) return make_bool(0);             /* null > X → false */
@@ -582,7 +594,9 @@ ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
             return make_bool(is_null_atom(a) && !is_null_atom(b) ? 1 : 0);
         return make_bool(temporal_as_ns(a) < temporal_as_ns(b) ? 1 : 0);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot compare %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(0);       /* null == null → not < */
     if (na) return make_bool(1);             /* null < X → true */
@@ -600,7 +614,9 @@ ray_t* ray_gte(ray_t* a, ray_t* b) {
         if (is_null_atom(b)) return make_bool(1);
         return make_bool(temporal_as_ns(a) >= temporal_as_ns(b) ? 1 : 0);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot compare %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(1);       /* null == null → >= true */
     if (na) return make_bool(0);             /* null >= X → false */
@@ -618,7 +634,9 @@ ray_t* ray_lte(ray_t* a, ray_t* b) {
         if (is_null_atom(b)) return make_bool(0);
         return make_bool(temporal_as_ns(a) <= temporal_as_ns(b) ? 1 : 0);
     }
-    if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
+    if (!is_numeric(a) || !is_numeric(b))
+        return ray_error("type", "cannot compare %s and %s",
+                         ray_type_name(a->type), ray_type_name(b->type));
     int na = is_null_atom(a), nb = is_null_atom(b);
     if (na && nb) return make_bool(1);       /* null == null → <= true */
     if (na) return make_bool(1);             /* null <= X → true */
@@ -7700,14 +7718,17 @@ op_trap_end: {
 }
 
     const char *vm_err_str = "domain";
+    const char *vm_err_detail = NULL;
     goto vm_error_cleanup;
 
 vm_error_limit:
     vm_err_str = "limit";
+    vm_err_detail = "stack overflow";
     goto vm_error_cleanup;
 
 vm_error_name:
     vm_err_str = "name";
+    vm_err_detail = NULL;
     goto vm_error_cleanup;
 
 vm_error:
@@ -7767,6 +7788,8 @@ vm_error_cleanup: {
     __VM = NULL;
 #undef vm
     ray_free(vm_block);
+    if (vm_err_detail)
+        return ray_error(vm_err_str, "%s", vm_err_detail);
     return ray_error(vm_err_str, NULL);
 }
 
@@ -9306,11 +9329,11 @@ ray_t* ray_eval(ray_t* obj) {
     if (!obj || RAY_IS_ERR(obj)) return obj;
 
     /* Check for external interrupt (e.g. Ctrl-C from REPL) */
-    if (g_eval_interrupted) return ray_error("limit", NULL);
+    if (g_eval_interrupted) return ray_error("limit", "interrupted");
 
     if (++eval_depth > RAY_EVAL_MAX_DEPTH) {
         eval_depth--;
-        return ray_error("limit", NULL);
+        return ray_error("limit", "eval depth exceeded");
     }
 
     ray_t* ret;
@@ -9332,7 +9355,17 @@ ray_t* ray_eval(ray_t* obj) {
             }
 
             ray_t* val = ray_env_get(obj->i64);
-            if (!val) { ret = ray_error("name", NULL); goto out; }
+            if (!val) {
+                ray_t* ns = ray_sym_str(obj->i64);
+                if (ns) {
+                    ret = ray_error("name", "'%.*s' undefined",
+                                    (int)ray_str_len(ns), ray_str_ptr(ns));
+                    ray_release(ns);
+                } else {
+                    ret = ray_error("name", NULL);
+                }
+                goto out;
+            }
             ray_retain(val);
             ret = val; goto out;
         }
