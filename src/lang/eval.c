@@ -7237,6 +7237,37 @@ static void add_error_frame(ray_t* fn, int32_t ip) {
     }
 }
 
+/* Add error frame from eval context (nfo + AST node) for call-site errors. */
+static void add_eval_error_frame(ray_t* nfo, ray_t* node) {
+    if (!nfo || !node) return;
+    ray_span_t span = ray_nfo_get(nfo, node);
+    if (span.id == 0) return;
+
+    ray_t* frame = ray_alloc(4 * sizeof(ray_t*));
+    if (!frame || RAY_IS_ERR(frame)) return;
+    frame->type = RAY_LIST;
+    frame->len = 4;
+    ray_t** fe = (ray_t**)ray_data(frame);
+
+    fe[0] = ray_i64(span.id);
+    fe[1] = NFO_FILENAME(nfo) ? (ray_retain(NFO_FILENAME(nfo)), NFO_FILENAME(nfo))
+                              : ray_str("<unknown>", 9);
+    fe[2] = NULL;
+    fe[3] = NFO_SOURCE(nfo) ? (ray_retain(NFO_SOURCE(nfo)), NFO_SOURCE(nfo))
+                            : ray_str("", 0);
+
+    if (!g_error_trace) {
+        g_error_trace = ray_alloc(sizeof(ray_t*));
+        if (!g_error_trace) { ray_release(frame); return; }
+        g_error_trace->type = RAY_LIST;
+        g_error_trace->len = 1;
+        ((ray_t**)ray_data(g_error_trace))[0] = frame;
+    } else {
+        g_error_trace = ray_list_append(g_error_trace, frame);
+        ray_release(frame);
+    }
+}
+
 /* Execute compiled bytecode for a lambda. */
 static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc);
 
@@ -7258,10 +7289,8 @@ static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
 
     int64_t param_count = ray_len(params_list);
 
-    if (argc != param_count) {
-        add_error_frame(lambda, 0);
+    if (argc != param_count)
         return ray_error("arity", "expected %" PRId64 " args, got %" PRId64, param_count, argc);
-    }
 
     if (ray_env_push_scope() != RAY_OK) return ray_error("oom", NULL);
 
@@ -7326,10 +7355,8 @@ static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc) {
     /* Arity check before allocating VM state */
     {
         int64_t param_count = ray_len(LAMBDA_PARAMS(lambda));
-        if (argc != param_count) {
-            add_error_frame(lambda, 0);
+        if (argc != param_count)
             return ray_error("arity", "expected %" PRId64 " args, got %" PRId64, param_count, argc);
-        }
     }
 
     ray_t *vm_block = ray_alloc(sizeof(ray_vm_t));
@@ -9521,6 +9548,8 @@ ray_t* ray_eval(ray_t* obj) {
             ray_t* result = call_lambda(head, args, argc);
             for (int64_t i = 0; i < argc; i++) ray_release(args[i]);
             ray_release(head);
+            if (RAY_IS_ERR(result))
+                add_eval_error_frame(g_eval_nfo, obj);
             ret = result; goto out;
         }
         default:
