@@ -28,19 +28,18 @@ const uint8_t ray_type_sizes[RAY_TYPE_COUNT] = {
     /* [RAY_LIST]      =  0 */ 8,   /* pointer-sized (ray_t*) */
     /* [RAY_BOOL]      =  1 */ 1,
     /* [RAY_U8]        =  2 */ 1,
-    /* [RAY_CHAR]      =  3 */ 1,
-    /* [RAY_I16]       =  4 */ 2,
-    /* [RAY_I32]       =  5 */ 4,
-    /* [RAY_I64]       =  6 */ 8,
+    /* [RAY_I16]       =  3 */ 2,
+    /* [RAY_I32]       =  4 */ 4,
+    /* [RAY_I64]       =  5 */ 8,
+    /* [RAY_F32]       =  6 */ 4,
     /* [RAY_F64]       =  7 */ 8,
-    /* [RAY_F32]       =  8 */ 4,
-    /* [RAY_DATE]      =  9 */ 4,
-    /* [RAY_TIME]      = 10 */ 4,
-    /* [RAY_TIMESTAMP] = 11 */ 8,
-    /* [RAY_GUID]      = 12 */ 16,
-    /* [RAY_SYM]       = 13 */ 8,   /* W64 default; narrow widths use ray_sym_elem_size */
-    /* [RAY_STR]       = 14 */ 16,  /* sizeof(ray_str_t) */
-    /* [RAY_SEL]       = 15 */ 0,   /* variable-size layout, no elem_size */
+    /* [RAY_DATE]      =  8 */ 4,
+    /* [RAY_TIME]      =  9 */ 4,
+    /* [RAY_TIMESTAMP] = 10 */ 8,
+    /* [RAY_GUID]      = 11 */ 16,
+    /* [RAY_SYM]       = 12 */ 8,   /* W64 default; narrow widths use ray_sym_elem_size */
+    /* [RAY_STR]       = 13 */ 16,  /* sizeof(ray_str_t) */
+    /* [RAY_SEL]       = 14 */ 0,   /* variable-size layout, no elem_size */
 };
 
 /* ===== Semantic Version API ===== */

@@ -34,7 +34,7 @@
 #include <rayforce.h>
 
 /* Number of types (positive range): must be > max type ID */
-#define RAY_TYPE_COUNT 16
+#define RAY_TYPE_COUNT 15
 
 /* Type sizes lookup table (defined in types.c) */
 extern const uint8_t ray_type_sizes[RAY_TYPE_COUNT];

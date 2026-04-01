@@ -32,7 +32,7 @@ extern "C" {
 
 /* ===== Internal Type Constants ===== */
 
-#define RAY_SEL       15   /* selection bitmap (lazy filter) */
+#define RAY_SEL       14   /* selection bitmap (lazy filter) */
 
 /* Lazy DAG handle (atom-only; stored inline in nullmap region) */
 #define RAY_LAZY      104

@@ -58,21 +58,19 @@ const char* ray_version_string(void);
 #define RAY_LIST       0
 #define RAY_BOOL       1
 #define RAY_U8         2
-#define RAY_CHAR       3
-#define RAY_I16        4
-#define RAY_I32        5
-#define RAY_I64        6
+#define RAY_I16        3
+#define RAY_I32        4
+#define RAY_I64        5
+#define RAY_F32        6
 #define RAY_F64        7
-#define RAY_F32        8    /* 32-bit float vector (also used for embeddings) */
-#define RAY_DATE       9
-#define RAY_TIME      10
-#define RAY_TIMESTAMP 11
-#define RAY_GUID      12
+#define RAY_DATE       8
+#define RAY_TIME       9
+#define RAY_TIMESTAMP 10
+#define RAY_GUID      11
 /* Unified dictionary-encoded string column (adaptive width) */
-#define RAY_SYM       13
-
+#define RAY_SYM       12
 /* Variable-length string column (inline + pool) */
-#define RAY_STR       14
+#define RAY_STR       13
 
 /* Compound types */
 #define RAY_TABLE     98
@@ -130,7 +128,6 @@ typedef union ray_t {
         union {
             uint8_t  b8;     /* BOOL atom */
             uint8_t  u8;     /* U8 atom */
-            char     c8;     /* CHAR atom */
             int16_t  i16;    /* I16 atom */
             int32_t  i32;    /* I32 atom */
             uint32_t u32;
@@ -181,7 +178,6 @@ void     ray_release(ray_t* v);
 
 ray_t* ray_bool(bool val);
 ray_t* ray_u8(uint8_t val);
-ray_t* ray_char(char val);
 ray_t* ray_i16(int16_t val);
 ray_t* ray_i32(int32_t val);
 ray_t* ray_i64(int64_t val);
