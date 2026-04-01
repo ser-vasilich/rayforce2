@@ -105,8 +105,6 @@ typedef enum {
 
 #define RAY_IS_ERR(p)    ((p) != NULL && (uintptr_t)(p) > 31 && ((ray_t*)(p))->type == RAY_ERROR)
 
-const char* ray_err_str(ray_err_t e);
-
 /* ===== Core Type: ray_t (32-byte block/object header) ===== */
 
 typedef union ray_t {
