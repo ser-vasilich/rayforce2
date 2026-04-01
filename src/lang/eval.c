@@ -32,10 +32,7 @@
 #include "mem/heap.h"
 #include "mem/sys.h"
 #include "app/format.h"
-/* Forward-declare ray_error from core/runtime.h (avoid including full header
-   to prevent ray_vm_t / __VM redefinition conflicts until eval.h is migrated) */
-#include <stdarg.h>
-ray_t* ray_error(const char* code, const char* fmt, ...);
+/* ray_error() is declared in <rayforce.h> (included via eval.h) */
 
 #include <string.h>
 #include <inttypes.h>
@@ -51,7 +48,7 @@ ray_t* ray_error(const char* code, const char* fmt, ...);
 #include <unistd.h>
 #endif
 
-/* err_code_str removed — use ray_ray_err_code_str() from runtime.c */
+/* err_code_str removed — use ray_err_code_str() from runtime.c */
 
 /* Maximum recursion depth for ray_eval() to prevent stack overflow */
 #define RAY_EVAL_MAX_DEPTH 512

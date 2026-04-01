@@ -38,6 +38,7 @@ static const char* err_strings[] = {
     [RAY_ERR_CANCEL]  = "query cancelled",
     [RAY_ERR_PARSE]   = "parse error",
     [RAY_ERR_NAME]    = "name error",
+    [RAY_ERR_LIMIT]   = "limit error",
 };
 
 #define ERR_STRING_COUNT (sizeof(err_strings) / sizeof(err_strings[0]))

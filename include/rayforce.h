@@ -105,8 +105,7 @@ typedef enum {
     RAY_ERR_LIMIT
 } ray_err_t;
 
-/* DEPRECATED — legacy sentinel-pointer error macros (migration in progress) */
-#define RAY_ERR_PTR(e)   ((ray_t*)(uintptr_t)(e))   /* DEPRECATED */
+/* DEPRECATED — legacy sentinel-pointer error macro (migration in progress) */
 #define RAY_ERR_CODE(p)  ((ray_err_t)(uintptr_t)(p)) /* DEPRECATED */
 
 #define RAY_IS_ERR(p)    ((p) != NULL && (uintptr_t)(p) > 31 && ((ray_t*)(p))->type == RAY_ERROR)
