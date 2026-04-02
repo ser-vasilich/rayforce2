@@ -73,11 +73,14 @@ The REPL prompt is `‣`:
 
 ## C API
 
-Single public header: [`include/rayforce.h`](include/rayforce.h)
+Public header: [`include/rayforce.h`](include/rayforce.h). Internal headers
+`mem/heap.h` (allocator lifecycle) and `ops/ops.h` (opcodes) are needed for
+full programs.
 
-<!-- Based on examples/analytics.c -->
+<!-- Verified: compiles with cc -Iinclude -Isrc -->
 ```c
 #include <rayforce.h>
+#include "mem/heap.h"
 #include "ops/ops.h"
 
 int main(void) {
@@ -131,7 +134,7 @@ int main(void) {
 
 ## How It Works
 
-**Build** — Construct a lazy DAG with 80+ opcodes: scans, filters, joins,
+**Build** — Construct a lazy DAG with 88 opcodes: scans, filters, joins,
 aggregations, window functions, graph traversals. Nothing executes yet.
 
 **Optimize** — 10 rewrite passes: type inference → constant folding → SIP →
@@ -145,7 +148,7 @@ Thread pool dispatches morsels in parallel.
 ## Features
 
 **Execution engine**
-- Lazy DAG with 80+ opcodes — nothing runs until `ray_execute`
+- Lazy DAG with 88 opcodes — nothing runs until `ray_execute`
 - 10-pass optimizer with sideways information passing
 - Fused morsel-driven bytecode — element-wise ops merged into single-pass chunks
 - Radix-partitioned hash joins sized for L2 cache
@@ -198,7 +201,7 @@ Full docs: **[rayforcedb.github.io/rayforce2](https://rayforcedb.github.io/rayfo
 - [Rayfall Language](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html) — syntax, 143 builtins
 - [Data Types](https://rayforcedb.github.io/rayforce2/docs/data-types.html) — 12 types, collections
 - [Queries](https://rayforcedb.github.io/rayforce2/docs/queries-select.html) — select, joins, pivot, window
-- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 59 public functions
+- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 62 public functions
 - [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html) — 22 algorithms
 - [Architecture](https://rayforcedb.github.io/rayforce2/docs/architecture-pipeline.html) — DAG, optimizer, memory
 
