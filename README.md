@@ -36,62 +36,76 @@ make test       # 563 tests across 32 suites
 
 ## Rayfall REPL
 
-Rayforce ships with **Rayfall** — a Lisp-like query language with 143 builtins:
+Rayforce ships with **Rayfall** — a Lisp-like query language with 143 builtins.
+The REPL prompt is `‣`:
 
-```lisp
-rf> (set t (table [Symbol Side Qty]
-      (list [AAPL GOOG MSFT AAPL GOOG]
-            [Buy Sell Buy Sell Buy]
-            [100 200 150 300 250])))
+<!-- Verified output from: ./rayforce /tmp/readme_test.rfl -->
+```
+‣ (set t (table [Symbol Side Qty]
+    (list [AAPL GOOG MSFT AAPL GOOG]
+          [Buy Sell Buy Sell Buy]
+          [100 200 150 300 250])))
 
-rf> (select {from:t by: Symbol Qty: (sum Qty)})
-┌────────┬─────┐
-│ Symbol │ Qty │
-├────────┼─────┤
-│ AAPL   │ 400 │
-│ GOOG   │ 450 │
-│ MSFT   │ 150 │
-└────────┴─────┘
+‣ (select {from:t by: Symbol Qty: (sum Qty)})
+┌────────┬────────────────────────────┐
+│ Symbol │            Qty             │
+│  sym   │            i64             │
+├────────┼────────────────────────────┤
+│ AAPL   │ 400                        │
+│ GOOG   │ 450                        │
+│ MSFT   │ 150                        │
+├────────┴────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 
-rf> (pivot t 'Symbol 'Side 'Qty sum)
-┌────────┬─────┬──────┐
-│ Symbol │ Buy │ Sell │
-├────────┼─────┼──────┤
-│ AAPL   │ 100 │  300 │
-│ GOOG   │ 250 │  200 │
-│ MSFT   │ 150 │    0 │
-└────────┴─────┴──────┘
+‣ (pivot t 'Symbol 'Side 'Qty sum)
+┌────────┬─────┬──────────────────────┐
+│ Symbol │ Buy │         Sell         │
+│  sym   │ i64 │         i64          │
+├────────┼─────┼──────────────────────┤
+│ AAPL   │ 100 │ 300                  │
+│ GOOG   │ 250 │ 200                  │
+│ MSFT   │ 150 │ 0                    │
+├────────┴─────┴──────────────────────┤
+│ 3 rows (3 shown) 3 columns (3 shown)│
+└─────────────────────────────────────┘
 ```
 
 ## C API
 
 Single public header: [`include/rayforce.h`](include/rayforce.h)
 
+<!-- Based on examples/analytics.c -->
 ```c
 #include <rayforce.h>
+#include "ops/ops.h"
 
 int main(void) {
     ray_heap_init();
     ray_sym_init();
 
-    ray_t* trades = ray_read_csv("trades.csv");
+    /* Build a table */
+    int64_t regions[] = {0, 0, 1, 1, 2, 2};
+    int64_t amounts[] = {100, 200, 150, 300, 175, 225};
+    ray_t* reg = ray_vec_from_raw(RAY_I64, regions, 6);
+    ray_t* amt = ray_vec_from_raw(RAY_I64, amounts, 6);
+    ray_t* tbl = ray_table_new(2);
+    tbl = ray_table_add_col(tbl, ray_sym_intern("region", 6), reg);
+    tbl = ray_table_add_col(tbl, ray_sym_intern("amount", 6), amt);
+    ray_release(reg); ray_release(amt);
 
-    ray_graph_t* g = ray_graph_new(trades);
-    ray_op_t* region = ray_filter(g, ray_scan(g, "region"),
-        ray_eq(g, ray_scan(g, "flag"), ray_const_i64(g, 0)));
-    ray_op_t* amount = ray_filter(g, ray_scan(g, "amount"),
-        ray_eq(g, ray_scan(g, "flag"), ray_const_i64(g, 0)));
+    /* Group by region, sum amounts */
+    ray_graph_t* g = ray_graph_new(tbl);
+    ray_op_t* keys[]    = { ray_scan(g, "region") };
+    uint16_t  agg_ops[] = { OP_SUM };
+    ray_op_t* agg_ins[] = { ray_scan(g, "amount") };
+    ray_op_t* grp = ray_group(g, keys, 1, agg_ops, agg_ins, 1);
 
-    ray_op_t* keys[] = { region };
-    uint16_t ops[]   = { OP_SUM };
-    ray_op_t* ins[]  = { amount };
-    ray_op_t* grp = ray_group(g, keys, 1, ops, ins, 1);
+    ray_t* result = ray_execute(g, grp);
 
-    ray_t* result = ray_execute(g, ray_optimize(g, grp));
-
-    ray_release(result);
+    if (result && !RAY_IS_ERR(result)) ray_release(result);
     ray_graph_free(g);
-    ray_release(trades);
+    ray_release(tbl);
     ray_sym_destroy();
     ray_heap_destroy();
 }
@@ -108,7 +122,7 @@ int main(void) {
 | SIP optimizer                |    ✓     |        |        |
 | Embeddable (single header)   |    ✓     |        |        |
 | Zero external dependencies   |    ✓     |        |        |
-| Built-in query language       |    ✓     |        |        |
+| Built-in query language      |    ✓     |        |        |
 | Fused morsel pipelines       |    ✓     |   ✓    |   ✓    |
 | 10-pass query optimizer      |    ✓     |   ✓    |        |
 | COW ref counting             |    ✓     |        |   ✓    |
@@ -117,7 +131,7 @@ int main(void) {
 
 ## How It Works
 
-**Build** — Construct a lazy DAG with 40+ operators: scans, filters, joins,
+**Build** — Construct a lazy DAG with 80+ opcodes: scans, filters, joins,
 aggregations, window functions, graph traversals. Nothing executes yet.
 
 **Optimize** — 10 rewrite passes: type inference → constant folding → SIP →
@@ -131,7 +145,7 @@ Thread pool dispatches morsels in parallel.
 ## Features
 
 **Execution engine**
-- Lazy DAG with 40+ operators — nothing runs until `ray_execute`
+- Lazy DAG with 80+ opcodes — nothing runs until `ray_execute`
 - 10-pass optimizer with sideways information passing
 - Fused morsel-driven bytecode — element-wise ops merged into single-pass chunks
 - Radix-partitioned hash joins sized for L2 cache
@@ -160,7 +174,7 @@ Thread pool dispatches morsels in parallel.
 ## Project Structure
 
 ```
-include/rayforce.h         Single public header (all types, opcodes, API)
+include/rayforce.h         Single public header
 src/mem/                    Buddy allocator, slab cache, arena, COW
 src/core/                   Type system, platform abstraction, runtime
 src/vec/                    Vector, list, string, selection bitmap ops
@@ -172,7 +186,7 @@ src/lang/                   Rayfall parser, evaluator, bytecode VM (143 builtins
 src/app/                    REPL, terminal, pretty-printer
 test/                       563 tests across 32 suites
 examples/rfl/               18 Rayfall example scripts
-examples/c/                 4 C API examples
+examples/                   4 C API examples
 website/                    Documentation site (GitHub Pages)
 ```
 
@@ -184,7 +198,7 @@ Full docs: **[rayforcedb.github.io/rayforce2](https://rayforcedb.github.io/rayfo
 - [Rayfall Language](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html) — syntax, 143 builtins
 - [Data Types](https://rayforcedb.github.io/rayforce2/docs/data-types.html) — 12 types, collections
 - [Queries](https://rayforcedb.github.io/rayforce2/docs/queries-select.html) — select, joins, pivot, window
-- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 65 public functions
+- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 59 public functions
 - [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html) — 22 algorithms
 - [Architecture](https://rayforcedb.github.io/rayforce2/docs/architecture-pipeline.html) — DAG, optimizer, memory
 
