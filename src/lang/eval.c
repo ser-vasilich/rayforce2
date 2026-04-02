@@ -6602,19 +6602,25 @@ static ray_t* ray_resolve_fn(ray_t** args, int64_t n) {
              * where values are plain integers that happen to collide with
              * low sym IDs. */
             int64_t* data = (int64_t*)ray_data(col);
-            bool all_sym = (nrows > 0);
-            bool has_positive = false;
+            bool all_user_sym = (nrows > 0);
+            /* Only convert if ALL values resolve to user-defined symbols
+             * (length >= 2, not single-char operators). This distinguishes
+             * symbol references (name='Alice') from entity IDs (e=1). */
             for (int64_t r = 0; r < nrows; r++) {
-                if (data[r] > 0) {
-                    has_positive = true;
-                    if (ray_sym_str(data[r]) == NULL) {
-                        all_sym = false;
-                        break;
-                    }
+                if (data[r] <= 0) { all_user_sym = false; break; }
+                ray_t* sn = ray_sym_str(data[r]);
+                if (!sn) { all_user_sym = false; break; }
+                size_t slen = ray_str_len(sn);
+                const char* sp = ray_str_ptr(sn);
+                /* Single-char or starts with digit/operator → not a user symbol */
+                if (slen < 2 || (sp[0] >= '0' && sp[0] <= '9') ||
+                    sp[0] == '+' || sp[0] == '-' || sp[0] == '*' || sp[0] == '/' ||
+                    sp[0] == '<' || sp[0] == '>' || sp[0] == '=' || sp[0] == '!' ||
+                    sp[0] == '?' || sp[0] == '_') {
+                    all_user_sym = false; break;
                 }
             }
-            /* Only convert if we saw at least one positive value and all resolved */
-            if (all_sym && has_positive) {
+            if (all_user_sym) {
                 /* Convert to SYM column */
                 ray_t* sym_col = ray_vec_new(RAY_SYM, nrows);
                 if (RAY_IS_ERR(sym_col)) { ray_release(result); ray_release(tbl); return sym_col; }
