@@ -447,6 +447,8 @@ code {
 .t-str { color: #4ade80; }
 .t-num { color: #f59e0b; }
 .t-tbl { color: #60a5fa; font-weight: 600; }
+.t-dim { color: #475569; }
+.t-prompt { color: #4ade80; }
 .term-cursor {
   color: #e2e8f0;
   animation: cursor-blink .7s step-end infinite;

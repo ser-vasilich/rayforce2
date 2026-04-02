@@ -81,56 +81,56 @@ document.addEventListener('DOMContentLoaded', () => {
   const TERMINAL_FRAMES = [
     { type: 'cmd', text: '$ ./rayforce' },
     { type: 'wait', ms: 300 },
-    { type: 'cmd', text: '\u2023 (set t (table [Symbol Side Qty]' },
+    { type: 'cmd', text: '\u2023 (set t (table [Symbol Side Qty]', prompt: true },
     { type: 'cmd', text: '    (list [AAPL GOOG MSFT AAPL GOOG]' },
     { type: 'cmd', text: '          [Buy Sell Buy Sell Buy]' },
     { type: 'cmd', text: '          [100 200 150 300 250])))' },
     { type: 'wait', ms: 400 },
     { type: 'out', lines: [
-      "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
-      "\u2502 Symbol \u2502 Side \u2502         Qty         \u2502",
-      "\u2502  sym   \u2502 sym  \u2502         i64         \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 AAPL   \u2502 Buy  \u2502 100                 \u2502",
-      "\u2502 GOOG   \u2502 Sell \u2502 200                 \u2502",
-      "\u2502 MSFT   \u2502 Buy  \u2502 150                 \u2502",
-      "\u2502 AAPL   \u2502 Sell \u2502 300                 \u2502",
-      "\u2502 GOOG   \u2502 Buy  \u2502 250                 \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 5 rows (5 shown) 3 columns (3 shown)\u2502",
-      "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+      '<span class="t-dim">\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-key">Symbol</span> <span class="t-dim">\u2502</span> <span class="t-key">Side</span> <span class="t-dim">\u2502</span>         <span class="t-key">Qty</span>         <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502  sym   \u2502 sym  \u2502         i64         \u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">AAPL</span>   <span class="t-dim">\u2502</span> Buy  <span class="t-dim">\u2502</span> <span class="t-num">100</span>                 <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">GOOG</span>   <span class="t-dim">\u2502</span> Sell <span class="t-dim">\u2502</span> <span class="t-num">200</span>                 <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">MSFT</span>   <span class="t-dim">\u2502</span> Buy  <span class="t-dim">\u2502</span> <span class="t-num">150</span>                 <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">AAPL</span>   <span class="t-dim">\u2502</span> Sell <span class="t-dim">\u2502</span> <span class="t-num">300</span>                 <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">GOOG</span>   <span class="t-dim">\u2502</span> Buy  <span class="t-dim">\u2502</span> <span class="t-num">250</span>                 <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502 5 rows (5 shown) 3 columns (3 shown)\u2502</span>',
+      '<span class="t-dim">\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518</span>',
       '',
     ]},
     { type: 'wait', ms: 1200 },
-    { type: 'cmd', text: '\u2023 (select {from:t by: Symbol Qty: (sum Qty)})' },
+    { type: 'cmd', text: '\u2023 (select {from:t by: Symbol Qty: (sum Qty)})', prompt: true },
     { type: 'wait', ms: 400 },
     { type: 'out', lines: [
-      "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
-      "\u2502 Symbol \u2502            Qty             \u2502",
-      "\u2502  sym   \u2502            i64             \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 AAPL   \u2502 400                        \u2502",
-      "\u2502 GOOG   \u2502 450                        \u2502",
-      "\u2502 MSFT   \u2502 150                        \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 3 rows (3 shown) 2 columns (2 shown)\u2502",
-      "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+      '<span class="t-dim">\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-key">Symbol</span> <span class="t-dim">\u2502</span>            <span class="t-key">Qty</span>             <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502  sym   \u2502            i64             \u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">AAPL</span>   <span class="t-dim">\u2502</span> <span class="t-num">400</span>                        <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">GOOG</span>   <span class="t-dim">\u2502</span> <span class="t-num">450</span>                        <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">MSFT</span>   <span class="t-dim">\u2502</span> <span class="t-num">150</span>                        <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502 3 rows (3 shown) 2 columns (2 shown)\u2502</span>',
+      '<span class="t-dim">\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518</span>',
       '',
     ]},
     { type: 'wait', ms: 1200 },
-    { type: 'cmd', text: "\u2023 (pivot t 'Symbol 'Side 'Qty sum)" },
+    { type: 'cmd', text: "\u2023 (pivot t 'Symbol 'Side 'Qty sum)", prompt: true },
     { type: 'wait', ms: 400 },
     { type: 'out', lines: [
-      "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
-      "\u2502 Symbol \u2502 Buy \u2502         Sell         \u2502",
-      "\u2502  sym   \u2502 i64 \u2502         i64          \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 AAPL   \u2502 100 \u2502 300                  \u2502",
-      "\u2502 GOOG   \u2502 250 \u2502 200                  \u2502",
-      "\u2502 MSFT   \u2502 150 \u2502 0                    \u2502",
-      "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
-      "\u2502 3 rows (3 shown) 3 columns (3 shown)\u2502",
-      "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+      '<span class="t-dim">\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-key">Symbol</span> <span class="t-dim">\u2502</span> <span class="t-key">Buy</span> <span class="t-dim">\u2502</span>         <span class="t-key">Sell</span>         <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502  sym   \u2502 i64 \u2502         i64          \u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">AAPL</span>   <span class="t-dim">\u2502</span> <span class="t-num">100</span> <span class="t-dim">\u2502</span> <span class="t-num">300</span>                  <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">GOOG</span>   <span class="t-dim">\u2502</span> <span class="t-num">250</span> <span class="t-dim">\u2502</span> <span class="t-num">200</span>                  <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u2502</span> <span class="t-str">MSFT</span>   <span class="t-dim">\u2502</span> <span class="t-num">150</span> <span class="t-dim">\u2502</span> <span class="t-num">0</span>                    <span class="t-dim">\u2502</span>',
+      '<span class="t-dim">\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524</span>',
+      '<span class="t-dim">\u2502 3 rows (3 shown) 3 columns (3 shown)\u2502</span>',
+      '<span class="t-dim">\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518</span>',
       '',
     ]},
     { type: 'wait', ms: 4000 },
@@ -152,7 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const frame of this.frames) {
           if (!this.running) return;
           switch (frame.type) {
-            case 'cmd': await this.typeCommand(frame.text); break;
+            case 'cmd': await this.typeCommand(frame.text, frame.prompt); break;
             case 'out': await this.showOutput(frame.lines); break;
             case 'wait': await this.wait(frame.ms); break;
             case 'clear':
@@ -171,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
       this.running = false;
     }
 
-    async typeCommand(text) {
+    async typeCommand(text, prompt) {
       const line = document.createElement('div');
       line.className = 'term-line term-cmd';
       this.el.appendChild(line);
@@ -182,7 +182,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       for (let i = 0; i < text.length; i++) {
         if (!this.running) return;
-        line.textContent = text.slice(0, i + 1);
+        // Render prompt character (‣) in green
+        if (prompt && text[0] === '\u2023') {
+          line.innerHTML = '<span class="t-prompt">\u2023</span>' +
+            this.escapeHtml(text.slice(1, i + 1));
+        } else {
+          line.textContent = text.slice(0, i + 1);
+        }
         line.appendChild(cursor);
         this.scrollToBottom();
         await this.wait(25 + Math.random() * 35);
@@ -190,6 +196,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       cursor.remove();
       await this.wait(120);
+    }
+
+    escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     async showOutput(lines) {
