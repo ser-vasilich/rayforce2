@@ -44,34 +44,39 @@
         <a href="rayfall-functions.html" class="sidebar-link">Functions Reference</a>
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-section-label">Data Model</div>
+        <a href="data-types.html" class="sidebar-link">Scalar Types</a>
+        <a href="data-types-collections.html" class="sidebar-link">Collections</a>
+      </div>
+      <div class="sidebar-section">
         <div class="sidebar-section-label">Queries</div>
-        <a href="rayfall-syntax.html#select-update" class="sidebar-link">Select &amp; Update</a>
-        <a href="rayfall-functions.html#joins" class="sidebar-link">Joins</a>
-        <a href="rayfall-functions.html#pivot" class="sidebar-link">Pivot &amp; Window</a>
+        <a href="queries-select.html" class="sidebar-link">Select &amp; Update</a>
+        <a href="queries-joins.html" class="sidebar-link">Joins</a>
+        <a href="queries-pivot.html" class="sidebar-link">Pivot &amp; Window</a>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-label">Operations</div>
-        <a href="rayfall-functions.html#arithmetic" class="sidebar-link">Math &amp; Aggregation</a>
-        <a href="rayfall-functions.html#string-ops" class="sidebar-link">String Operations</a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-section-label">C API</div>
-        <a href="rayfall-syntax.html#c-api" class="sidebar-link">Core API</a>
-        <a href="rayfall-syntax.html#dag-execution" class="sidebar-link">DAG &amp; Execution</a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-section-label">Graph Engine</div>
-        <a href="rayfall-syntax.html#graph-engine" class="sidebar-link">CSR Storage</a>
-        <a href="rayfall-syntax.html#graph-algorithms" class="sidebar-link">Algorithms</a>
-      </div>
-      <div class="sidebar-section">
-        <div class="sidebar-section-label">Architecture</div>
-        <a href="rayfall-syntax.html#pipeline" class="sidebar-link">Pipeline &amp; Optimizer</a>
-        <a href="rayfall-syntax.html#memory-model" class="sidebar-link">Memory Model</a>
+        <a href="operations-math.html" class="sidebar-link">Math &amp; Aggregation</a>
+        <a href="operations-string.html" class="sidebar-link">String Operations</a>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-label">Storage</div>
-        <a href="rayfall-syntax.html#storage" class="sidebar-link">Files &amp; Partitions</a>
+        <a href="storage.html" class="sidebar-link">Files &amp; Partitions</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">C API</div>
+        <a href="c-api-core.html" class="sidebar-link">Core API</a>
+        <a href="c-api-dag.html" class="sidebar-link">DAG &amp; Execution</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Graph Engine</div>
+        <a href="graph-storage.html" class="sidebar-link">CSR Storage</a>
+        <a href="graph-algorithms.html" class="sidebar-link">Algorithms</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Architecture</div>
+        <a href="architecture-pipeline.html" class="sidebar-link">Pipeline &amp; Optimizer</a>
+        <a href="architecture-memory.html" class="sidebar-link">Memory Model</a>
       </div>
     </nav>
 
@@ -100,19 +105,19 @@
 
       <h2>Operations</h2>
       <p><a href="rayfall-functions.html#arithmetic"><strong>Math &amp; Aggregation</strong></a> &mdash; Arithmetic operators (<code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>%</code>), rounding, aggregates (<code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>med</code>, <code>dev</code>, <code>count</code>), and statistical functions.</p>
-      <p><a href="rayfall-functions.html#string-ops"><strong>String Operations</strong></a> &mdash; String splitting, pattern matching with <code>like</code>, concatenation, and format.</p>
+      <p><a href="operations-string.html"><strong>String Operations</strong></a> &mdash; String splitting, pattern matching with <code>like</code>, concatenation, and format.</p>
 
       <h2>C API</h2>
-      <p><a href="rayfall-syntax.html#c-api"><strong>Core API</strong></a> &mdash; The <code>ray_t</code> abstraction, vector operations, table construction, and the single public header <code>include/rayforce.h</code>.</p>
-      <p><a href="rayfall-syntax.html#dag-execution"><strong>DAG &amp; Execution</strong></a> &mdash; Build lazy DAGs with <code>ray_graph_new()</code>, chain operations, and execute with the fused morsel-driven executor.</p>
+      <p><a href="c-api-core.html"><strong>Core API</strong></a> &mdash; The <code>ray_t</code> abstraction, vector operations, table construction, and the single public header <code>include/rayforce.h</code>.</p>
+      <p><a href="c-api-dag.html"><strong>DAG &amp; Execution</strong></a> &mdash; Build lazy DAGs with <code>ray_graph_new()</code>, chain operations, and execute with the fused morsel-driven executor.</p>
 
       <h2>Graph Engine</h2>
-      <p><a href="rayfall-syntax.html#graph-engine"><strong>CSR Storage</strong></a> &mdash; Double-indexed CSR (forward + reverse) edge indices, <code>.col</code> file persistence, and mmap support.</p>
-      <p><a href="rayfall-syntax.html#graph-algorithms"><strong>Algorithms</strong></a> &mdash; 1-hop expand, BFS variable-length paths, shortest paths, A*, Yen's K-shortest, betweenness/closeness centrality, clustering coefficients, random walks, MST, and worst-case optimal joins (LFTJ).</p>
+      <p><a href="graph-storage.html"><strong>CSR Storage</strong></a> &mdash; Double-indexed CSR (forward + reverse) edge indices, <code>.col</code> file persistence, and mmap support.</p>
+      <p><a href="graph-algorithms.html"><strong>Algorithms</strong></a> &mdash; 1-hop expand, BFS variable-length paths, shortest paths, A*, Yen's K-shortest, betweenness/closeness centrality, clustering coefficients, random walks, MST, and worst-case optimal joins (LFTJ).</p>
 
       <h2>Architecture</h2>
-      <p><a href="rayfall-syntax.html#pipeline"><strong>Pipeline &amp; Optimizer</strong></a> &mdash; The lazy DAG execution pipeline: type inference, constant folding, sideways information passing, factorize, predicate pushdown, filter reorder, fusion, and dead code elimination.</p>
-      <p><a href="rayfall-syntax.html#memory-model"><strong>Memory Model</strong></a> &mdash; Buddy allocator with thread-local arenas, slab cache, COW ref counting, arena (bump) allocator, per-VM heaps with lock-free cross-heap reclamation.</p>
+      <p><a href="architecture-pipeline.html"><strong>Pipeline &amp; Optimizer</strong></a> &mdash; The lazy DAG execution pipeline: type inference, constant folding, sideways information passing, factorize, predicate pushdown, filter reorder, fusion, and dead code elimination.</p>
+      <p><a href="architecture-memory.html"><strong>Memory Model</strong></a> &mdash; Buddy allocator with thread-local arenas, slab cache, COW ref counting, arena (bump) allocator, per-VM heaps with lock-free cross-heap reclamation.</p>
 
       <h2>Storage</h2>
       <p><a href="rayfall-syntax.html#storage"><strong>Files &amp; Partitions</strong></a> &mdash; Cross-platform file I/O with locking, atomic rename, sym intern table persistence, and CSV loading with parallel parse.</p>
