@@ -10666,12 +10666,11 @@ fb_cleanup:
 }
 
 /* (sysinfo) — return system information */
-/* (sym-name id) — convert a sym intern ID (i64) to a sym atom.
+/* (sym-name id) — convert an i64 sym intern ID to a sym atom.
  * Registered with RAY_FN_ATOMIC so it auto-maps over vectors.
- * Valid IDs → sym atom. Invalid IDs → returned as-is (i64). No mutation. */
+ * Always returns sym — apply only to columns known to contain sym IDs. */
 static ray_t* ray_sym_name_fn(ray_t* x) {
-    if (x->type == -RAY_I64 && x->i64 >= 0 && ray_sym_str(x->i64) != NULL)
-        return ray_sym(x->i64);
+    if (x->type == -RAY_I64) return ray_sym(x->i64);
     ray_retain(x);
     return x;
 }
