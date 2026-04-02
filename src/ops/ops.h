@@ -184,6 +184,7 @@ void     ray_cancel(void);
 #define OP_VAR          74
 #define OP_VAR_POP      75
 #define OP_ILIKE        76
+#define OP_PIVOT        77   /* single-pass pivot table            */
 
 /* Opcodes — Graph */
 #define OP_EXPAND        80   /* 1-hop CSR neighbor expansion       */
@@ -340,6 +341,13 @@ typedef struct ray_op_ext {
             int64_t   k;
             int32_t   ef_search;
         } hnsw;
+        struct {  /* OP_PIVOT */
+            ray_op_t**  index_cols;   /* OP_SCAN nodes for index columns */
+            ray_op_t*   pivot_col;    /* OP_SCAN node for pivot column */
+            ray_op_t*   value_col;    /* OP_SCAN node for value column */
+            uint16_t    agg_op;       /* OP_SUM, OP_AVG, etc. */
+            uint8_t     n_index;      /* number of index columns */
+        } pivot;
     };
 } ray_op_ext_t;
 
@@ -522,6 +530,11 @@ ray_op_t* ray_sort_op(ray_graph_t* g, ray_op_t* table_node,
 ray_op_t* ray_group(ray_graph_t* g, ray_op_t** keys, uint8_t n_keys,
                    uint16_t* agg_ops, ray_op_t** agg_ins, uint8_t n_aggs);
 ray_op_t* ray_distinct(ray_graph_t* g, ray_op_t** keys, uint8_t n_keys);
+ray_op_t* ray_pivot_op(ray_graph_t* g,
+                       ray_op_t** index_cols, uint8_t n_index,
+                       ray_op_t* pivot_col,
+                       ray_op_t* value_col,
+                       uint16_t agg_op);
 ray_op_t* ray_join(ray_graph_t* g,
                   ray_op_t* left_table, ray_op_t** left_keys,
                   ray_op_t* right_table, ray_op_t** right_keys,

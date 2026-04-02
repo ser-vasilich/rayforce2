@@ -81,6 +81,12 @@ static void graph_fixup_ext_ptrs(ray_graph_t* g, ptrdiff_t delta) {
                 for (uint8_t k = 0; k < ext->sort.n_cols; k++)
                     ext->sort.columns[k] = graph_fix_ptr(ext->sort.columns[k], delta);
                 break;
+            case OP_PIVOT:
+                for (uint8_t k = 0; k < ext->pivot.n_index; k++)
+                    ext->pivot.index_cols[k] = graph_fix_ptr(ext->pivot.index_cols[k], delta);
+                ext->pivot.pivot_col = graph_fix_ptr(ext->pivot.pivot_col, delta);
+                ext->pivot.value_col = graph_fix_ptr(ext->pivot.value_col, delta);
+                break;
             /* Graph ops: no ray_op_t* pointers in ext union to fix */
             case OP_EXPAND:
             case OP_VAR_EXPAND:
@@ -732,6 +738,38 @@ ray_op_t* ray_group(ray_graph_t* g, ray_op_t** keys, uint8_t n_keys,
 
 ray_op_t* ray_distinct(ray_graph_t* g, ray_op_t** keys, uint8_t n_keys) {
     return ray_group(g, keys, n_keys, NULL, NULL, 0);
+}
+
+ray_op_t* ray_pivot_op(ray_graph_t* g,
+                       ray_op_t** index_cols, uint8_t n_index,
+                       ray_op_t* pivot_col,
+                       ray_op_t* value_col,
+                       uint16_t agg_op) {
+    uint32_t idx_ids[16];
+    for (uint8_t i = 0; i < n_index; i++) idx_ids[i] = index_cols[i]->id;
+    uint32_t pcol_id = pivot_col->id;
+    uint32_t vcol_id = value_col->id;
+
+    size_t idx_sz = (size_t)n_index * sizeof(ray_op_t*);
+    ray_op_ext_t* ext = graph_alloc_ext_node_ex(g, idx_sz);
+    if (!ext) return NULL;
+
+    ext->base.opcode = OP_PIVOT;
+    ext->base.arity = 0;
+    ext->base.out_type = RAY_TABLE;
+    ext->base.est_rows = 0; /* unknown until execution */
+
+    char* trail = EXT_TRAIL(ext);
+    ext->pivot.index_cols = (ray_op_t**)trail;
+    for (uint8_t i = 0; i < n_index; i++)
+        ext->pivot.index_cols[i] = &g->nodes[idx_ids[i]];
+    ext->pivot.pivot_col = &g->nodes[pcol_id];
+    ext->pivot.value_col = &g->nodes[vcol_id];
+    ext->pivot.agg_op = agg_op;
+    ext->pivot.n_index = n_index;
+
+    g->nodes[ext->base.id] = ext->base;
+    return &g->nodes[ext->base.id];
 }
 
 ray_op_t* ray_join(ray_graph_t* g,
