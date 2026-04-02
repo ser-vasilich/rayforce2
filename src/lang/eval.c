@@ -5992,6 +5992,66 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
 ray_t* ray_left_join(ray_t** args, int64_t n)  { return join_impl(args, n, 1); }
 ray_t* ray_inner_join(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
 
+/* (antijoin left right [keys])
+ * Anti-semi-join: keep rows from left that have NO match in right on keys. */
+static ray_t* antijoin_impl(ray_t** args, int64_t n) {
+    if (n < 3) return ray_error("domain", NULL);
+
+    ray_t* left_tbl  = args[0];
+    ray_t* right_tbl = args[1];
+    ray_t* keys      = args[2];
+
+    /* Detect alternative calling convention: (antijoin [keys] t1 t2) */
+    if (left_tbl->type != RAY_TABLE && args[1]->type == RAY_TABLE && args[2]->type == RAY_TABLE) {
+        keys      = args[0];
+        left_tbl  = args[1];
+        right_tbl = args[2];
+    }
+
+    if (left_tbl->type != RAY_TABLE || right_tbl->type != RAY_TABLE)
+        return ray_error("type", NULL);
+    ray_t* _bxk = NULL;
+    keys = unbox_vec_arg(keys, &_bxk);
+    if (RAY_IS_ERR(keys)) return keys;
+    if (!is_list(keys))
+        { if (_bxk) ray_release(_bxk); return ray_error("type", NULL); }
+
+    int64_t nk = ray_len(keys);
+    if (nk == 0 || nk > 16) { if (_bxk) ray_release(_bxk); return ray_error("domain", NULL); }
+    ray_t** key_elems = (ray_t**)ray_data(keys);
+
+    ray_graph_t* g = ray_graph_new(left_tbl);
+    if (!g) { if (_bxk) ray_release(_bxk); return ray_error("oom", NULL); }
+
+    ray_op_t* left_node  = ray_const_table(g, left_tbl);
+    ray_op_t* right_node = ray_const_table(g, right_tbl);
+
+    ray_op_t* lk[16], *rk[16];
+    for (int64_t i = 0; i < nk; i++) {
+        if (key_elems[i]->type != -RAY_SYM) {
+            ray_graph_free(g); if (_bxk) ray_release(_bxk);
+            return ray_error("type", NULL);
+        }
+        ray_t* name_str = ray_sym_str(key_elems[i]->i64);
+        if (!name_str) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return ray_error("domain", NULL); }
+        lk[i] = ray_scan(g, ray_str_ptr(name_str));
+        rk[i] = ray_scan(g, ray_str_ptr(name_str));
+        if (!lk[i] || !rk[i]) { ray_graph_free(g); if (_bxk) ray_release(_bxk); return ray_error("domain", NULL); }
+    }
+
+    if (_bxk) ray_release(_bxk);
+
+    ray_op_t* jn = ray_antijoin(g, left_node, lk, right_node, rk, (uint8_t)nk);
+    if (!jn) { ray_graph_free(g); return ray_error("oom", NULL); }
+
+    jn = ray_optimize(g, jn);
+    ray_t* result = ray_execute(g, jn);
+    ray_graph_free(g);
+    return result;
+}
+
+ray_t* ray_antijoin_fn(ray_t** args, int64_t n) { return antijoin_impl(args, n); }
+
 /* (window-join t1 t2 [eq-keys] time-col)
  * ASOF join: for each left row, find closest right row with time <= left.time
  * within the same equality partition. */
@@ -10741,6 +10801,7 @@ static void ray_register_builtins(void) {
     /* Join operations */
     register_vary("left-join",   RAY_FN_NONE, ray_left_join);
     register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
+    register_vary("antijoin",    RAY_FN_NONE, ray_antijoin_fn);
     register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("window-join1", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);

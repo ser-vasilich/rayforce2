@@ -9963,6 +9963,173 @@ join_cleanup:
 }
 
 /* ============================================================================
+ * OP_ANTIJOIN: anti-semi-join — keep left rows with NO matching right row
+ * Build hash set from right keys, probe left, emit non-matching left rows.
+ * ============================================================================ */
+
+static ray_t* exec_antijoin(ray_graph_t* g, ray_op_t* op,
+                            ray_t* left_table, ray_t* right_table) {
+    if (!left_table || RAY_IS_ERR(left_table)) return left_table;
+    if (!right_table || RAY_IS_ERR(right_table)) return right_table;
+
+    ray_op_ext_t* ext = find_ext(g, op->id);
+    if (!ext) return ray_error("nyi", NULL);
+
+    int64_t left_rows  = ray_table_nrows(left_table);
+    int64_t right_rows = ray_table_nrows(right_table);
+
+    if (right_rows > (int64_t)INT32_MAX || left_rows > (int64_t)INT32_MAX)
+        return ray_error("nyi", NULL);
+
+    uint8_t n_keys = ext->join.n_join_keys;
+
+    /* Trivial case: empty right → all left rows pass */
+    if (right_rows == 0) {
+        ray_retain(left_table);
+        return left_table;
+    }
+    /* Trivial case: empty left → empty result */
+    if (left_rows == 0) {
+        ray_retain(left_table);
+        return left_table;
+    }
+
+    ray_t* l_key_vecs[16];
+    ray_t* r_key_vecs[16];
+    memset(l_key_vecs, 0, n_keys * sizeof(ray_t*));
+    memset(r_key_vecs, 0, n_keys * sizeof(ray_t*));
+
+    for (uint8_t k = 0; k < n_keys; k++) {
+        ray_op_ext_t* lk = find_ext(g, ext->join.left_keys[k]->id);
+        ray_op_ext_t* rk = find_ext(g, ext->join.right_keys[k]->id);
+        if (lk && lk->base.opcode == OP_SCAN)
+            l_key_vecs[k] = ray_table_get_col(left_table, lk->sym);
+        if (rk && rk->base.opcode == OP_SCAN)
+            r_key_vecs[k] = ray_table_get_col(right_table, rk->sym);
+        if (rk && rk->base.opcode == OP_CONST && rk->literal)
+            r_key_vecs[k] = rk->literal;
+    }
+
+    /* RAY_STR keys not yet supported */
+    for (uint8_t k = 0; k < n_keys; k++) {
+        if ((l_key_vecs[k] && l_key_vecs[k]->type == RAY_STR) ||
+            (r_key_vecs[k] && r_key_vecs[k]->type == RAY_STR))
+            return ray_error("nyi", NULL);
+    }
+
+    /* Build chained hash table from right side */
+    ray_t* ht_next_hdr = NULL;
+    ray_t* ht_heads_hdr = NULL;
+
+    uint64_t ht_cap64 = 256;
+    uint64_t target = (uint64_t)right_rows * 2;
+    while (ht_cap64 < target) ht_cap64 *= 2;
+    if (ht_cap64 > UINT32_MAX) ht_cap64 = (uint64_t)1 << 31;
+    uint32_t ht_cap = (uint32_t)ht_cap64;
+
+    uint32_t* ht_next = (uint32_t*)scratch_alloc(&ht_next_hdr,
+                            (size_t)right_rows * sizeof(uint32_t));
+    _Atomic(uint32_t)* ht_heads = (_Atomic(uint32_t)*)scratch_alloc(&ht_heads_hdr,
+                            ht_cap * sizeof(uint32_t));
+    if (!ht_next || !ht_heads) {
+        if (ht_next_hdr) scratch_free(ht_next_hdr);
+        if (ht_heads_hdr) scratch_free(ht_heads_hdr);
+        return ray_error("oom", NULL);
+    }
+    memset(ht_heads, 0xFF, ht_cap * sizeof(uint32_t));  /* JHT_EMPTY */
+
+    /* Build: insert right rows into HT */
+    ray_pool_t* pool = ray_pool_get();
+    {
+        join_build_ctx_t bctx = {
+            .ht_heads   = ht_heads,
+            .ht_next    = ht_next,
+            .ht_mask    = ht_cap - 1,
+            .r_key_vecs = r_key_vecs,
+            .n_keys     = n_keys,
+            .asp_bits   = NULL,
+            .asp_key_max = 0,
+        };
+        if (pool && right_rows > RAY_PARALLEL_THRESHOLD)
+            ray_pool_dispatch(pool, join_build_fn, &bctx, right_rows);
+        else
+            join_build_fn(&bctx, 0, 0, right_rows);
+    }
+
+    if (pool_cancelled(pool)) {
+        scratch_free(ht_next_hdr);
+        scratch_free(ht_heads_hdr);
+        return ray_error("cancel", NULL);
+    }
+
+    /* Probe: scan left rows, collect indices of those with NO match */
+    ray_t* out_idx_hdr = NULL;
+    int64_t* out_idx = (int64_t*)scratch_alloc(&out_idx_hdr,
+                            (size_t)left_rows * sizeof(int64_t));
+    if (!out_idx) {
+        scratch_free(ht_next_hdr);
+        scratch_free(ht_heads_hdr);
+        return ray_error("oom", NULL);
+    }
+
+    uint32_t ht_mask = ht_cap - 1;
+    int64_t out_count = 0;
+    for (int64_t l = 0; l < left_rows; l++) {
+        uint64_t h = hash_row_keys(l_key_vecs, n_keys, l);
+        uint32_t slot = (uint32_t)(h & ht_mask);
+        bool matched = false;
+        for (uint32_t r = ht_heads[slot]; r != JHT_EMPTY; r = ht_next[r]) {
+            if (join_keys_eq(l_key_vecs, r_key_vecs, n_keys, l, (int64_t)r)) {
+                matched = true;
+                break;  /* anti-join: one match is enough to exclude */
+            }
+        }
+        if (!matched) {
+            out_idx[out_count++] = l;
+        }
+    }
+
+    scratch_free(ht_next_hdr);
+    scratch_free(ht_heads_hdr);
+
+    /* Gather: build result table with only left columns */
+    int64_t left_ncols = ray_table_ncols(left_table);
+    ray_t* result = ray_table_new(left_ncols);
+    if (!result || RAY_IS_ERR(result)) {
+        scratch_free(out_idx_hdr);
+        return result;
+    }
+
+    if (out_count > 0) {
+        for (int64_t c = 0; c < left_ncols; c++) {
+            ray_t* col = ray_table_get_col_idx(left_table, c);
+            if (!col) continue;
+            ray_t* new_col = col_vec_new(col, out_count);
+            if (!new_col || RAY_IS_ERR(new_col)) continue;
+            new_col->len = out_count;
+
+            gather_ctx_t gctx = {
+                .idx = out_idx, .src_col = col, .dst_col = new_col,
+                .esz = col_esz(col), .nullable = false,
+            };
+            if (pool && out_count > RAY_PARALLEL_THRESHOLD)
+                ray_pool_dispatch(pool, gather_fn, &gctx, out_count);
+            else
+                gather_fn(&gctx, 0, 0, out_count);
+
+            col_propagate_str_pool(new_col, col);
+
+            int64_t name_id = ray_table_col_name(left_table, c);
+            result = ray_table_add_col(result, name_id, new_col);
+            ray_release(new_col);
+        }
+    }
+
+    scratch_free(out_idx_hdr);
+    return result;
+}
+
+/* ============================================================================
  * OP_WINDOW_JOIN: ASOF join (DuckDB-style sort-merge)
  * For each left row, find the most recent right row where right.time <= left.time,
  * optionally partitioned by equality keys. O(N+M) after sorting.
@@ -15999,6 +16166,24 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
                 left = compacted;
             }
             ray_t* result = exec_join(g, op, left, right);
+            ray_release(left);
+            ray_release(right);
+            return result;
+        }
+
+        case OP_ANTIJOIN: {
+            ray_t* left = exec_node(g, op->inputs[0]);
+            ray_t* right = exec_node(g, op->inputs[1]);
+            if (!left || RAY_IS_ERR(left)) { if (right && !RAY_IS_ERR(right)) ray_release(right); return left; }
+            if (!right || RAY_IS_ERR(right)) { ray_release(left); return right; }
+            if (g->selection && left && !RAY_IS_ERR(left) && left->type == RAY_TABLE) {
+                ray_t* compacted = sel_compact(g, left, g->selection);
+                ray_release(left);
+                ray_release(g->selection);
+                g->selection = NULL;
+                left = compacted;
+            }
+            ray_t* result = exec_antijoin(g, op, left, right);
             ray_release(left);
             ray_release(right);
             return result;

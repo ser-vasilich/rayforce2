@@ -185,6 +185,7 @@ void     ray_cancel(void);
 #define OP_VAR_POP      75
 #define OP_ILIKE        76
 #define OP_PIVOT        77   /* single-pass pivot table            */
+#define OP_ANTIJOIN     78   /* anti-semi-join (left rows with no right match) */
 
 /* Opcodes — Graph */
 #define OP_EXPAND        80   /* 1-hop CSR neighbor expansion       */
@@ -286,7 +287,7 @@ typedef struct ray_op_ext {
             ray_op_t**  left_keys;
             ray_op_t**  right_keys;
             uint8_t    n_join_keys;
-            uint8_t    join_type;  /* 0=inner, 1=left, 2=full */
+            uint8_t    join_type;  /* 0=inner, 1=left, 2=full, 3=anti */
         } join;
         struct {               /* OP_WINDOW_JOIN: ASOF join */
             ray_op_t*   time_key;      /* time/ordered key column */
@@ -539,6 +540,10 @@ ray_op_t* ray_join(ray_graph_t* g,
                   ray_op_t* left_table, ray_op_t** left_keys,
                   ray_op_t* right_table, ray_op_t** right_keys,
                   uint8_t n_keys, uint8_t join_type);
+ray_op_t* ray_antijoin(ray_graph_t* g,
+                      ray_op_t* left_table, ray_op_t** left_keys,
+                      ray_op_t* right_table, ray_op_t** right_keys,
+                      uint8_t n_keys);
 ray_op_t* ray_asof_join(ray_graph_t* g,
                        ray_op_t* left_table, ray_op_t* right_table,
                        ray_op_t* time_key,
