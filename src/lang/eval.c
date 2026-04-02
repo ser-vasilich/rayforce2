@@ -4383,22 +4383,22 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 gk_vals = (int64_t*)ray_data(gk_heap_hdr);
             }
 
-            /* Copy group key values while grouped is still alive */
-            bool fast_path = (kt != RAY_STR && kt != RAY_GUID && kt != RAY_LIST);
-            if (fast_path && grp_key_col) {
+            /* Copy group key values while grouped is still alive.
+             * GUID: 16 bytes per key → separate buffer.
+             * STR/LIST: handled by use_eval_group, never reach here. */
+            uint8_t* guid_keys = NULL;
+            ray_t* guid_keys_hdr = NULL;
+            if (kt == RAY_GUID && grp_key_col) {
+                guid_keys_hdr = ray_alloc((size_t)n_groups * 16);
+                if (!guid_keys_hdr) { if (gk_heap_hdr) ray_free(gk_heap_hdr); ray_release(grouped); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return ray_error("oom", NULL); }
+                guid_keys = (uint8_t*)ray_data(guid_keys_hdr);
+                memcpy(guid_keys, ray_data(grp_key_col), (size_t)n_groups * 16);
+            } else if (grp_key_col) {
                 for (int64_t gi = 0; gi < n_groups; gi++) {
                     if (kt == RAY_F64)
                         memcpy(&gk_vals[gi], &((double*)ray_data(grp_key_col))[gi], 8);
                     else
                         gk_vals[gi] = ray_read_sym(ray_data(grp_key_col), gi, kt, grp_key_col->attrs);
-                }
-            } else if (grp_key_col) {
-                /* Slow path: store as atom i64 representation (fallback) */
-                for (int64_t gi = 0; gi < n_groups; gi++) {
-                    int a = 0;
-                    ray_t* gv = collection_elem(grp_key_col, gi, &a);
-                    gk_vals[gi] = gv ? gv->i64 : 0;
-                    if (a) ray_release(gv);
                 }
             }
             ray_release(grouped); /* grp_key_col is now invalid */
@@ -4416,7 +4416,17 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             /* Single scan: mark first occurrence of each group key */
             for (int64_t gi = 0; gi < n_groups; gi++) first_idx[gi] = -1;
             int64_t found = 0;
-            if (fast_path) {
+            if (kt == RAY_GUID && guid_keys) {
+                const uint8_t* orig_data = (const uint8_t*)ray_data(orig_key_col);
+                for (int64_t r = 0; r < nrows_orig && found < n_groups; r++) {
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        if (first_idx[gi] >= 0) continue;
+                        if (memcmp(orig_data + r * 16, guid_keys + gi * 16, 16) == 0) {
+                            first_idx[gi] = r; found++; break;
+                        }
+                    }
+                }
+            } else {
                 for (int64_t r = 0; r < nrows_orig && found < n_groups; r++) {
                     int64_t ov;
                     if (kt == RAY_F64) memcpy(&ov, &((double*)ray_data(orig_key_col))[r], 8);
@@ -4426,19 +4436,9 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                         if (ov == gk_vals[gi]) { first_idx[gi] = r; found++; break; }
                     }
                 }
-            } else {
-                for (int64_t r = 0; r < nrows_orig && found < n_groups; r++) {
-                    int a1 = 0;
-                    ray_t* ov = collection_elem(orig_key_col, r, &a1);
-                    int64_t ov_i = ov ? ov->i64 : 0;
-                    if (a1) ray_release(ov);
-                    for (int64_t gi = 0; gi < n_groups; gi++) {
-                        if (first_idx[gi] >= 0) continue;
-                        if (ov_i == gk_vals[gi]) { first_idx[gi] = r; found++; break; }
-                    }
-                }
             }
             if (gk_heap_hdr) ray_free(gk_heap_hdr);
+            if (guid_keys_hdr) ray_free(guid_keys_hdr);
 
             /* Now build the result table using first_idx gathered above.
              * key_sym and n_groups are already set. */
