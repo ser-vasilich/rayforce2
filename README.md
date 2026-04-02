@@ -285,38 +285,94 @@ Key design choices that make Rayforce fast:
 
 Benchmarks: [rayforce-bench](https://github.com/RayforceDB/rayforce-bench)
 
+## Heritage
+
+Rayforce2 unifies two engines:
+- **Teide** — the columnar analytics engine (morsel-fused execution, radix-partitioned hash joins, 10-pass optimizer)
+- **Rayforce** — the graph engine (CSR storage, BFS/DFS, PageRank, Dijkstra, Leapfrog TrieJoin)
+
+Both now share a single operation DAG, a single optimizer, and a single executor.
+
+## Rayfall REPL
+
+Rayforce ships with **Rayfall** — a Lisp-like query language with 143 builtins:
+
+```lisp
+$ ./rayforce
+
+rf> (set t (table [Symbol Side Qty]
+      (list [AAPL GOOG MSFT AAPL GOOG]
+            [Buy Sell Buy Sell Buy]
+            [100 200 150 300 250])))
+
+rf> (select {from:t by: Symbol Qty: (sum Qty)})
+┌────────┬─────┐
+│ Symbol │ Qty │
+├────────┼─────┤
+│ AAPL   │ 400 │
+│ GOOG   │ 450 │
+│ MSFT   │ 150 │
+└────────┴─────┘
+
+rf> (pivot t 'Symbol 'Side 'Qty sum)
+┌────────┬─────┬──────┐
+│ Symbol │ Buy │ Sell │
+├────────┼─────┼──────┤
+│ AAPL   │ 100 │  300 │
+│ GOOG   │ 250 │  200 │
+│ MSFT   │ 150 │    0 │
+└────────┴─────┴──────┘
+```
+
 ## Build
 
 ```bash
-# Debug (ASan + UBSan)
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+# Debug (ASan + UBSan) — default
+make
 
 # Release
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release
-cmake --build build_release
+make release
 
-# Run all tests (270+ tests across 28 suites)
-cd build && ctest --output-on-failure
+# Run all tests (563 tests across 32 suites)
+make test
 
 # Run a single test suite
-./build/test_rayforce --suite /vec
+./rayforce.test --suite /vec
+
+# Run the Rayfall REPL
+./rayforce
+
+# Run a script
+./rayforce examples/rfl/pivot.rfl
 ```
 
 ## Project Structure
 
 ```
 include/rayforce.h         Single public header (all types, opcodes, API)
-src/mem/                    Buddy allocator, slab cache, VM abstraction
-src/core/                   Type system, atoms, strings, symbols
-src/vec/                    Vector operations, morsel iterator
-src/table/                  Table construction, column access, schema
-src/store/                  Column files, splayed tables, partitions, CSR
-src/ops/                    DAG construction, optimizer, executor, LFTJ
-src/io/                     CSV reader/writer
-test/                       270+ tests across 28 suites
-bench/                      Benchmark harness
+src/mem/                    Buddy allocator, slab cache, arena, COW
+src/core/                   Type system, platform abstraction, runtime
+src/vec/                    Vector, list, string, selection bitmap ops
+src/table/                  Table, symbol intern table
+src/store/                  Column files, CSR, splayed/parted tables, HNSW
+src/ops/                    DAG, optimizer (10 passes), fused executor, LFTJ
+src/io/                     CSV reader/writer (parallel mmap)
+src/lang/                   Rayfall parser, evaluator, bytecode VM (143 builtins)
+src/app/                    REPL, terminal, pretty-printer
+test/                       563 tests across 32 suites
+examples/rfl/               18 Rayfall example scripts
+examples/c/                 4 C API examples
+website/                    Documentation site (GitHub Pages)
 ```
+
+## Documentation
+
+Full documentation at the [Rayforce website](https://rayforcedb.github.io/rayforce2/):
+- [Quick Start](https://rayforcedb.github.io/rayforce2/docs/quick-start.html)
+- [Rayfall Language Reference](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html)
+- [C API Reference](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html)
+- [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html)
+- [Architecture](https://rayforcedb.github.io/rayforce2/docs/architecture-pipeline.html)
 
 ## License
 
