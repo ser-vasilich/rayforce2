@@ -10759,6 +10759,198 @@ static ray_t* ray_table_distinct_fn(ray_t* tbl) {
 }
 
 /* ══════════════════════════════════════════
+ * EAV triple storage — datoms, assert-fact, scan-eav
+ * ══════════════════════════════════════════ */
+
+/* (datoms) — create empty EAV table with schema [e a v] */
+static ray_t* ray_datoms_fn(ray_t** args, int64_t n) {
+    (void)args;
+    if (n != 0) return ray_error("arity", "datoms takes no arguments");
+
+    int64_t e_id = ray_sym_intern("e", 1);
+    int64_t a_id = ray_sym_intern("a", 1);
+    int64_t v_id = ray_sym_intern("v", 1);
+
+    ray_t* tbl = ray_table_new(3);
+    if (RAY_IS_ERR(tbl)) return tbl;
+
+    /* e column: RAY_I64 */
+    ray_t* e_col = ray_vec_new(RAY_I64, 0);
+    if (RAY_IS_ERR(e_col)) { ray_release(tbl); return e_col; }
+    tbl = ray_table_add_col(tbl, e_id, e_col);
+    ray_release(e_col);
+    if (RAY_IS_ERR(tbl)) return tbl;
+
+    /* a column: RAY_SYM */
+    ray_t* a_col = ray_vec_new(RAY_SYM, 0);
+    if (RAY_IS_ERR(a_col)) { ray_release(tbl); return a_col; }
+    tbl = ray_table_add_col(tbl, a_id, a_col);
+    ray_release(a_col);
+    if (RAY_IS_ERR(tbl)) return tbl;
+
+    /* v column: RAY_I64 (symbols stored as their intern ID) */
+    ray_t* v_col = ray_vec_new(RAY_I64, 0);
+    if (RAY_IS_ERR(v_col)) { ray_release(tbl); return v_col; }
+    tbl = ray_table_add_col(tbl, v_id, v_col);
+    ray_release(v_col);
+
+    return tbl;
+}
+
+/* (assert-fact db entity attr value) — append a triple to the datoms table */
+static ray_t* ray_assert_fact_fn(ray_t** args, int64_t n) {
+    if (n != 4) return ray_error("arity", "assert-fact expects 4 arguments: db entity attr value");
+
+    ray_t* db     = args[0];
+    ray_t* entity = args[1];
+    ray_t* attr   = args[2];
+    ray_t* value  = args[3];
+
+    /* Validate db is a table with 3 columns */
+    if (db->type != RAY_TABLE || ray_table_ncols(db) != 3)
+        return ray_error("type", "assert-fact: first arg must be a datoms table");
+
+    /* Validate entity is i64 */
+    if (entity->type != -RAY_I64)
+        return ray_error("type", "assert-fact: entity must be an integer");
+
+    /* Validate attr is a symbol */
+    if (attr->type != -RAY_SYM)
+        return ray_error("type", "assert-fact: attr must be a symbol");
+
+    /* Value: accept i64 or sym. Store as i64 (sym → intern ID) */
+    int64_t v_val;
+    if (value->type == -RAY_I64) {
+        v_val = value->i64;
+    } else if (value->type == -RAY_SYM) {
+        v_val = value->i64;  /* sym intern ID is already i64 */
+    } else {
+        return ray_error("type", "assert-fact: value must be an integer or symbol");
+    }
+
+    /* Build new table with appended row */
+    int64_t ncols = 3;
+    ray_t* result = ray_table_new(ncols);
+    if (RAY_IS_ERR(result)) return result;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        ray_t* old_col = ray_table_get_col_idx(db, c);
+        int64_t col_name = ray_table_col_name(db, c);
+
+        /* Clone the column via retain + COW on append */
+        ray_retain(old_col);
+        ray_t* new_col = old_col;
+
+        if (c == 0) {
+            /* e column: append entity i64 */
+            int64_t e_val = entity->i64;
+            new_col = ray_vec_append(new_col, &e_val);
+        } else if (c == 1) {
+            /* a column: append attr sym ID */
+            int64_t a_val = attr->i64;
+            new_col = ray_vec_append(new_col, &a_val);
+        } else {
+            /* v column: append value as i64 */
+            new_col = ray_vec_append(new_col, &v_val);
+        }
+
+        if (RAY_IS_ERR(new_col)) {
+            /* ray_cow inside ray_vec_append already released old_col ref on error/copy */
+            ray_release(result);
+            return new_col;
+        }
+        /* ray_cow consumed our retain when it copied; don't double-release old_col */
+
+        result = ray_table_add_col(result, col_name, new_col);
+        ray_release(new_col);
+        if (RAY_IS_ERR(result)) return result;
+    }
+
+    return result;
+}
+
+/* (scan-eav db attr) — filter by attribute, return [e v] table
+   (scan-eav db entity attr) — filter by entity+attr, return single value */
+static ray_t* ray_scan_eav_fn(ray_t** args, int64_t n) {
+    if (n < 2 || n > 3)
+        return ray_error("arity", "scan-eav expects 2 or 3 arguments");
+
+    ray_t* db = args[0];
+    if (db->type != RAY_TABLE || ray_table_ncols(db) != 3)
+        return ray_error("type", "scan-eav: first arg must be a datoms table");
+
+    ray_t* e_col = ray_table_get_col_idx(db, 0);
+    ray_t* a_col = ray_table_get_col_idx(db, 1);
+    ray_t* v_col = ray_table_get_col_idx(db, 2);
+    int64_t nrows = ray_table_nrows(db);
+
+    if (n == 2) {
+        /* (scan-eav db attr) — filter by attribute, return [e v] table */
+        ray_t* attr_arg = args[1];
+        if (attr_arg->type != -RAY_SYM)
+            return ray_error("type", "scan-eav: attr must be a symbol");
+        int64_t attr_id = attr_arg->i64;
+
+        int64_t e_name = ray_sym_intern("e", 1);
+        int64_t v_name = ray_sym_intern("v", 1);
+
+        ray_t* re = ray_vec_new(RAY_I64, nrows);
+        if (RAY_IS_ERR(re)) return re;
+        ray_t* rv = ray_vec_new(RAY_I64, nrows);
+        if (RAY_IS_ERR(rv)) { ray_release(re); return rv; }
+
+        const int64_t* e_data = (const int64_t*)ray_data(e_col);
+        const int64_t* v_data = (const int64_t*)ray_data(v_col);
+
+        for (int64_t r = 0; r < nrows; r++) {
+            int64_t a_val = ray_read_sym(ray_data(a_col), r, a_col->type, a_col->attrs);
+            if (a_val == attr_id) {
+                re = ray_vec_append(re, &e_data[r]);
+                if (RAY_IS_ERR(re)) { ray_release(rv); return re; }
+                rv = ray_vec_append(rv, &v_data[r]);
+                if (RAY_IS_ERR(rv)) { ray_release(re); return rv; }
+            }
+        }
+
+        ray_t* result = ray_table_new(2);
+        if (RAY_IS_ERR(result)) { ray_release(re); ray_release(rv); return result; }
+        result = ray_table_add_col(result, e_name, re);
+        ray_release(re);
+        if (RAY_IS_ERR(result)) { ray_release(rv); return result; }
+        result = ray_table_add_col(result, v_name, rv);
+        ray_release(rv);
+        return result;
+
+    } else {
+        /* (scan-eav db entity attr) — filter by entity+attr, return single value */
+        ray_t* entity_arg = args[1];
+        ray_t* attr_arg   = args[2];
+
+        if (entity_arg->type != -RAY_I64)
+            return ray_error("type", "scan-eav: entity must be an integer");
+        if (attr_arg->type != -RAY_SYM)
+            return ray_error("type", "scan-eav: attr must be a symbol");
+
+        int64_t entity_id = entity_arg->i64;
+        int64_t attr_id   = attr_arg->i64;
+
+        const int64_t* e_data = (const int64_t*)ray_data(e_col);
+        const int64_t* v_data = (const int64_t*)ray_data(v_col);
+
+        for (int64_t r = 0; r < nrows; r++) {
+            if (e_data[r] != entity_id) continue;
+            int64_t a_val = ray_read_sym(ray_data(a_col), r, a_col->type, a_col->attrs);
+            if (a_val == attr_id) {
+                /* Return value as i64 atom */
+                return ray_i64(v_data[r]);
+            }
+        }
+
+        return ray_error("value", "scan-eav: no matching triple found");
+    }
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -10997,6 +11189,11 @@ static void ray_register_builtins(void) {
     register_unary("sysinfo",    RAY_FN_NONE, ray_sysinfo_fn);
     register_binary("unify",     RAY_FN_NONE, ray_unify_fn);
     register_binary("xrank",     RAY_FN_NONE, ray_xrank_fn);
+
+    /* EAV triple storage */
+    register_vary("datoms",       RAY_FN_NONE, ray_datoms_fn);
+    register_vary("assert-fact",  RAY_FN_NONE, ray_assert_fact_fn);
+    register_vary("scan-eav",     RAY_FN_NONE, ray_scan_eav_fn);
 }
 
 /* ══════════════════════════════════════════
