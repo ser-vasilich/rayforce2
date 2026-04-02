@@ -73,9 +73,10 @@ The REPL prompt is `‣`:
 
 ## C API
 
-Public header: [`include/rayforce.h`](include/rayforce.h). Internal headers
-`mem/heap.h` (allocator lifecycle) and `ops/ops.h` (opcodes) are needed for
-full programs.
+Headers: [`include/rayforce.h`](include/rayforce.h) (64 functions — types,
+memory, atoms, vectors, tables, symbols), `src/ops/ops.h` (124 functions —
+DAG construction, 88 opcodes, optimizer, executor, graph algorithms),
+`src/mem/heap.h` (allocator lifecycle).
 
 <!-- Verified: compiles with cc -Iinclude -Isrc -->
 ```c
@@ -201,7 +202,7 @@ Full docs: **[rayforcedb.github.io/rayforce2](https://rayforcedb.github.io/rayfo
 - [Rayfall Language](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html) — syntax, 143 builtins
 - [Data Types](https://rayforcedb.github.io/rayforce2/docs/data-types.html) — 12 types, collections
 - [Queries](https://rayforcedb.github.io/rayforce2/docs/queries-select.html) — select, joins, pivot, window
-- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 62 public functions
+- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 64 + 124 functions across two headers
 - [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html) — 22 algorithms
 - [Architecture](https://rayforcedb.github.io/rayforce2/docs/architecture-pipeline.html) — DAG, optimizer, memory
 
