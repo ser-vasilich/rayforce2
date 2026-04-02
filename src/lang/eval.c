@@ -4068,11 +4068,22 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 use_eval_group = 1;
         }
         if (use_eval_group) {
-            ray_graph_free(g);
-            /* Eval-level groupby for LIST columns */
-            ray_t* key_col = ray_table_get_col(tbl, by_expr->i64);
+            /* Apply WHERE filter first (if any), then eval-level groupby */
+            ray_t* eval_tbl = tbl;
+            if (where_expr) {
+                root = ray_optimize(g, root);
+                ray_t* fres = ray_execute(g, root);
+                ray_graph_free(g); g = NULL;
+                if (!fres || RAY_IS_ERR(fres)) { ray_release(tbl); return fres ? fres : ray_error("domain", NULL); }
+                if (ray_is_lazy(fres)) fres = ray_lazy_materialize(fres);
+                if (!fres || RAY_IS_ERR(fres)) { ray_release(tbl); return fres ? fres : ray_error("domain", NULL); }
+                eval_tbl = fres;
+            } else {
+                ray_graph_free(g); g = NULL;
+            }
+            ray_t* key_col = ray_table_get_col(eval_tbl, by_expr->i64);
             ray_t* groups = ray_group_fn(key_col);
-            if (RAY_IS_ERR(groups)) { ray_release(tbl); return groups; }
+            if (RAY_IS_ERR(groups)) { if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return groups; }
 
             /* groups is a dict: {key_val: [indices ...], ...} */
             int64_t gn = ray_len(groups);
@@ -4092,15 +4103,15 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 ray_t* agg_fn_name = agg_elems[0];
                 ray_t* agg_col_expr = agg_elems[1];
 
-                /* Resolve source column — it's a column name reference, not an env variable */
+                /* Resolve source column from filtered table */
                 ray_t* src_col_val = NULL;
                 if (agg_col_expr->type == -RAY_SYM && (agg_col_expr->attrs & RAY_ATTR_NAME)) {
-                    src_col_val = ray_table_get_col(tbl, agg_col_expr->i64);
+                    src_col_val = ray_table_get_col(eval_tbl, agg_col_expr->i64);
                     if (src_col_val) ray_retain(src_col_val);
                 }
                 if (!src_col_val) {
                     src_col_val = ray_eval(agg_col_expr);
-                    if (RAY_IS_ERR(src_col_val)) { ray_release(groups); ray_release(tbl); return src_col_val; }
+                    if (RAY_IS_ERR(src_col_val)) { ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return src_col_val; }
                 }
 
                 /* For each group, compute aggregation */
@@ -4108,10 +4119,8 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 ray_t** grp_items = (ray_t**)ray_data(groups);
                 for (int64_t gi = 0; gi < n_groups; gi++) {
                     ray_t* idx_list = grp_items[gi * 2 + 1];
-                    /* Gather values at indices */
                     ray_t* subset = ray_at(src_col_val, idx_list);
                     if (RAY_IS_ERR(subset)) continue;
-                    /* Apply aggregation */
                     ray_t* agg_val = NULL;
                     ray_t* fn_obj = ray_env_get(agg_fn_name->i64);
                     if (fn_obj && fn_obj->type == RAY_UNARY) {
@@ -4138,21 +4147,20 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 
             /* Build result table: key column + aggregation columns */
             ray_t* result = ray_table_new(1 + n_agg_out);
-            if (RAY_IS_ERR(result)) { ray_release(groups); ray_release(tbl); return result; }
+            if (RAY_IS_ERR(result)) { ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return result; }
 
             /* Key column: unique keys from groups */
             ray_t** grp_items = (ray_t**)ray_data(groups);
-            ray_t* key_col_src = ray_table_get_col(tbl, by_expr->i64);
+            ray_t* key_col_src = ray_table_get_col(eval_tbl, by_expr->i64);
             if (key_col_src && key_col_src->type == RAY_STR) {
-                /* Build STR vector for string group keys */
                 ray_t* key_vec = ray_vec_new(RAY_STR, n_groups);
                 for (int64_t gi = 0; gi < n_groups && !RAY_IS_ERR(key_vec); gi++) {
-                    ray_t* k = grp_items[gi * 2]; /* -RAY_STR atom */
+                    ray_t* k = grp_items[gi * 2];
                     const char* sp = ray_str_ptr(k);
                     size_t slen = ray_str_len(k);
                     key_vec = ray_str_vec_append(key_vec, sp ? sp : "", sp ? slen : 0);
                 }
-                if (RAY_IS_ERR(key_vec)) { ray_release(groups); ray_release(tbl); return key_vec; }
+                if (RAY_IS_ERR(key_vec)) { ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return key_vec; }
                 result = ray_table_add_col(result, by_expr->i64, key_vec);
                 ray_release(key_vec);
             } else {
@@ -4175,6 +4183,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             }
 
             ray_release(groups);
+            if (eval_tbl != tbl) ray_release(eval_tbl);
             ray_release(tbl);
             return result;
         }
