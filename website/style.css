@@ -77,14 +77,11 @@ code {
   height: 52px; padding: 0 16px;
 }
 .nav-brand {
-  display: flex; align-items: center; gap: 8px;
-  color: var(--text); font-family: var(--font-heading);
-  font-size: 1.15rem; font-weight: 700;
-  letter-spacing: .03em; text-transform: uppercase;
+  display: flex; align-items: center;
   margin-right: 16px; text-decoration: none;
 }
-.nav-brand:hover { text-decoration: none; color: var(--text); }
-.nav-brand img { width: 24px; height: 16px; }
+.nav-brand:hover { text-decoration: none; }
+.nav-brand img { height: 20px; width: auto; }
 .nav-links {
   display: flex; align-items: center; gap: 4px; list-style: none;
 }
