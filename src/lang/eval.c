@@ -12362,12 +12362,21 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
                 if (is_dl_var(ce[0]) && ce[0]->i64 == find_vars[fi]) in_entity_pos = true;
                 if (ray_len(clause) >= 3 && is_dl_var(ce[2]) && ce[2]->i64 == find_vars[fi]) in_value_pos = true;
             }
-            /* Only resolve if appears in value position and NEVER in entity position */
+            /* Only resolve if appears in value position and NEVER in entity position,
+             * AND all values in the column are valid sym IDs (not raw integers). */
             if (in_value_pos && !in_entity_pos) {
                 ray_t* col = ray_table_get_col(result, find_vars[fi]);
                 if (col && col->type == RAY_I64) {
                     int64_t nr = col->len;
                     const int64_t* data = (const int64_t*)ray_data(col);
+                    /* Verify ALL values are valid sym IDs before converting */
+                    bool all_valid_syms = (nr > 0);
+                    for (int64_t r = 0; r < nr; r++) {
+                        if (data[r] < 0 || ray_sym_str(data[r]) == NULL) {
+                            all_valid_syms = false; break;
+                        }
+                    }
+                    if (!all_valid_syms) continue; /* skip — contains raw integers */
                     ray_t* sym_col = ray_vec_new(RAY_SYM, nr);
                     if (sym_col && !RAY_IS_ERR(sym_col)) {
                         for (int64_t r = 0; r < nr; r++)
