@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Rayforce" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-light.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo-dark.svg" alt="Rayforce" width="360">
+  </picture>
 </p>
 
 <p align="center">
