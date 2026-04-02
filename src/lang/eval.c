@@ -11255,6 +11255,7 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
                 count++;
             }
             result = ray_table_new(0);
+            if (!RAY_IS_ERR(result)) result->len = count > 0 ? 1 : 0;
         } else {
             result = ray_table_new(ncols);
             if (!RAY_IS_ERR(result)) {
@@ -11681,6 +11682,18 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
             if (RAY_IS_ERR(tbl)) {
                 for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
                 return tbl;
+            }
+            /* Fully-ground clause (0 columns): existence check.
+             * If no rows matched, short-circuit with empty result.
+             * If rows matched, skip (it's a pass-through filter). */
+            if (ray_table_ncols(tbl) == 0) {
+                bool exists = (tbl->len > 0);
+                ray_release(tbl);
+                if (!exists) {
+                    for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
+                    return ray_table_new(0);
+                }
+                continue; /* fact exists — no columns to add, skip */
             }
             intermediates[n_intermediates++] = tbl;
         } else if (kind == 1) {
