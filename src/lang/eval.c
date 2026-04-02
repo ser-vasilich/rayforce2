@@ -4224,8 +4224,9 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
         if (n_aggs > 0) {
             root = ray_group(g, key_ops, n_keys, agg_ops, agg_ins, n_aggs);
         } else {
-            /* No explicit aggregations — execute WHERE filter via DAG first,
-             * then do eval-level groupby that takes first of each group. */
+            /* No explicit aggregations — apply WHERE filter first (if any),
+             * then use DAG GROUP+COUNT for fast hash-parallel group boundaries,
+             * then gather first-of-group from the filtered table. */
             ray_t* filtered_tbl = tbl;
             if (where_expr) {
                 root = ray_optimize(g, root);
@@ -4235,24 +4236,74 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 if (ray_is_lazy(fres)) fres = ray_lazy_materialize(fres);
                 if (!fres || RAY_IS_ERR(fres)) { ray_release(tbl); return fres ? fres : ray_error("domain", NULL); }
                 filtered_tbl = fres;
-            } else {
-                ray_graph_free(g); g = NULL;
+                /* Rebuild graph on filtered table for GROUP+COUNT */
+                g = ray_graph_new(filtered_tbl);
+                if (!g) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return ray_error("oom", NULL); }
+                n_keys = 0;
+                if (by_expr->type == RAY_SYM) {
+                    int64_t nk = ray_len(by_expr);
+                    int64_t* sym_ids = (int64_t*)ray_data(by_expr);
+                    for (int64_t i = 0; i < nk && n_keys < 16; i++) {
+                        ray_t* ns = ray_sym_str(sym_ids[i]);
+                        if (ns) key_ops[n_keys++] = ray_scan(g, ray_str_ptr(ns));
+                    }
+                } else {
+                    key_ops[0] = compile_expr_dag(g, by_expr);
+                    if (key_ops[0]) n_keys = 1;
+                }
             }
 
-            /* Get group key column — only handle simple column name references.
-             * For computed expressions (xbar etc.), fall through to DAG-based approach. */
+            uint16_t cnt_op = OP_COUNT;
+            ray_op_t* cnt_in = key_ops[0];
+            root = ray_group(g, key_ops, n_keys, &cnt_op, &cnt_in, 1);
+            root = ray_optimize(g, root);
+            ray_t* grouped = ray_execute(g, root);
+            ray_graph_free(g); g = NULL;
+            if (!grouped || RAY_IS_ERR(grouped)) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return grouped; }
+            if (ray_is_lazy(grouped)) grouped = ray_lazy_materialize(grouped);
+
+            int64_t n_groups = ray_table_nrows(grouped);
+
+            /* Resolve key column sym early — needed for empty result schema */
             int64_t key_sym = -1;
             if (by_expr->type == -RAY_SYM && (by_expr->attrs & RAY_ATTR_NAME))
                 key_sym = by_expr->i64;
             else if (by_expr->type == RAY_SYM && ray_len(by_expr) == 1)
                 key_sym = ((int64_t*)ray_data(by_expr))[0];
 
+            if (n_groups == 0) {
+                ray_release(grouped);
+                int64_t nc0 = ray_table_ncols(filtered_tbl);
+                ray_t* empty = ray_table_new(nc0);
+                if (!RAY_IS_ERR(empty)) {
+                    /* Key column first */
+                    { ray_t* sc = ray_table_get_col(filtered_tbl, key_sym);
+                      if (sc) {
+                        ray_t* ev = (sc->type == RAY_STR) ? ray_vec_new(RAY_STR, 0) : ray_vec_new(sc->type, 0);
+                        if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, key_sym, ev); ray_release(ev); }
+                      }
+                    }
+                    for (int64_t c = 0; c < nc0; c++) {
+                        int64_t cn = ray_table_col_name(filtered_tbl, c);
+                        if (cn == key_sym) continue;
+                        ray_t* sc = ray_table_get_col_idx(filtered_tbl, c);
+                        ray_t* ev = (sc->type == RAY_STR) ? ray_vec_new(RAY_STR, 0) :
+                                    (sc->type == RAY_LIST) ? ray_list_new(0) :
+                                    ray_vec_new(sc->type, 0);
+                        if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
+                    }
+                }
+                if (filtered_tbl != tbl) ray_release(filtered_tbl);
+                ray_release(tbl);
+                return empty;
+            }
+
+            /* Build first_idx: scan filtered key column once, record first
+             * occurrence of each group key value. */
             if (key_sym < 0) {
-                /* Computed group key — evaluate the by expression to get
-                 * a computed key column, then do eval-level groupby. */
-                /* First, evaluate the key expression with column bindings */
+                /* Computed group key (e.g., xbar) — fall back to eval-level groupby */
+                ray_release(grouped);
                 int64_t tbl_ncols = ray_table_ncols(filtered_tbl);
-                /* Bind table columns as local variables */
                 ray_env_push_scope();
                 for (int64_t c = 0; c < tbl_ncols; c++) {
                     int64_t cn = ray_table_col_name(filtered_tbl, c);
@@ -4266,7 +4317,6 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                     ray_release(tbl);
                     return computed_key ? computed_key : ray_error("domain", NULL);
                 }
-                /* Group by the computed key */
                 ray_t* groups2 = ray_group_fn(computed_key);
                 if (!groups2 || RAY_IS_ERR(groups2)) {
                     ray_release(computed_key);
@@ -4274,64 +4324,40 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                     ray_release(tbl);
                     return groups2 ? groups2 : ray_error("domain", NULL);
                 }
-                int64_t gn2 = ray_len(groups2);
-                int64_t ng2 = gn2 / 2;
-                if (ng2 == 0) {
-                    /* Empty result */
-                    ray_release(groups2); ray_release(computed_key);
-                    if (filtered_tbl != tbl) ray_release(filtered_tbl);
-                    ray_release(tbl);
-                    return ray_table_new(0);
-                }
+                int64_t ng2 = ray_len(groups2) / 2;
+                if (ng2 == 0) { ray_release(groups2); ray_release(computed_key); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return ray_table_new(0); }
                 ray_t** gi2 = (ray_t**)ray_data(groups2);
                 int64_t fi2[256];
                 for (int64_t g2 = 0; g2 < ng2 && g2 < 256; g2++) {
-                    ray_t* il2 = gi2[g2 * 2 + 1];
                     int alloc2 = 0;
-                    ray_t* i02 = collection_elem(il2, 0, &alloc2);
+                    ray_t* i02 = collection_elem(gi2[g2 * 2 + 1], 0, &alloc2);
                     fi2[g2] = as_i64(i02);
                     if (alloc2) ray_release(i02);
                 }
-                /* Build result: computed key column + other columns */
-                /* Get computed key name from by_expr */
-                int64_t ckey_name = ray_sym_intern("+", 1); /* default */
+                int64_t ckey_name = ray_sym_intern("+", 1);
                 if (by_expr->type == RAY_LIST && by_expr->len >= 2) {
                     ray_t** be = (ray_t**)ray_data(by_expr);
                     if (be[1]->type == -RAY_SYM && (be[1]->attrs & RAY_ATTR_NAME))
                         ckey_name = be[1]->i64;
                 }
                 ray_t* res2 = ray_table_new(tbl_ncols);
-                /* Add key column first, using ORIGINAL values (not computed) */
-                {
-                    ray_t* orig_key_col = ray_table_get_col(filtered_tbl, ckey_name);
-                    if (orig_key_col) {
-                        ray_t* kv = ray_vec_new(orig_key_col->type, ng2);
-                        for (int64_t g2 = 0; g2 < ng2; g2++) {
-                            int alloc2 = 0;
-                            ray_t* v2 = collection_elem(orig_key_col, fi2[g2], &alloc2);
-                            store_typed_elem(kv, g2, v2);
-                            if (alloc2) ray_release(v2);
-                        }
-                        kv->len = ng2;
-                        res2 = ray_table_add_col(res2, ckey_name, kv);
-                        ray_release(kv);
-                    }
+                /* Key column first */
+                { ray_t* okc = ray_table_get_col(filtered_tbl, ckey_name);
+                  if (okc) {
+                    ray_t* kv = ray_vec_new(okc->type, ng2);
+                    for (int64_t g2 = 0; g2 < ng2; g2++) { int a2 = 0; ray_t* v2 = collection_elem(okc, fi2[g2], &a2); store_typed_elem(kv, g2, v2); if (a2) ray_release(v2); }
+                    kv->len = ng2;
+                    res2 = ray_table_add_col(res2, ckey_name, kv); ray_release(kv);
+                  }
                 }
-                /* Add non-key columns */
                 for (int64_t c = 0; c < tbl_ncols; c++) {
                     int64_t cn = ray_table_col_name(filtered_tbl, c);
                     if (cn == ckey_name) continue;
                     ray_t* sc = ray_table_get_col_idx(filtered_tbl, c);
                     ray_t* dc = ray_vec_new(sc->type, ng2);
-                    for (int64_t g2 = 0; g2 < ng2; g2++) {
-                        int alloc2 = 0;
-                        ray_t* v2 = collection_elem(sc, fi2[g2], &alloc2);
-                        store_typed_elem(dc, g2, v2);
-                        if (alloc2) ray_release(v2);
-                    }
+                    for (int64_t g2 = 0; g2 < ng2; g2++) { int a2 = 0; ray_t* v2 = collection_elem(sc, fi2[g2], &a2); store_typed_elem(dc, g2, v2); if (a2) ray_release(v2); }
                     dc->len = ng2;
-                    res2 = ray_table_add_col(res2, cn, dc);
-                    ray_release(dc);
+                    res2 = ray_table_add_col(res2, cn, dc); ray_release(dc);
                 }
                 ray_release(groups2); ray_release(computed_key);
                 if (filtered_tbl != tbl) ray_release(filtered_tbl);
@@ -4339,86 +4365,81 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 return res2;
             }
 
-            ray_t* key_col = ray_table_get_col(filtered_tbl, key_sym);
-            if (!key_col) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return ray_error("domain", NULL); }
+            ray_t* orig_key_col = ray_table_get_col(filtered_tbl, key_sym);
+            ray_t* grp_key_col = ray_table_get_col(grouped, key_sym);
+            int64_t nrows_orig = orig_key_col ? orig_key_col->len : 0;
+            ray_release(grouped);
 
-            ray_t* groups = ray_group_fn(key_col);
-            if (!groups || RAY_IS_ERR(groups)) { if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return groups ? groups : ray_error("domain", NULL); }
-
-            /* groups is a dict: {key_val: [indices ...], ...} */
-            int64_t gn = ray_len(groups);
-            int64_t n_groups = gn / 2;
-            if (n_groups == 0) {
-                /* No groups — return empty table with correct schema */
-                int64_t ncols0 = ray_table_ncols(filtered_tbl);
-                ray_t* empty = ray_table_new(ncols0);
-                if (!RAY_IS_ERR(empty)) {
-                    /* Add key column first */
-                    ray_t* kc0 = ray_table_get_col(filtered_tbl, key_sym);
-                    if (kc0) {
-                        ray_t* ev0 = ray_vec_new(kc0->type, 0);
-                        if (!RAY_IS_ERR(ev0)) { empty = ray_table_add_col(empty, key_sym, ev0); ray_release(ev0); }
-                    }
-                    /* Add other columns */
-                    for (int64_t c = 0; c < ncols0; c++) {
-                        int64_t cn = ray_table_col_name(filtered_tbl, c);
-                        if (cn == key_sym) continue;
-                        ray_t* sc = ray_table_get_col_idx(filtered_tbl, c);
-                        if (sc->type == RAY_LIST || sc->type == RAY_STR) {
-                            ray_t* ev = (sc->type == RAY_STR) ? ray_vec_new(RAY_STR, 0) : ray_list_new(0);
-                            if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
-                        } else {
-                            ray_t* ev = ray_vec_new(sc->type, 0);
-                            if (!RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
-                        }
-                    }
-                }
-                ray_release(groups);
-                if (filtered_tbl != tbl) ray_release(filtered_tbl);
-                ray_release(tbl);
-                return RAY_IS_ERR(empty) ? empty : empty;
-            }
-            if (n_groups < 0) { ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return ray_error("domain", NULL); }
-            ray_t** grp_items = (ray_t**)ray_data(groups);
-
-            /* Collect first index from each group */
             int64_t first_idx_stack[256];
             int64_t* first_idx = (n_groups <= 256) ? first_idx_stack :
                 (int64_t*)ray_data(ray_alloc((size_t)n_groups * sizeof(int64_t)));
-            if (!first_idx) { ray_release(groups); ray_release(tbl); return ray_error("oom", NULL); }
-            for (int64_t gi = 0; gi < n_groups; gi++) {
-                ray_t* idx_list = grp_items[gi * 2 + 1];
-                if (!idx_list || RAY_IS_ERR(idx_list) || ray_len(idx_list) == 0) {
-                    first_idx[gi] = 0;
-                    continue;
+            if (!first_idx) { ray_release(tbl); return ray_error("oom", NULL); }
+
+            /* Single scan: mark first occurrence of each group key.
+             * Fast path for integer-like columns: compare raw values. */
+            for (int64_t gi = 0; gi < n_groups; gi++) first_idx[gi] = -1;
+            int64_t found = 0;
+            int8_t kt = orig_key_col->type;
+            if (kt != RAY_STR && kt != RAY_GUID && kt != RAY_LIST) {
+                /* Read group key values as i64 for fast comparison */
+                int64_t gk_vals[256];
+                for (int64_t gi = 0; gi < n_groups && gi < 256; gi++) {
+                    if (kt == RAY_F64) {
+                        memcpy(&gk_vals[gi], &((double*)ray_data(grp_key_col))[gi], 8);
+                    } else {
+                        gk_vals[gi] = ray_read_sym(ray_data(grp_key_col), gi, kt, grp_key_col->attrs);
+                    }
                 }
-                int alloc = 0;
-                ray_t* idx0 = collection_elem(idx_list, 0, &alloc);
-                first_idx[gi] = as_i64(idx0);
-                if (alloc) ray_release(idx0);
+                for (int64_t r = 0; r < nrows_orig && found < n_groups; r++) {
+                    int64_t ov;
+                    if (kt == RAY_F64) memcpy(&ov, &((double*)ray_data(orig_key_col))[r], 8);
+                    else ov = ray_read_sym(ray_data(orig_key_col), r, kt, orig_key_col->attrs);
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        if (first_idx[gi] >= 0) continue;
+                        if (ov == gk_vals[gi]) { first_idx[gi] = r; found++; break; }
+                    }
+                }
+            } else {
+                /* Slow path: atom comparison */
+                for (int64_t r = 0; r < nrows_orig && found < n_groups; r++) {
+                    int a1 = 0;
+                    ray_t* ov = collection_elem(orig_key_col, r, &a1);
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        if (first_idx[gi] >= 0) continue;
+                        int a2 = 0;
+                        ray_t* gv = collection_elem(grp_key_col, gi, &a2);
+                        bool eq = atom_eq(ov, gv);
+                        if (a2) ray_release(gv);
+                        if (eq) { first_idx[gi] = r; found++; break; }
+                    }
+                    if (a1) ray_release(ov);
+                }
             }
+
+            /* Now build the result table using first_idx gathered above.
+             * key_sym and n_groups are already set. */
 
             /* Build result table: key column first, then others */
             int64_t ncols = ray_table_ncols(filtered_tbl);
             ray_t* result = ray_table_new(ncols);
-            if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); return result; }
+            if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); return result; }
 
             /* Add key column first */
             ray_t* key_vec_src = ray_table_get_col(filtered_tbl, key_sym);
             if (key_vec_src->type == RAY_STR) {
                 ray_t* key_vec_dst = ray_vec_new(RAY_STR, n_groups);
-                if (!key_vec_dst || RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); ray_release(result); return key_vec_dst ? key_vec_dst : ray_error("oom", NULL); }
+                if (!key_vec_dst || RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return key_vec_dst ? key_vec_dst : ray_error("oom", NULL); }
                 for (int64_t gi = 0; gi < n_groups; gi++) {
                     size_t slen = 0;
                     const char* sp = ray_str_vec_get(key_vec_src, first_idx[gi], &slen);
                     key_vec_dst = ray_str_vec_append(key_vec_dst, sp ? sp : "", sp ? slen : 0);
-                    if (RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); ray_release(result); return key_vec_dst; }
+                    if (RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return key_vec_dst; }
                 }
                 result = ray_table_add_col(result, key_sym, key_vec_dst);
                 ray_release(key_vec_dst);
             } else {
                 ray_t* key_vec_dst = ray_vec_new(key_vec_src->type, n_groups);
-                if (RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); if (filtered_tbl != tbl) ray_release(filtered_tbl); ray_release(tbl); ray_release(result); return key_vec_dst; }
+                if (RAY_IS_ERR(key_vec_dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return key_vec_dst; }
                 for (int64_t gi = 0; gi < n_groups; gi++) {
                     int alloc = 0;
                     ray_t* val = collection_elem(key_vec_src, first_idx[gi], &alloc);
@@ -4440,19 +4461,19 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 if (ct == RAY_STR) {
                     /* String column: build STR vector */
                     ray_t* dst = ray_vec_new(RAY_STR, n_groups);
-                    if (!dst || RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst ? dst : ray_error("oom", NULL); }
+                    if (!dst || RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return dst ? dst : ray_error("oom", NULL); }
                     for (int64_t gi = 0; gi < n_groups; gi++) {
                         size_t slen = 0;
                         const char* sp = ray_str_vec_get(src_col, first_idx[gi], &slen);
                         dst = ray_str_vec_append(dst, sp ? sp : "", sp ? slen : 0);
-                        if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst; }
+                        if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return dst; }
                     }
                     result = ray_table_add_col(result, col_name, dst);
                     ray_release(dst);
                 } else if (ct == RAY_LIST) {
                     /* List column: pick items */
                     ray_t* dst = ray_alloc(n_groups * sizeof(ray_t*));
-                    if (!dst) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return ray_error("oom", NULL); }
+                    if (!dst) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return ray_error("oom", NULL); }
                     dst->type = RAY_LIST;
                     dst->len = n_groups;
                     ray_t** dout = (ray_t**)ray_data(dst);
@@ -4466,7 +4487,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 } else {
                     /* Typed vector: copy elements at first indices */
                     ray_t* dst = ray_vec_new(ct, n_groups);
-                    if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst; }
+                    if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); ray_release(result); return dst; }
                     for (int64_t gi = 0; gi < n_groups; gi++) {
                         int alloc = 0;
                         ray_t* val = collection_elem(src_col, first_idx[gi], &alloc);
@@ -4477,11 +4498,10 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                     result = ray_table_add_col(result, col_name, dst);
                     ray_release(dst);
                 }
-                if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); return result; }
+                if (RAY_IS_ERR(result)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(tbl); return result; }
             }
 
             if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32));
-            ray_release(groups);
             if (filtered_tbl != tbl) ray_release(filtered_tbl);
             ray_release(tbl);
             return result;
