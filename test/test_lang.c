@@ -1573,6 +1573,65 @@ static MunitResult test_error_trace_exists(const void* params, void* fixture) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Datalog: recursive rule (semi-naive fixpoint)
+ * ═══════════════════════════════════════════════════════════════ */
+
+static MunitResult test_datalog_fixpoint(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* Build an EAV database: 1->2, 2->3, 3->4 */
+    ray_t* db = ray_eval_str(
+        "(do"
+        "  (set db (datoms))"
+        "  (set db (assert-fact db 1 'edge 2))"
+        "  (set db (assert-fact db 2 'edge 3))"
+        "  (set db (assert-fact db 3 'edge 4))"
+        "  db)"
+    );
+    munit_assert(db != NULL);
+    munit_assert(!RAY_IS_ERR(db));
+
+    /* Define base rule: (rule (path ?x ?y) (?x :edge ?y)) */
+    ray_t* r1 = ray_eval_str("(rule (path ?x ?y) (?x :edge ?y))");
+    munit_assert(r1 != NULL);
+    munit_assert(!RAY_IS_ERR(r1));
+    ray_release(r1);
+
+    /* Define recursive rule: (rule (path ?x ?z) (?x :edge ?y) (path ?y ?z)) */
+    ray_t* r2 = ray_eval_str("(rule (path ?x ?z) (?x :edge ?y) (path ?y ?z))");
+    munit_assert(r2 != NULL);
+    munit_assert(!RAY_IS_ERR(r2));
+    ray_release(r2);
+
+    /* Query: find all reachable pairs */
+    ray_t* result = ray_eval_str(
+        "(do"
+        "  (set db (datoms))"
+        "  (set db (assert-fact db 1 'edge 2))"
+        "  (set db (assert-fact db 2 'edge 3))"
+        "  (set db (assert-fact db 3 'edge 4))"
+        "  (query db (find ?x ?y) (where (path ?x ?y))))"
+    );
+    munit_assert(result != NULL);
+    if (RAY_IS_ERR(result)) {
+        ray_t* es = ray_fmt(result, 0);
+        fprintf(stderr, "  query error: %.*s\n",
+                (int)(es ? ray_str_len(es) : 0), es ? ray_str_ptr(es) : "?");
+        if (es) ray_release(es);
+        return MUNIT_FAIL;
+    }
+    munit_assert_int(result->type, ==, RAY_TABLE);
+
+    /* Expect 6 rows: 1->2, 2->3, 3->4, 1->3, 2->4, 1->4 */
+    int64_t nrows = ray_table_nrows(result);
+    munit_assert_int((int)nrows, ==, 6);
+
+    ray_release(result);
+    ray_release(db);
+    return MUNIT_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Ported rayforce lang tests (41 functions, ~3800 assertions)
  * ═══════════════════════════════════════════════════════════════ */
 #include "test_lang_rf.inc"
@@ -1715,6 +1774,7 @@ static MunitTest lang_tests[] = {
     { "/rf/error",                 test_rf_error,         lang_setup, lang_teardown, 0, NULL },
     { "/rf/safety",                test_rf_safety,        lang_setup, lang_teardown, 0, NULL },
     { "/rf/read_csv",              test_rf_read_csv,      lang_setup, lang_teardown, 0, NULL },
+    { "/datalog/fixpoint",          test_datalog_fixpoint, lang_setup, lang_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

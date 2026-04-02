@@ -11032,6 +11032,32 @@ static ray_dl_rule_t* dl_find_rule(int64_t name_sym) {
     return NULL;
 }
 
+/* Find ALL rules with a given name. Returns count, fills out[] (max max_out). */
+static int dl_find_all_rules(int64_t name_sym, ray_dl_rule_t** out, int max_out) {
+    int count = 0;
+    for (int i = 0; i < dl_n_rules && count < max_out; i++) {
+        if (dl_rules[i].name_sym == name_sym)
+            out[count++] = &dl_rules[i];
+    }
+    return count;
+}
+
+/* Check if a rule clause body references a given rule name (direct recursion). */
+static bool dl_body_references_rule(ray_t* body, int64_t name_sym) {
+    ray_t** elems = (ray_t**)ray_data(body);
+    int64_t len = ray_len(body);
+    for (int64_t i = 0; i < len; i++) {
+        if (!is_list(elems[i])) continue;
+        int64_t clen = ray_len(elems[i]);
+        if (clen < 2) continue;
+        ray_t** ce = (ray_t**)ray_data(elems[i]);
+        if (ce[0]->type == -RAY_SYM && (ce[0]->attrs & RAY_ATTR_NAME) &&
+            ce[0]->i64 == name_sym)
+            return true;
+    }
+    return false;
+}
+
 /* ── Query helpers ── */
 
 /* Classify a body clause:
@@ -11131,13 +11157,99 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
     return result;
 }
 
-/* Compile a rule invocation: inline the rule body as a sub-query, then
- * rename output columns to match the caller's variable names. */
+/* Forward declarations for compilation with optional override table */
 static ray_t* dl_compile_rule_invocation(ray_t* db, ray_t* clause, int depth);
-
-/* Forward declaration for recursive compilation */
 static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int depth);
+static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_clauses,
+                                        int depth, int64_t override_rule, ray_t* override_tbl);
+static ray_t* dl_compile_rule_invocation_override(ray_t* db, ray_t* clause, int depth,
+                                                   int64_t override_rule, ray_t* override_tbl);
+static ray_t* dl_fixpoint_eval(ray_t* db, ray_t* clause, int depth);
 
+/* Build a new table by copying columns from src with renamed column names.
+ * Rule head vars map to caller vars. Returns new table (caller must release src). */
+static ray_t* dl_table_with_renamed_cols(ray_t* src, ray_dl_rule_t* rule, ray_t** ce, int64_t clen) {
+    int64_t ncols = ray_table_ncols(src);
+    ray_t* dst = ray_table_new(ncols);
+    if (RAY_IS_ERR(dst)) return dst;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t col_name = ray_table_col_name(src, c);
+        /* Check if this column should be renamed */
+        for (int i = 0; i < rule->n_head_vars && i + 1 < clen; i++) {
+            if (col_name == rule->head_vars[i]) {
+                col_name = ce[i + 1]->i64;
+                break;
+            }
+        }
+        ray_t* col = ray_table_get_col_idx(src, c);
+        dst = ray_table_add_col(dst, col_name, col);
+        if (RAY_IS_ERR(dst)) return dst;
+    }
+    return dst;
+}
+
+/* In-place rename result columns from rule head vars to caller vars.
+ * Safe when result is exclusively owned (rc==1). */
+static void dl_rename_columns(ray_t* result, ray_dl_rule_t* rule, ray_t** ce, int64_t clen) {
+    int64_t ncols = ray_table_ncols(result);
+    /* Collect all renames first to avoid sequential collision */
+    int64_t old_names[16], new_names[16];
+    int n_renames = 0;
+    for (int i = 0; i < rule->n_head_vars && i + 1 < clen; i++) {
+        int64_t head_var = rule->head_vars[i];
+        int64_t caller_var = ce[i + 1]->i64;
+        if (head_var == caller_var) continue;
+        old_names[n_renames] = head_var;
+        new_names[n_renames] = caller_var;
+        n_renames++;
+    }
+    /* Apply all renames: for each column, find the first matching rename */
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t name = ray_table_col_name(result, c);
+        for (int r = 0; r < n_renames; r++) {
+            if (name == old_names[r]) {
+                ray_table_set_col_name(result, c, new_names[r]);
+                break;
+            }
+        }
+    }
+}
+
+/* Compile a single rule clause body, substituting self-references with override_tbl.
+ * When override_rule == 0 or override_tbl == NULL, behaves like dl_compile_body. */
+static ray_t* dl_compile_rule_invocation_override(ray_t* db, ray_t* clause, int depth,
+                                                   int64_t override_rule, ray_t* override_tbl) {
+    if (depth > 16)
+        return ray_error("domain", "query: rule recursion too deep");
+
+    ray_t** ce = (ray_t**)ray_data(clause);
+    int64_t clen = ray_len(clause);
+    int64_t rule_name = ce[0]->i64;
+
+    /* If this invocation matches the override rule, return a copy of the
+     * override table with columns renamed to match the caller's variable names. */
+    if (override_tbl && rule_name == override_rule) {
+        ray_dl_rule_t* rule = dl_find_rule(rule_name);
+        if (!rule) return ray_error("domain", "query: unknown rule");
+        return dl_table_with_renamed_cols(override_tbl, rule, ce, clen);
+    }
+
+    ray_dl_rule_t* rule = dl_find_rule(rule_name);
+    if (!rule) return ray_error("domain", "query: unknown rule");
+
+    /* Compile the rule body with override propagated */
+    ray_t** body_elems = (ray_t**)ray_data(rule->body);
+    int64_t body_len = ray_len(rule->body);
+    ray_t* result = dl_compile_body_override(db, body_elems, body_len, depth + 1,
+                                              override_rule, override_tbl);
+    if (RAY_IS_ERR(result)) return result;
+
+    dl_rename_columns(result, rule, ce, clen);
+    return result;
+}
+
+/* Compile a rule invocation, detecting recursion and using fixpoint if needed. */
 static ray_t* dl_compile_rule_invocation(ray_t* db, ray_t* clause, int depth) {
     if (depth > 16)
         return ray_error("domain", "query: rule recursion too deep");
@@ -11146,34 +11258,245 @@ static ray_t* dl_compile_rule_invocation(ray_t* db, ray_t* clause, int depth) {
     int64_t clen = ray_len(clause);
     int64_t rule_name = ce[0]->i64;
 
-    ray_dl_rule_t* rule = dl_find_rule(rule_name);
-    if (!rule) return ray_error("domain", "query: unknown rule");
+    /* Check if this rule is recursive (any clause with this name references itself). */
+    ray_dl_rule_t* all_rules[64];
+    int n_rules = dl_find_all_rules(rule_name, all_rules, 64);
+    if (n_rules == 0) return ray_error("domain", "query: unknown rule");
 
-    /* Compile the rule body */
-    ray_t** body_elems = (ray_t**)ray_data(rule->body);
-    int64_t body_len = ray_len(rule->body);
-    ray_t* result = dl_compile_body(db, body_elems, body_len, depth + 1);
-    if (RAY_IS_ERR(result)) return result;
-
-    /* Now rename columns from rule head vars to caller vars.
-     * Rule head: (rulename ?a ?b ?c) -> head_vars = [?a, ?b, ?c]
-     * Caller:    (rulename ?x ?y ?z) -> ce[1..] = [?x, ?y, ?z]
-     * Rename ?a->?x, ?b->?y, ?c->?z in the result table. */
-    int64_t ncols = ray_table_ncols(result);
-    for (int i = 0; i < rule->n_head_vars && i + 1 < clen; i++) {
-        int64_t head_var = rule->head_vars[i];
-        int64_t caller_var = ce[i + 1]->i64;
-        if (head_var == caller_var) continue;
-        /* Find column with head_var name and rename it */
-        for (int64_t c = 0; c < ncols; c++) {
-            if (ray_table_col_name(result, c) == head_var) {
-                ray_table_set_col_name(result, c, caller_var);
-                break;
-            }
+    bool is_recursive = false;
+    for (int i = 0; i < n_rules; i++) {
+        if (dl_body_references_rule(all_rules[i]->body, rule_name)) {
+            is_recursive = true;
+            break;
         }
     }
 
+    if (is_recursive)
+        return dl_fixpoint_eval(db, clause, depth);
+
+    /* Non-recursive: compile all clauses with this name (OR semantics) and union. */
+    ray_t* result = NULL;
+    for (int i = 0; i < n_rules; i++) {
+        ray_t** body_elems = (ray_t**)ray_data(all_rules[i]->body);
+        int64_t body_len = ray_len(all_rules[i]->body);
+        ray_t* partial = dl_compile_body(db, body_elems, body_len, depth + 1);
+        if (RAY_IS_ERR(partial)) {
+            if (result) ray_release(result);
+            return partial;
+        }
+        /* Rename columns from this rule's head vars to caller vars */
+        dl_rename_columns(partial, all_rules[i], ce, clen);
+
+        if (!result) {
+            result = partial;
+        } else {
+            ray_t* merged = ray_union_all_fn(result, partial);
+            ray_release(result);
+            ray_release(partial);
+            if (RAY_IS_ERR(merged)) return merged;
+            result = merged;
+        }
+    }
     return result;
+}
+
+/* Project a table to only the specified columns (by name sym IDs).
+ * Returns a new table with only those columns, renamed to canonical names. */
+static ray_t* dl_project_to_head(ray_t* tbl, ray_dl_rule_t* rule,
+                                  int64_t* canonical_names, int n_canonical) {
+    if (rule->n_head_vars != n_canonical) return ray_error("domain", "head var count mismatch");
+    ray_t* proj = ray_table_new(n_canonical);
+    if (RAY_IS_ERR(proj)) return proj;
+
+    for (int i = 0; i < n_canonical; i++) {
+        int64_t head_var = rule->head_vars[i];
+        ray_t* col = ray_table_get_col(tbl, head_var);
+        if (!col) {
+            ray_release(proj);
+            return ray_error("domain", "query: head variable not found in body result");
+        }
+        proj = ray_table_add_col(proj, canonical_names[i], col);
+        if (RAY_IS_ERR(proj)) return proj;
+    }
+    return proj;
+}
+
+/* Semi-naive fixpoint evaluation for recursive rules.
+ *
+ * Algorithm:
+ * 1. Separate rule clauses into base (non-self-referencing) and recursive
+ * 2. Compute initial facts from base clauses
+ * 3. Iterate: apply recursive clauses with delta substituted for self-reference
+ * 4. new_facts = antijoin(new, all_facts) then distinct
+ * 5. Accumulate and repeat until delta is empty or max iterations reached
+ */
+static ray_t* dl_fixpoint_eval(ray_t* db, ray_t* clause, int depth) {
+    ray_t** ce = (ray_t**)ray_data(clause);
+    int64_t clen = ray_len(clause);
+    int64_t rule_name = ce[0]->i64;
+
+    ray_dl_rule_t* all_rules[64];
+    int n_rules = dl_find_all_rules(rule_name, all_rules, 64);
+
+    /* Separate into base and recursive clauses */
+    ray_dl_rule_t* base_rules[64];
+    ray_dl_rule_t* rec_rules[64];
+    int n_base = 0, n_rec = 0;
+
+    for (int i = 0; i < n_rules; i++) {
+        if (dl_body_references_rule(all_rules[i]->body, rule_name))
+            rec_rules[n_rec++] = all_rules[i];
+        else
+            base_rules[n_base++] = all_rules[i];
+    }
+
+    if (n_base == 0)
+        return ray_error("domain", "query: recursive rule has no base case");
+
+    /* Canonical column names: use first rule's head vars */
+    ray_dl_rule_t* canonical_rule = all_rules[0];
+    int n_head = canonical_rule->n_head_vars;
+    int64_t canonical_names[16];
+    for (int i = 0; i < n_head; i++)
+        canonical_names[i] = canonical_rule->head_vars[i];
+
+    /* Step 1: Compute base facts (union of all base clauses, projected to head vars) */
+    ray_t* all_facts = NULL;
+    for (int i = 0; i < n_base; i++) {
+        ray_t** body_elems = (ray_t**)ray_data(base_rules[i]->body);
+        int64_t body_len = ray_len(base_rules[i]->body);
+        ray_t* partial = dl_compile_body(db, body_elems, body_len, depth + 1);
+        if (RAY_IS_ERR(partial)) {
+            if (all_facts) ray_release(all_facts);
+            return partial;
+        }
+        /* Project body result to head vars and rename to canonical names */
+        ray_t* projected = dl_project_to_head(partial, base_rules[i], canonical_names, n_head);
+        ray_release(partial);
+        if (RAY_IS_ERR(projected)) {
+            if (all_facts) ray_release(all_facts);
+            return projected;
+        }
+
+        if (!all_facts) {
+            all_facts = projected;
+        } else {
+            ray_t* merged = ray_union_all_fn(all_facts, projected);
+            ray_release(all_facts);
+            ray_release(projected);
+            if (RAY_IS_ERR(merged)) return merged;
+            all_facts = merged;
+        }
+    }
+
+    /* Deduplicate base facts */
+    ray_t* deduped = ray_table_distinct_fn(all_facts);
+    ray_release(all_facts);
+    if (RAY_IS_ERR(deduped)) return deduped;
+    all_facts = deduped;
+
+    /* delta = base facts initially */
+    ray_t* delta = all_facts;
+    ray_retain(delta);
+
+    int64_t ncols = (int64_t)n_head;
+
+    /* Step 2: Iterate until fixpoint */
+    int max_iter = 1000;
+    for (int iter = 0; iter < max_iter && ray_table_nrows(delta) > 0; iter++) {
+        /* Apply each recursive clause, substituting self-reference with delta */
+        ray_t* new_facts = NULL;
+        for (int i = 0; i < n_rec; i++) {
+            ray_t** body_elems = (ray_t**)ray_data(rec_rules[i]->body);
+            int64_t body_len = ray_len(rec_rules[i]->body);
+
+            /* Compile body with override: self-references resolve to delta */
+            ray_t* partial = dl_compile_body_override(db, body_elems, body_len,
+                                                       depth + 1, rule_name, delta);
+            if (RAY_IS_ERR(partial)) {
+                ray_release(delta);
+                ray_release(all_facts);
+                if (new_facts) ray_release(new_facts);
+                return partial;
+            }
+
+            /* Project to head vars and rename to canonical names */
+            ray_t* projected = dl_project_to_head(partial, rec_rules[i], canonical_names, n_head);
+            ray_release(partial);
+            if (RAY_IS_ERR(projected)) {
+                ray_release(delta);
+                ray_release(all_facts);
+                if (new_facts) ray_release(new_facts);
+                return projected;
+            }
+
+            if (!new_facts) {
+                new_facts = projected;
+            } else {
+                ray_t* merged = ray_union_all_fn(new_facts, projected);
+                ray_release(new_facts);
+                ray_release(projected);
+                if (RAY_IS_ERR(merged)) {
+                    ray_release(delta);
+                    ray_release(all_facts);
+                    return merged;
+                }
+                new_facts = merged;
+            }
+        }
+
+        ray_release(delta);
+
+        if (!new_facts || ray_table_nrows(new_facts) == 0) {
+            if (new_facts) ray_release(new_facts);
+            break;
+        }
+
+        /* Deduplicate new_facts */
+        ray_t* distinct_new = ray_table_distinct_fn(new_facts);
+        ray_release(new_facts);
+        if (RAY_IS_ERR(distinct_new)) { ray_release(all_facts); return distinct_new; }
+        new_facts = distinct_new;
+
+        /* antijoin: remove already-known facts */
+        ray_t* keys = ray_list_new(ncols);
+        if (RAY_IS_ERR(keys)) { ray_release(new_facts); ray_release(all_facts); return keys; }
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t name_id = ray_table_col_name(all_facts, c);
+            ray_t* ks = ray_sym(name_id);
+            if (RAY_IS_ERR(ks)) {
+                ray_release(keys); ray_release(new_facts); ray_release(all_facts);
+                return ks;
+            }
+            ks->attrs |= RAY_ATTR_NAME;
+            keys = ray_list_append(keys, ks);
+            ray_release(ks);
+            if (RAY_IS_ERR(keys)) { ray_release(new_facts); ray_release(all_facts); return keys; }
+        }
+
+        ray_t* aj_args[3] = { new_facts, all_facts, keys };
+        delta = ray_antijoin_fn(aj_args, 3);
+        ray_release(keys);
+        ray_release(new_facts);
+        if (RAY_IS_ERR(delta)) { ray_release(all_facts); return delta; }
+
+        if (ray_table_nrows(delta) == 0) {
+            ray_release(delta);
+            break;
+        }
+
+        /* Accumulate: all_facts = union(all_facts, delta) */
+        ray_t* accumulated = ray_union_all_fn(all_facts, delta);
+        ray_release(all_facts);
+        if (RAY_IS_ERR(accumulated)) { ray_release(delta); return accumulated; }
+        all_facts = accumulated;
+    }
+
+    /* Rename from canonical head vars to caller vars */
+    ray_dl_rule_t* rule = dl_find_rule(rule_name);
+    if (rule) dl_rename_columns(all_facts, rule, ce, clen);
+
+    return all_facts;
 }
 
 /* Find shared variable names between two tables. Returns count, fills shared[] with sym IDs. */
@@ -11227,6 +11550,132 @@ static ray_t* dl_join_tables(ray_t* t1, ray_t* t2) {
 
 /* Compile a sequence of body clauses into a single result table.
  * Strategy: compile each clause into an intermediate table, then join them pairwise. */
+/* Compile body clauses with an optional override: when a rule invocation matches
+ * override_rule, substitute override_tbl instead of recursing. */
+static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_clauses,
+                                        int depth, int64_t override_rule, ray_t* override_tbl) {
+    if (n_clauses == 0)
+        return ray_error("domain", "query: empty body");
+
+    ray_t* intermediates[32];
+    int n_intermediates = 0;
+    ray_t* filters[32];
+    int n_filters = 0;
+
+    for (int64_t i = 0; i < n_clauses; i++) {
+        int kind = dl_classify_clause(clauses[i]);
+        if (kind == 0) {
+            ray_t* tbl = dl_compile_triple(db, clauses[i]);
+            if (RAY_IS_ERR(tbl)) {
+                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
+                return tbl;
+            }
+            intermediates[n_intermediates++] = tbl;
+        } else if (kind == 1) {
+            ray_t* tbl = dl_compile_rule_invocation_override(db, clauses[i], depth,
+                                                              override_rule, override_tbl);
+            if (RAY_IS_ERR(tbl)) {
+                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
+                return tbl;
+            }
+            intermediates[n_intermediates++] = tbl;
+        } else if (kind == 2) {
+            filters[n_filters++] = clauses[i];
+        } else {
+            for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
+            return ray_error("domain", "query: unrecognized clause form");
+        }
+    }
+
+    if (n_intermediates == 0)
+        return ray_error("domain", "query: no pattern clauses in body");
+
+    /* Join intermediates pairwise */
+    ray_t* result = intermediates[0];
+    for (int i = 1; i < n_intermediates; i++) {
+        ray_t* joined = dl_join_tables(result, intermediates[i]);
+        ray_release(result);
+        ray_release(intermediates[i]);
+        if (RAY_IS_ERR(joined)) {
+            for (int j = i + 1; j < n_intermediates; j++) ray_release(intermediates[j]);
+            return joined;
+        }
+        result = joined;
+    }
+
+    /* Apply filters (same logic as dl_compile_body) */
+    for (int i = 0; i < n_filters; i++) {
+        ray_t* fclause = filters[i];
+        ray_t** fe = (ray_t**)ray_data(fclause);
+        int64_t flen = ray_len(fclause);
+        if (flen < 3) { ray_release(result); return ray_error("domain", "query: filter needs at least 3 elements"); }
+
+        ray_graph_t* g = ray_graph_new(result);
+        if (!g) { ray_release(result); return ray_error("oom", NULL); }
+        ray_op_t* root = ray_const_table(g, result);
+
+        ray_op_t* left_op = NULL;
+        if (is_dl_var(fe[1])) {
+            ray_t* vname = ray_sym_str(fe[1]->i64);
+            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
+            left_op = ray_scan(g, ray_str_ptr(vname));
+        }
+
+        ray_op_t* right_op = NULL;
+        if (is_dl_var(fe[2])) {
+            ray_t* vname = ray_sym_str(fe[2]->i64);
+            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
+            right_op = ray_scan(g, ray_str_ptr(vname));
+        } else {
+            ray_t* cval = ray_eval(fe[2]);
+            if (!cval || RAY_IS_ERR(cval)) { ray_graph_free(g); ray_release(result); return cval ? cval : ray_error("type", NULL); }
+            if (cval->type == -RAY_I64)
+                right_op = ray_const_i64(g, cval->i64);
+            else if (cval->type == -RAY_F64)
+                right_op = ray_const_f64(g, cval->f64);
+            else if (cval->type == -RAY_SYM)
+                right_op = ray_const_i64(g, cval->i64);
+            else {
+                ray_release(cval); ray_graph_free(g); ray_release(result);
+                return ray_error("type", "query: unsupported filter constant type");
+            }
+            ray_release(cval);
+        }
+
+        if (!left_op || !right_op) {
+            ray_graph_free(g); ray_release(result);
+            return ray_error("domain", "query: cannot resolve filter operands");
+        }
+
+        ray_t* op_name_str = ray_sym_str(fe[0]->i64);
+        const char* op_name = op_name_str ? ray_str_ptr(op_name_str) : "";
+        ray_op_t* cmp = NULL;
+        if      (strcmp(op_name, ">")  == 0) cmp = ray_gt(g, left_op, right_op);
+        else if (strcmp(op_name, ">=") == 0) cmp = ray_ge(g, left_op, right_op);
+        else if (strcmp(op_name, "<")  == 0) cmp = ray_lt(g, left_op, right_op);
+        else if (strcmp(op_name, "<=") == 0) cmp = ray_le(g, left_op, right_op);
+        else if (strcmp(op_name, "==") == 0) cmp = ray_eq(g, left_op, right_op);
+        else if (strcmp(op_name, "!=") == 0) cmp = ray_ne(g, left_op, right_op);
+        else {
+            ray_graph_free(g); ray_release(result);
+            return ray_error("domain", "query: unsupported filter operator");
+        }
+
+        if (!cmp) { ray_graph_free(g); ray_release(result); return ray_error("oom", NULL); }
+        root = ray_filter(g, root, cmp);
+        root = ray_optimize(g, root);
+        ray_t* filtered = ray_execute(g, root);
+        ray_graph_free(g);
+        ray_release(result);
+        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
+        if (ray_is_lazy(filtered)) filtered = ray_lazy_materialize(filtered);
+        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
+        result = filtered;
+    }
+
+    return result;
+}
+
 static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int depth) {
     if (n_clauses == 0)
         return ray_error("domain", "query: empty body");
