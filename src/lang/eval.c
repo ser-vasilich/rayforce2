@@ -4193,6 +4193,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 ray_release(key_vec);
             } else {
                 ray_t* key_list = ray_alloc(n_groups * sizeof(ray_t*));
+                if (!key_list) { ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return ray_error("oom", NULL); }
                 key_list->type = RAY_LIST;
                 key_list->len = n_groups;
                 ray_t** key_out = (ray_t**)ray_data(key_list);
