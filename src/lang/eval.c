@@ -10950,6 +10950,75 @@ static ray_t* ray_scan_eav_fn(ray_t** args, int64_t n) {
     }
 }
 
+/* (pull db entity) — all attributes of entity as dict
+   (pull db entity [attrs]) — only specified attributes as dict */
+static ray_t* ray_pull_fn(ray_t** args, int64_t n) {
+    if (n < 2 || n > 3)
+        return ray_error("arity", "pull expects 2 or 3 arguments: db entity [attrs]");
+
+    ray_t* db     = args[0];
+    ray_t* entity = args[1];
+
+    if (db->type != RAY_TABLE || ray_table_ncols(db) != 3)
+        return ray_error("type", "pull: first arg must be a datoms table");
+    if (entity->type != -RAY_I64)
+        return ray_error("type", "pull: entity must be an integer");
+
+    /* Optional attribute filter */
+    ray_t* attr_filter = NULL;
+    int64_t n_filter = 0;
+    const int64_t* filter_ids = NULL;
+    if (n == 3) {
+        attr_filter = args[2];
+        if (!ray_is_vec(attr_filter) || attr_filter->type != RAY_SYM)
+            return ray_error("type", "pull: third arg must be a symbol vector [attr ...]");
+        n_filter = attr_filter->len;
+        filter_ids = (const int64_t*)ray_data(attr_filter);
+    }
+
+    int64_t entity_id = entity->i64;
+    ray_t* e_col = ray_table_get_col_idx(db, 0);
+    ray_t* a_col = ray_table_get_col_idx(db, 1);
+    ray_t* v_col = ray_table_get_col_idx(db, 2);
+    int64_t nrows = ray_table_nrows(db);
+
+    const int64_t* e_data = (const int64_t*)ray_data(e_col);
+    const int64_t* v_data = (const int64_t*)ray_data(v_col);
+
+    /* Build dict: alternating key (sym atom) / value (i64 atom) */
+    ray_t* dict = ray_list_new(0);
+    if (RAY_IS_ERR(dict)) return dict;
+    dict->attrs |= RAY_ATTR_DICT;
+
+    for (int64_t r = 0; r < nrows; r++) {
+        if (e_data[r] != entity_id) continue;
+        int64_t a_val = ray_read_sym(ray_data(a_col), r, a_col->type, a_col->attrs);
+
+        /* Check filter if present */
+        if (attr_filter) {
+            int found = 0;
+            for (int64_t f = 0; f < n_filter; f++) {
+                if (filter_ids[f] == a_val) { found = 1; break; }
+            }
+            if (!found) continue;
+        }
+
+        ray_t* key = ray_sym(a_val);
+        if (RAY_IS_ERR(key)) { ray_release(dict); return key; }
+        dict = ray_list_append(dict, key);
+        ray_release(key);
+        if (RAY_IS_ERR(dict)) return dict;
+
+        ray_t* val = ray_i64(v_data[r]);
+        if (RAY_IS_ERR(val)) { ray_release(dict); return val; }
+        dict = ray_list_append(dict, val);
+        ray_release(val);
+        if (RAY_IS_ERR(dict)) return dict;
+    }
+
+    return dict;
+}
+
 /* ══════════════════════════════════════════
  * Datalog — rule definitions and query compilation
  * ══════════════════════════════════════════ */
@@ -12146,6 +12215,7 @@ static void ray_register_builtins(void) {
     register_vary("datoms",       RAY_FN_NONE, ray_datoms_fn);
     register_vary("assert-fact",  RAY_FN_NONE, ray_assert_fact_fn);
     register_vary("scan-eav",     RAY_FN_NONE, ray_scan_eav_fn);
+    register_vary("pull",          RAY_FN_NONE, ray_pull_fn);
 
     /* Datalog */
     register_vary("rule",         RAY_FN_SPECIAL_FORM, ray_rule_fn);

@@ -1,0 +1,58 @@
+; Datalog Example
+; Demonstrates: datoms, assert-fact, rules, queries,
+; fixpoint (transitive closure), and pull
+
+; 1. Create EAV database with employee data
+(set db (datoms))
+(set db (assert-fact db 1 'name 'Alice))
+(set db (assert-fact db 1 'dept 'Engineering))
+(set db (assert-fact db 1 'salary 80000))
+(set db (assert-fact db 2 'name 'Bob))
+(set db (assert-fact db 2 'dept 'Sales))
+(set db (assert-fact db 2 'salary 60000))
+(set db (assert-fact db 3 'name 'Charlie))
+(set db (assert-fact db 3 'dept 'Engineering))
+(set db (assert-fact db 3 'salary 90000))
+
+; 2. Simple query: find all names
+(println "All names:")
+(show (query db (find ?e ?n) (where (?e :name ?n))))
+
+; 3. Join query: name + department
+(println "Name + Dept:")
+(show (query db (find ?n ?d) (where (?e :name ?n) (?e :dept ?d))))
+
+; 4. Rule: define "employee" relation (name + dept)
+(rule (employee ?e ?n ?d)
+  (?e :name ?n)
+  (?e :dept ?d))
+
+(println "Employees (via rule):")
+(show (query db (find ?n ?d) (where (employee ?e ?n ?d))))
+
+; 5. Transitive closure: reachability in a graph
+(set gdb (datoms))
+(set gdb (assert-fact gdb 1 'edge 2))
+(set gdb (assert-fact gdb 2 'edge 3))
+(set gdb (assert-fact gdb 3 'edge 4))
+(set gdb (assert-fact gdb 4 'edge 5))
+
+(rule (reachable ?x ?y) (?x :edge ?y))
+(rule (reachable ?x ?z) (?x :edge ?y) (reachable ?y ?z))
+
+(println "Reachable (transitive closure):")
+(show (query gdb (find ?x ?y) (where (reachable ?x ?y))))
+
+; 6. Pull: entity-centric retrieval
+(println "Entity 1 (all attributes):")
+(println (pull db 1))
+
+(println "Entity 2 (name + salary only):")
+(println (pull db 2 [name salary]))
+
+; 7. Scan-eav: low-level attribute lookup
+(println "All salaries:")
+(show (scan-eav db 'salary))
+
+(println "Entity 3 salary:")
+(println (scan-eav db 3 'salary))
