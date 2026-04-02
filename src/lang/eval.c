@@ -11187,44 +11187,46 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
         ray_table_set_col_name(result, 1, ce[2]->i64);
     }
 
-    /* If ce[0] is a constant (integer), filter the e column */
-    if (ce[0]->type == -RAY_I64) {
-        int64_t entity_id = ce[0]->i64;
+    /* If ce[0] is NOT a ?variable (constant entity or wildcard _),
+     * filter rows if needed, then DROP the e column. */
+    if (!is_dl_var(ce[0])) {
+        int64_t const_e = -1;
+        bool do_e_filter = false;
+
+        if (ce[0]->type == -RAY_I64) {
+            const_e = ce[0]->i64; do_e_filter = true;
+        } else if (ce[0]->type == -RAY_SYM) {
+            ray_t* sn = ray_sym_str(ce[0]->i64);
+            bool is_wc = sn && ray_str_len(sn) == 1 && ray_str_ptr(sn)[0] == '_';
+            if (!is_wc) { const_e = ce[0]->i64; do_e_filter = true; }
+        }
+
         ray_t* e_col = ray_table_get_col_idx(result, 0);
         ray_t* v_col = ray_table_get_col_idx(result, 1);
         int64_t nrows = ray_table_nrows(result);
-        const int64_t* e_data = (const int64_t*)ray_data(e_col);
+        const int64_t* e_data = do_e_filter ? (const int64_t*)ray_data(e_col) : NULL;
         const int64_t* v_data = (const int64_t*)ray_data(v_col);
 
-        ray_t* re = ray_vec_new(RAY_I64, nrows);
         ray_t* rv = ray_vec_new(RAY_I64, nrows);
-        if (RAY_IS_ERR(re) || RAY_IS_ERR(rv)) {
-            if (!RAY_IS_ERR(re)) ray_release(re);
-            if (!RAY_IS_ERR(rv)) ray_release(rv);
-            ray_release(result);
-            return ray_error("oom", NULL);
-        }
+        if (RAY_IS_ERR(rv)) { ray_release(result); return ray_error("oom", NULL); }
 
         for (int64_t r = 0; r < nrows; r++) {
-            if (e_data[r] == entity_id) {
-                re = ray_vec_append(re, &e_data[r]);
+            if (!do_e_filter || e_data[r] == const_e)
                 rv = ray_vec_append(rv, &v_data[r]);
-            }
         }
 
-        int64_t n0 = ray_table_col_name(result, 0);
         int64_t n1 = ray_table_col_name(result, 1);
         ray_release(result);
 
-        result = ray_table_new(2);
-        if (RAY_IS_ERR(result)) { ray_release(re); ray_release(rv); return result; }
-        result = ray_table_add_col(result, n0, re); ray_release(re);
+        /* Return 1-column table [value] — no e column */
+        result = ray_table_new(1);
         if (RAY_IS_ERR(result)) { ray_release(rv); return result; }
         result = ray_table_add_col(result, n1, rv); ray_release(rv);
     }
 
-    /* If ce[2] is a constant (not a ?variable), filter the v column to match,
-     * then DROP the v column — constant values produce no join variable. */
+    /* If ce[2] is NOT a ?variable (constant value, wildcard _, etc.),
+     * filter rows if needed, then DROP the v column so it doesn't create
+     * a spurious join key. Only ?variables produce join-able columns. */
     if (!is_dl_var(ce[2])) {
         int64_t const_val = -1;
         bool do_filter = false;
@@ -11237,29 +11239,27 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
             const_val = ce[2]->i64; do_filter = true;
         }
 
-        if (do_filter) {
-            ray_t* e_col = ray_table_get_col_idx(result, 0);
-            ray_t* v_col = ray_table_get_col_idx(result, 1);
-            int64_t nrows = ray_table_nrows(result);
-            const int64_t* e_data = (const int64_t*)ray_data(e_col);
-            const int64_t* v_data = (const int64_t*)ray_data(v_col);
+        ray_t* e_col = ray_table_get_col_idx(result, 0);
+        ray_t* v_col = ray_table_get_col_idx(result, 1);
+        int64_t nrows = ray_table_nrows(result);
+        const int64_t* e_data = (const int64_t*)ray_data(e_col);
+        const int64_t* v_data = do_filter ? (const int64_t*)ray_data(v_col) : NULL;
 
-            ray_t* re = ray_vec_new(RAY_I64, nrows);
-            if (RAY_IS_ERR(re)) { ray_release(result); return ray_error("oom", NULL); }
+        ray_t* re = ray_vec_new(RAY_I64, nrows);
+        if (RAY_IS_ERR(re)) { ray_release(result); return ray_error("oom", NULL); }
 
-            for (int64_t r = 0; r < nrows; r++) {
-                if (v_data[r] == const_val)
-                    re = ray_vec_append(re, &e_data[r]);
-            }
-
-            int64_t n0 = ray_table_col_name(result, 0);
-            ray_release(result);
-
-            /* Return 1-column table [entity] — no v column */
-            result = ray_table_new(1);
-            if (RAY_IS_ERR(result)) { ray_release(re); return result; }
-            result = ray_table_add_col(result, n0, re); ray_release(re);
+        for (int64_t r = 0; r < nrows; r++) {
+            if (!do_filter || v_data[r] == const_val)
+                re = ray_vec_append(re, &e_data[r]);
         }
+
+        int64_t n0 = ray_table_col_name(result, 0);
+        ray_release(result);
+
+        /* Return 1-column table [entity] — no v column */
+        result = ray_table_new(1);
+        if (RAY_IS_ERR(result)) { ray_release(re); return result; }
+        result = ray_table_add_col(result, n0, re); ray_release(re);
     }
 
     return result;
