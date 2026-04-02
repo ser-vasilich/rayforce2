@@ -10,6 +10,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   <a href="include/rayforce.h"><img src="https://img.shields.io/badge/header-rayforce.h-informational" alt="Single Header"></a>
   <a href="https://rayforcedb.github.io/rayforce2/"><img src="https://img.shields.io/badge/docs-website-e9a033" alt="Docs"></a>
+  <img src="https://img.shields.io/badge/lang-C17-blue" alt="C17">
+  <img src="https://img.shields.io/badge/deps-zero-brightgreen" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/allocator-custom-purple" alt="Custom Allocator">
+  <a href="https://github.com/RayforceDB/rayforce2"><img src="https://img.shields.io/github/stars/RayforceDB/rayforce2?style=social" alt="GitHub Stars"></a>
 </p>
 
 ---
