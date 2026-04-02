@@ -11223,6 +11223,85 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
         result = ray_table_add_col(result, n1, rv); ray_release(rv);
     }
 
+    /* If ce[2] is a constant (symbol or integer), filter the v column */
+    if (!is_dl_var(ce[2]) && ce[2]->type != -RAY_SYM) {
+        /* Wildcard _ is a symbol with name "_" — skip filtering for it */
+    } else if (!is_dl_var(ce[2]) && ce[2]->type == -RAY_SYM) {
+        /* Check if it's wildcard _ */
+        ray_t* sn = ray_sym_str(ce[2]->i64);
+        bool is_wildcard = sn && ray_str_len(sn) == 1 && ray_str_ptr(sn)[0] == '_';
+        if (!is_wildcard) {
+            /* Constant symbol value — filter v column == sym ID */
+            int64_t val_id = ce[2]->i64;
+            ray_t* e_col = ray_table_get_col_idx(result, 0);
+            ray_t* v_col = ray_table_get_col_idx(result, 1);
+            int64_t nrows = ray_table_nrows(result);
+            const int64_t* e_data = (const int64_t*)ray_data(e_col);
+            const int64_t* v_data = (const int64_t*)ray_data(v_col);
+
+            ray_t* re = ray_vec_new(RAY_I64, nrows);
+            ray_t* rv = ray_vec_new(RAY_I64, nrows);
+            if (RAY_IS_ERR(re) || RAY_IS_ERR(rv)) {
+                if (!RAY_IS_ERR(re)) ray_release(re);
+                if (!RAY_IS_ERR(rv)) ray_release(rv);
+                ray_release(result);
+                return ray_error("oom", NULL);
+            }
+
+            for (int64_t r = 0; r < nrows; r++) {
+                if (v_data[r] == val_id) {
+                    re = ray_vec_append(re, &e_data[r]);
+                    rv = ray_vec_append(rv, &v_data[r]);
+                }
+            }
+
+            int64_t n0 = ray_table_col_name(result, 0);
+            int64_t n1 = ray_table_col_name(result, 1);
+            ray_release(result);
+
+            result = ray_table_new(2);
+            if (RAY_IS_ERR(result)) { ray_release(re); ray_release(rv); return result; }
+            result = ray_table_add_col(result, n0, re); ray_release(re);
+            if (RAY_IS_ERR(result)) { ray_release(rv); return result; }
+            result = ray_table_add_col(result, n1, rv); ray_release(rv);
+        }
+    }
+    if (!is_dl_var(ce[2]) && ce[2]->type == -RAY_I64) {
+        /* Constant integer value — filter v column */
+        int64_t val = ce[2]->i64;
+        ray_t* e_col = ray_table_get_col_idx(result, 0);
+        ray_t* v_col = ray_table_get_col_idx(result, 1);
+        int64_t nrows = ray_table_nrows(result);
+        const int64_t* e_data = (const int64_t*)ray_data(e_col);
+        const int64_t* v_data = (const int64_t*)ray_data(v_col);
+
+        ray_t* re = ray_vec_new(RAY_I64, nrows);
+        ray_t* rv = ray_vec_new(RAY_I64, nrows);
+        if (RAY_IS_ERR(re) || RAY_IS_ERR(rv)) {
+            if (!RAY_IS_ERR(re)) ray_release(re);
+            if (!RAY_IS_ERR(rv)) ray_release(rv);
+            ray_release(result);
+            return ray_error("oom", NULL);
+        }
+
+        for (int64_t r = 0; r < nrows; r++) {
+            if (v_data[r] == val) {
+                re = ray_vec_append(re, &e_data[r]);
+                rv = ray_vec_append(rv, &v_data[r]);
+            }
+        }
+
+        int64_t n0 = ray_table_col_name(result, 0);
+        int64_t n1 = ray_table_col_name(result, 1);
+        ray_release(result);
+
+        result = ray_table_new(2);
+        if (RAY_IS_ERR(result)) { ray_release(re); ray_release(rv); return result; }
+        result = ray_table_add_col(result, n0, re); ray_release(re);
+        if (RAY_IS_ERR(result)) { ray_release(rv); return result; }
+        result = ray_table_add_col(result, n1, rv); ray_release(rv);
+    }
+
     return result;
 }
 
