@@ -10666,13 +10666,33 @@ fb_cleanup:
 }
 
 /* (sysinfo) — return system information */
-/* (sym-name id) — convert an i64 sym intern ID to a sym atom.
- * Registered with RAY_FN_ATOMIC so it auto-maps over vectors.
- * Always returns sym — apply only to columns known to contain sym IDs. */
+/* (sym-name x) — convert i64 sym intern IDs to sym atoms.
+ * Scalar: validates and converts. Vector: builds SYM vector.
+ * Returns error for out-of-range IDs. */
 static ray_t* ray_sym_name_fn(ray_t* x) {
-    if (x->type == -RAY_I64) return ray_sym(x->i64);
-    ray_retain(x);
-    return x;
+    if (x->type == -RAY_I64) {
+        if (x->i64 < 0 || !ray_sym_str(x->i64))
+            return ray_error("domain", "sym-name: invalid sym ID");
+        return ray_sym(x->i64);
+    }
+    if (x->type == RAY_I64) {
+        int64_t n = x->len;
+        const int64_t* data = (const int64_t*)ray_data(x);
+        /* Validate all IDs first */
+        for (int64_t i = 0; i < n; i++) {
+            if (data[i] < 0 || !ray_sym_str(data[i]))
+                return ray_error("domain", "sym-name: invalid sym ID in vector");
+        }
+        ray_t* out = ray_vec_new(RAY_SYM, n);
+        if (RAY_IS_ERR(out)) return out;
+        for (int64_t i = 0; i < n; i++) {
+            out = ray_vec_append(out, &data[i]);
+            if (RAY_IS_ERR(out)) return out;
+        }
+        return out;
+    }
+    if (x->type == -RAY_SYM) { ray_retain(x); return x; }
+    return ray_error("type", "sym-name: expected i64 or i64 vector");
 }
 
 static ray_t* ray_sysinfo_fn(ray_t* x) {
@@ -12595,7 +12615,7 @@ static void ray_register_builtins(void) {
     register_vary("modify",      RAY_FN_NONE, ray_modify_fn);
     register_vary("pivot",       RAY_FN_NONE, ray_pivot_fn);
     register_unary("sysinfo",    RAY_FN_NONE, ray_sysinfo_fn);
-    register_unary("sym-name",   RAY_FN_ATOMIC, ray_sym_name_fn);
+    register_unary("sym-name",   RAY_FN_NONE, ray_sym_name_fn);
     register_binary("unify",     RAY_FN_NONE, ray_unify_fn);
     register_binary("xrank",     RAY_FN_NONE, ray_xrank_fn);
 
