@@ -10666,28 +10666,19 @@ fb_cleanup:
 }
 
 /* (sysinfo) — return system information */
-/* (sym-name id) — convert a sym intern ID to its string name.
- * For vectors: map over all elements. Returns sym atom or SYM vector. */
+/* (sym-name id) — convert a sym intern ID (i64) to a sym atom.
+ * Registered with RAY_FN_ATOMIC so it auto-maps over vectors.
+ * Invalid IDs (negative or out of range) return the input unchanged. */
 static ray_t* ray_sym_name_fn(ray_t* x) {
     if (x->type == -RAY_I64) {
+        if (x->i64 < 0) { ray_retain(x); return x; }
         ray_t* s = ray_sym_str(x->i64);
-        if (!s) return ray_error("domain", "sym-name: invalid sym ID");
+        if (!s) { ray_retain(x); return x; } /* out of range — return as-is */
         return ray_sym(x->i64);
     }
-    if (x->type == RAY_I64) {
-        /* Vector of i64 → vector of SYM */
-        int64_t n = x->len;
-        const int64_t* data = (const int64_t*)ray_data(x);
-        ray_t* out = ray_vec_new(RAY_SYM, n);
-        if (RAY_IS_ERR(out)) return out;
-        for (int64_t i = 0; i < n; i++) {
-            out = ray_vec_append(out, &data[i]);
-            if (RAY_IS_ERR(out)) return out;
-        }
-        return out;
-    }
+    /* Already a sym or other type — return as-is */
     ray_retain(x);
-    return x; /* already a sym or other type — return as-is */
+    return x;
 }
 
 static ray_t* ray_sysinfo_fn(ray_t* x) {
