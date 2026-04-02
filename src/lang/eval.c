@@ -6546,16 +6546,97 @@ static ray_t* ray_format_fn(ray_t** args, int64_t n) {
 
 /* (resolve 'name) — check if name exists in env, return value or null.
  * SPECIAL_FORM: does not evaluate args. */
+/* (resolve tbl) — replace I64 columns with SYM columns where values are valid sym IDs.
+ * This makes query results human-readable (sym names instead of intern IDs).
+ * Also accepts (resolve db tbl) for compat — just ignores db. */
 static ray_t* ray_resolve_fn(ray_t** args, int64_t n) {
-    if (n < 1) return NULL;
-    ray_t* name = ray_eval(args[0]);
-    if (!name || RAY_IS_ERR(name)) return NULL;
-    if (name->type != -RAY_SYM) { ray_release(name); return NULL; }
-    ray_t* val = ray_env_get(name->i64);
-    ray_release(name);
-    if (!val) return NULL;
-    ray_retain(val);
-    return val;
+    if (n < 1) return ray_error("arity", "resolve expects at least 1 argument");
+
+    /* Evaluate all args */
+    ray_t* tbl = NULL;
+    if (n == 1) {
+        tbl = ray_eval(args[0]);
+    } else {
+        /* (resolve db tbl) — ignore db, use tbl */
+        ray_t* db = ray_eval(args[0]);
+        if (db && !RAY_IS_ERR(db)) ray_release(db);
+        tbl = ray_eval(args[1]);
+    }
+    if (!tbl || RAY_IS_ERR(tbl)) return tbl ? tbl : ray_error("type", "resolve: null argument");
+
+    /* Materialize lazy tables */
+    if (ray_is_lazy(tbl)) {
+        ray_t* mat = ray_lazy_materialize(tbl);
+        ray_release(tbl);
+        if (!mat || RAY_IS_ERR(mat)) return mat ? mat : ray_error("domain", "resolve: materialization failed");
+        tbl = mat;
+    }
+
+    /* If not a table, return as-is (backward compat: resolve a variable name) */
+    if (tbl->type != RAY_TABLE) {
+        if (tbl->type == -RAY_SYM) {
+            ray_t* val = ray_env_get(tbl->i64);
+            ray_release(tbl);
+            if (!val) return NULL;
+            ray_retain(val);
+            return val;
+        }
+        return tbl;
+    }
+
+    int64_t ncols = ray_table_ncols(tbl);
+    int64_t nrows = ray_table_nrows(tbl);
+
+    /* Build a new table replacing I64 columns with SYM columns where possible */
+    ray_t* result = ray_table_new(ncols);
+    if (RAY_IS_ERR(result)) { ray_release(tbl); return result; }
+
+    for (int64_t c = 0; c < ncols; c++) {
+        ray_t* col = ray_table_get_col_idx(tbl, c);
+        int64_t col_name = ray_table_col_name(tbl, c);
+        if (!col) continue;
+
+        if (col->type == RAY_I64) {
+            /* Try to resolve: convert to SYM only if ALL positive values
+             * are valid sym IDs. This avoids converting entity-ID columns
+             * where values are plain integers that happen to collide with
+             * low sym IDs. */
+            int64_t* data = (int64_t*)ray_data(col);
+            bool all_sym = (nrows > 0);
+            bool has_positive = false;
+            for (int64_t r = 0; r < nrows; r++) {
+                if (data[r] > 0) {
+                    has_positive = true;
+                    if (ray_sym_str(data[r]) == NULL) {
+                        all_sym = false;
+                        break;
+                    }
+                }
+            }
+            /* Only convert if we saw at least one positive value and all resolved */
+            if (all_sym && has_positive) {
+                /* Convert to SYM column */
+                ray_t* sym_col = ray_vec_new(RAY_SYM, nrows);
+                if (RAY_IS_ERR(sym_col)) { ray_release(result); ray_release(tbl); return sym_col; }
+                for (int64_t r = 0; r < nrows; r++) {
+                    sym_col = ray_vec_append(sym_col, &data[r]);
+                    if (RAY_IS_ERR(sym_col)) { ray_release(result); ray_release(tbl); return sym_col; }
+                }
+                result = ray_table_add_col(result, col_name, sym_col);
+                ray_release(sym_col);
+            } else {
+                /* Keep as I64 */
+                result = ray_table_add_col(result, col_name, col);
+            }
+        } else {
+            /* Non-I64 column: keep as-is */
+            result = ray_table_add_col(result, col_name, col);
+        }
+        if (RAY_IS_ERR(result)) { ray_release(tbl); return result; }
+    }
+
+    ray_release(tbl);
+    return result;
 }
 
 /* (timeit expr) — evaluate expression and return time in ms as F64.
@@ -10869,6 +10950,75 @@ static ray_t* ray_assert_fact_fn(ray_t** args, int64_t n) {
     return result;
 }
 
+/* (retract-fact db entity attr value) — remove a triple from the datoms table */
+static ray_t* ray_retract_fact_fn(ray_t** args, int64_t n) {
+    if (n != 4) return ray_error("arity", "retract-fact expects 4 arguments: db entity attr value");
+
+    ray_t* db     = args[0];
+    ray_t* entity = args[1];
+    ray_t* attr   = args[2];
+    ray_t* value  = args[3];
+
+    if (db->type != RAY_TABLE || ray_table_ncols(db) != 3)
+        return ray_error("type", "retract-fact: first arg must be a datoms table");
+    if (entity->type != -RAY_I64)
+        return ray_error("type", "retract-fact: entity must be an integer");
+    if (attr->type != -RAY_SYM)
+        return ray_error("type", "retract-fact: attr must be a symbol");
+
+    int64_t match_e = entity->i64;
+    int64_t match_a = attr->i64;
+    int64_t match_v;
+    if (value->type == -RAY_I64)
+        match_v = value->i64;
+    else if (value->type == -RAY_SYM)
+        match_v = value->i64;
+    else
+        return ray_error("type", "retract-fact: value must be an integer or symbol");
+
+    /* Get existing columns */
+    ray_t* e_col = ray_table_get_col_idx(db, 0);
+    ray_t* a_col = ray_table_get_col_idx(db, 1);
+    ray_t* v_col = ray_table_get_col_idx(db, 2);
+    int64_t nrows = ray_len(e_col);
+
+    int64_t* e_data = (int64_t*)ray_data(e_col);
+    int64_t* a_data = (int64_t*)ray_data(a_col);
+    int64_t* v_data = (int64_t*)ray_data(v_col);
+
+    /* Build new columns, skipping matching rows */
+    ray_t* new_e = ray_vec_new(RAY_I64, nrows);
+    if (RAY_IS_ERR(new_e)) return new_e;
+    ray_t* new_a = ray_vec_new(RAY_SYM, nrows);
+    if (RAY_IS_ERR(new_a)) { ray_release(new_e); return new_a; }
+    ray_t* new_v = ray_vec_new(RAY_I64, nrows);
+    if (RAY_IS_ERR(new_v)) { ray_release(new_e); ray_release(new_a); return new_v; }
+
+    for (int64_t r = 0; r < nrows; r++) {
+        if (e_data[r] == match_e && a_data[r] == match_a && v_data[r] == match_v)
+            continue; /* skip this row */
+        new_e = ray_vec_append(new_e, &e_data[r]);
+        if (RAY_IS_ERR(new_e)) { ray_release(new_a); ray_release(new_v); return new_e; }
+        new_a = ray_vec_append(new_a, &a_data[r]);
+        if (RAY_IS_ERR(new_a)) { ray_release(new_e); ray_release(new_v); return new_a; }
+        new_v = ray_vec_append(new_v, &v_data[r]);
+        if (RAY_IS_ERR(new_v)) { ray_release(new_e); ray_release(new_a); return new_v; }
+    }
+
+    /* Build result table */
+    ray_t* result = ray_table_new(3);
+    if (RAY_IS_ERR(result)) { ray_release(new_e); ray_release(new_a); ray_release(new_v); return result; }
+    result = ray_table_add_col(result, ray_table_col_name(db, 0), new_e);
+    ray_release(new_e);
+    if (RAY_IS_ERR(result)) { ray_release(new_a); ray_release(new_v); return result; }
+    result = ray_table_add_col(result, ray_table_col_name(db, 1), new_a);
+    ray_release(new_a);
+    if (RAY_IS_ERR(result)) { ray_release(new_v); return result; }
+    result = ray_table_add_col(result, ray_table_col_name(db, 2), new_v);
+    ray_release(new_v);
+    return result;
+}
+
 /* (scan-eav db attr) — filter by attribute, return [e v] table
    (scan-eav db entity attr) — filter by entity+attr, return single value */
 static ray_t* ray_scan_eav_fn(ray_t** args, int64_t n) {
@@ -11133,12 +11283,21 @@ static bool dl_body_references_rule(ray_t* body, int64_t name_sym) {
  *   0 = triple pattern (?e :attr ?v)  — has exactly 3 elements, middle is a constant sym
  *   1 = rule invocation (rulename ?a ?b) — head sym matches a known rule
  *   2 = filter (> ?x 100) — head sym is a known comparison operator
+ *   3 = negation (not (...)) — negated pattern
  *  -1 = unknown */
 static int dl_classify_clause(ray_t* clause) {
     if (!is_list(clause)) return -1;
     int64_t clen = ray_len(clause);
     if (clen < 2) return -1;
     ray_t** ce = (ray_t**)ray_data(clause);
+
+    /* Check for negation: (not (...)) */
+    if (ce[0]->type == -RAY_SYM && (ce[0]->attrs & RAY_ATTR_NAME)) {
+        ray_t* name_str = ray_sym_str(ce[0]->i64);
+        if (name_str && ray_str_len(name_str) == 3 &&
+            memcmp(ray_str_ptr(name_str), "not", 3) == 0)
+            return 3;
+    }
 
     /* Check if first element is a known rule name */
     if (ce[0]->type == -RAY_SYM) {
@@ -11675,6 +11834,8 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
     int n_ground_passed_o = 0;
     ray_t* filters[32];
     int n_filters = 0;
+    ray_t* negations[32];
+    int n_negations = 0;
 
     for (int64_t i = 0; i < n_clauses; i++) {
         int kind = dl_classify_clause(clauses[i]);
@@ -11707,6 +11868,8 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
             intermediates[n_intermediates++] = tbl;
         } else if (kind == 2) {
             filters[n_filters++] = clauses[i];
+        } else if (kind == 3) {
+            negations[n_negations++] = clauses[i];
         } else {
             for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
             return ray_error("domain", "query: unrecognized clause form");
@@ -11727,6 +11890,54 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
             return joined;
         }
         result = joined;
+    }
+
+    /* Apply negation clauses via antijoin */
+    for (int i = 0; i < n_negations; i++) {
+        ray_t* neg_clause = negations[i];
+        ray_t** ne = (ray_t**)ray_data(neg_clause);
+        int64_t nlen = ray_len(neg_clause);
+        if (nlen < 2) { ray_release(result); return ray_error("domain", "query: (not ...) requires an inner clause"); }
+        ray_t* inner = ne[1]; /* the inner clause */
+
+        /* Compile inner clause */
+        int inner_kind = dl_classify_clause(inner);
+        ray_t* neg_tbl = NULL;
+        if (inner_kind == 0) {
+            neg_tbl = dl_compile_triple(db, inner);
+        } else if (inner_kind == 1) {
+            neg_tbl = dl_compile_rule_invocation_override(db, inner, depth,
+                                                           override_rule, override_tbl);
+        } else {
+            ray_release(result);
+            return ray_error("domain", "query: (not ...) inner clause must be a triple or rule");
+        }
+        if (RAY_IS_ERR(neg_tbl)) { ray_release(result); return neg_tbl; }
+
+        /* Find shared variables between result and neg_tbl */
+        int64_t shared[16];
+        int n_shared = dl_find_shared_vars(result, neg_tbl, shared, 16);
+        if (n_shared > 0) {
+            ray_t* keys = ray_list_new(n_shared);
+            if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
+            for (int k = 0; k < n_shared; k++) {
+                ray_t* ks = ray_sym(shared[k]);
+                if (RAY_IS_ERR(ks)) { ray_release(keys); ray_release(neg_tbl); ray_release(result); return ks; }
+                ks->attrs |= RAY_ATTR_NAME;
+                keys = ray_list_append(keys, ks);
+                ray_release(ks);
+                if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
+            }
+            ray_t* aj_args[3] = { result, neg_tbl, keys };
+            ray_t* filtered = ray_antijoin_fn(aj_args, 3);
+            ray_release(keys);
+            ray_release(neg_tbl);
+            ray_release(result);
+            if (RAY_IS_ERR(filtered)) return filtered;
+            result = filtered;
+        } else {
+            ray_release(neg_tbl);
+        }
     }
 
     /* Apply filters */
@@ -11806,13 +12017,15 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
     if (n_clauses == 0)
         return ray_error("domain", "query: empty body");
 
-    /* Separate clauses into pattern/rule clauses and filter clauses */
+    /* Separate clauses into pattern/rule clauses, filter clauses, and negations */
     ray_t* intermediates[32];
     int n_intermediates = 0;
     int n_ground_passed = 0; /* ground clauses that matched (existence checks) */
 
     ray_t* filters[32];
     int n_filters = 0;
+    ray_t* negations[32];
+    int n_negations = 0;
 
     for (int64_t i = 0; i < n_clauses; i++) {
         int kind = dl_classify_clause(clauses[i]);
@@ -11846,6 +12059,9 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
         } else if (kind == 2) {
             /* Filter — save for later */
             filters[n_filters++] = clauses[i];
+        } else if (kind == 3) {
+            /* Negation — save for later */
+            negations[n_negations++] = clauses[i];
         } else {
             for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
             return ray_error("domain", "query: unrecognized clause form");
@@ -11866,6 +12082,53 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
             return joined;
         }
         result = joined;
+    }
+
+    /* Apply negation clauses via antijoin */
+    for (int i = 0; i < n_negations; i++) {
+        ray_t* neg_clause = negations[i];
+        ray_t** ne = (ray_t**)ray_data(neg_clause);
+        int64_t nlen = ray_len(neg_clause);
+        if (nlen < 2) { ray_release(result); return ray_error("domain", "query: (not ...) requires an inner clause"); }
+        ray_t* inner = ne[1]; /* the inner clause */
+
+        /* Compile inner clause */
+        int inner_kind = dl_classify_clause(inner);
+        ray_t* neg_tbl = NULL;
+        if (inner_kind == 0) {
+            neg_tbl = dl_compile_triple(db, inner);
+        } else if (inner_kind == 1) {
+            neg_tbl = dl_compile_rule_invocation(db, inner, depth);
+        } else {
+            ray_release(result);
+            return ray_error("domain", "query: (not ...) inner clause must be a triple or rule");
+        }
+        if (RAY_IS_ERR(neg_tbl)) { ray_release(result); return neg_tbl; }
+
+        /* Find shared variables between result and neg_tbl */
+        int64_t shared[16];
+        int n_shared = dl_find_shared_vars(result, neg_tbl, shared, 16);
+        if (n_shared > 0) {
+            ray_t* keys = ray_list_new(n_shared);
+            if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
+            for (int k = 0; k < n_shared; k++) {
+                ray_t* ks = ray_sym(shared[k]);
+                if (RAY_IS_ERR(ks)) { ray_release(keys); ray_release(neg_tbl); ray_release(result); return ks; }
+                ks->attrs |= RAY_ATTR_NAME;
+                keys = ray_list_append(keys, ks);
+                ray_release(ks);
+                if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
+            }
+            ray_t* aj_args[3] = { result, neg_tbl, keys };
+            ray_t* filtered = ray_antijoin_fn(aj_args, 3);
+            ray_release(keys);
+            ray_release(neg_tbl);
+            ray_release(result);
+            if (RAY_IS_ERR(filtered)) return filtered;
+            result = filtered;
+        } else {
+            ray_release(neg_tbl);
+        }
     }
 
     /* Apply filters.
@@ -12321,9 +12584,10 @@ static void ray_register_builtins(void) {
     register_binary("xrank",     RAY_FN_NONE, ray_xrank_fn);
 
     /* EAV triple storage */
-    register_vary("datoms",       RAY_FN_NONE, ray_datoms_fn);
-    register_vary("assert-fact",  RAY_FN_NONE, ray_assert_fact_fn);
-    register_vary("scan-eav",     RAY_FN_NONE, ray_scan_eav_fn);
+    register_vary("datoms",        RAY_FN_NONE, ray_datoms_fn);
+    register_vary("assert-fact",   RAY_FN_NONE, ray_assert_fact_fn);
+    register_vary("retract-fact",  RAY_FN_NONE, ray_retract_fact_fn);
+    register_vary("scan-eav",      RAY_FN_NONE, ray_scan_eav_fn);
     register_vary("pull",          RAY_FN_NONE, ray_pull_fn);
 
     /* Datalog */
