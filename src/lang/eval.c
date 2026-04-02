@@ -4089,6 +4089,34 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             int64_t gn = ray_len(groups);
             int64_t n_groups = gn / 2;
 
+            /* Empty groups with no explicit aggs: return empty table with full schema */
+            if (n_groups == 0 && n_out == 0) {
+                ray_release(groups);
+                int64_t nc0 = ray_table_ncols(eval_tbl);
+                ray_t* empty = ray_table_new(nc0);
+                if (!RAY_IS_ERR(empty)) {
+                    /* Key column first */
+                    { ray_t* sc = ray_table_get_col(eval_tbl, by_expr->i64);
+                      if (sc) {
+                        ray_t* ev = ray_vec_new(sc->type, 0);
+                        if (ev && !RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, by_expr->i64, ev); ray_release(ev); }
+                      }
+                    }
+                    for (int64_t c = 0; c < nc0; c++) {
+                        int64_t cn = ray_table_col_name(eval_tbl, c);
+                        if (cn == by_expr->i64) continue;
+                        ray_t* sc = ray_table_get_col_idx(eval_tbl, c);
+                        ray_t* ev = (sc->type == RAY_STR) ? ray_vec_new(RAY_STR, 0) :
+                                    (sc->type == RAY_LIST) ? ray_list_new(0) :
+                                    ray_vec_new(sc->type, 0);
+                        if (ev && !RAY_IS_ERR(ev)) { empty = ray_table_add_col(empty, cn, ev); ray_release(ev); }
+                    }
+                }
+                if (eval_tbl != tbl) ray_release(eval_tbl);
+                ray_release(tbl);
+                return empty;
+            }
+
             /* Collect aggregation results */
             int n_agg_out = 0;
             int64_t agg_names[16];
