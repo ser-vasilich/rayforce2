@@ -4188,12 +4188,18 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                     size_t slen = ray_str_len(k);
                     key_vec = ray_str_vec_append(key_vec, sp ? sp : "", sp ? slen : 0);
                 }
-                if (RAY_IS_ERR(key_vec)) { ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return key_vec; }
+                if (RAY_IS_ERR(key_vec)) {
+                    for (int i = 0; i < n_agg_out; i++) { if (agg_results[i]) ray_release(agg_results[i]); }
+                    ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return key_vec;
+                }
                 result = ray_table_add_col(result, by_expr->i64, key_vec);
                 ray_release(key_vec);
             } else {
                 ray_t* key_list = ray_alloc(n_groups * sizeof(ray_t*));
-                if (!key_list) { ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return ray_error("oom", NULL); }
+                if (!key_list) {
+                    for (int i = 0; i < n_agg_out; i++) { if (agg_results[i]) ray_release(agg_results[i]); }
+                    ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return ray_error("oom", NULL);
+                }
                 key_list->type = RAY_LIST;
                 key_list->len = n_groups;
                 ray_t** key_out = (ray_t**)ray_data(key_list);
