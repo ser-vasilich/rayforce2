@@ -45,7 +45,7 @@
       <div class="hero-content">
         <div class="hero-eyebrow">PURE C17 &middot; ZERO DEPS &middot; GRAPH + ANALYTICS</div>
         <h1>Columnar analytics and<br>graph traversal in <span class="highlight">one pipeline</span></h1>
-        <p class="hero-desc">Rayforce is a zero-dependency embeddable engine where analytics and graph operations share a single operation DAG, pass through a 10-pass optimizer, and execute as fused morsel-driven bytecode. Pure C17. One header. Formerly Teide (columnar) + Rayforce (graph)&mdash;now unified.</p>
+        <p class="hero-desc">Rayforce is a zero-dependency embeddable engine where columnar analytics and graph operations share a single operation DAG, pass through a 10-pass optimizer, and execute as fused morsel-driven bytecode. Pure C17. No malloc. 22 graph algorithms. 143 query builtins.</p>
         <div class="hero-actions">
           <a href="docs/quick-start.html" class="btn-hero">
             Get Started
@@ -327,9 +327,8 @@
             <span class="dot yellow"></span>
             <span class="dot green"></span>
           </div>
-          <pre class="cta-terminal-body"><code><span class="t-cmd">$</span> make && ./rayforce
-<span class="t-ok">&#10003;</span> Rayforce 2.0 &mdash; Rayfall REPL
-<span class="t-ok">&#10003;</span> Type <span class="t-str">:help</span> for commands</code></pre>
+          <pre class="cta-terminal-body"><code><span class="t-cmd">$</span> make &amp;&amp; ./rayforce
+<span class="t-cmd">&#8227;</span> (pivot t 'Symbol 'Side 'Qty sum)</code></pre>
         </div>
         <div class="cta-buttons">
           <a href="docs/quick-start.html" class="btn-hero">

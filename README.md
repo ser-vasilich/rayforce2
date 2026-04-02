@@ -14,16 +14,10 @@
 
 ---
 
-Rayforce is a pure C17 zero-dependency embeddable engine where analytics
-operations and graph traversals share a single operation DAG, pass through a
-10-pass optimizer, and execute as fused morsel-driven bytecode. One header. No
-malloc. 22 graph algorithms. 143 query builtins.
-
-Rayforce unifies two engines:
-- **Teide** — columnar analytics (morsel-fused execution, radix-partitioned hash joins, 10-pass optimizer)
-- **Rayforce** — graph engine (CSR storage, BFS/DFS, PageRank, Dijkstra, A*, Leapfrog TrieJoin)
-
-Both now share a single DAG, a single optimizer, and a single executor.
+Rayforce is a pure C17 zero-dependency embeddable engine where columnar
+analytics and graph traversals share a single operation DAG, pass through a
+10-pass optimizer, and execute as fused morsel-driven bytecode. No malloc.
+22 graph algorithms. 143 query builtins.
 
 ## Quick Start
 
