@@ -12017,8 +12017,25 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
     ray_release(db);
     if (RAY_IS_ERR(result)) return result;
 
-    /* Project to find variables only */
+    /* If body returned 0-column table (all-ground short-circuit),
+     * build empty result with correct find-variable schema. */
     int64_t ncols = ray_table_ncols(result);
+    if (ncols == 0 && n_find_vars > 0) {
+        ray_release(result);
+        result = ray_table_new(n_find_vars);
+        if (!RAY_IS_ERR(result)) {
+            for (int i = 0; i < n_find_vars; i++) {
+                ray_t* ev = ray_vec_new(RAY_I64, 0);
+                if (!RAY_IS_ERR(ev)) {
+                    result = ray_table_add_col(result, find_vars[i], ev);
+                    ray_release(ev);
+                }
+            }
+        }
+        return result;
+    }
+
+    /* Project to find variables only */
     if (n_find_vars > 0 && n_find_vars < ncols) {
         ray_t* projected = ray_table_new(n_find_vars);
         if (RAY_IS_ERR(projected)) { ray_release(result); return projected; }
