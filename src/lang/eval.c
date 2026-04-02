@@ -4210,6 +4210,59 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 if (agg_results[i]) ray_release(agg_results[i]);
             }
 
+            /* No explicit aggs: gather first-of-group for all non-key columns */
+            if (n_agg_out == 0 && n_groups > 0) {
+                ray_t** gi_items = (ray_t**)ray_data(groups);
+                /* Collect first index per group */
+                int64_t fi_stack[256];
+                int64_t* fi = (n_groups <= 256) ? fi_stack : NULL;
+                ray_t* fi_hdr = NULL;
+                if (!fi) { fi_hdr = ray_alloc((size_t)n_groups * sizeof(int64_t)); fi = fi_hdr ? (int64_t*)ray_data(fi_hdr) : NULL; }
+                if (fi) {
+                    for (int64_t gi = 0; gi < n_groups; gi++) {
+                        ray_t* il = gi_items[gi * 2 + 1];
+                        int a = 0; ray_t* i0 = collection_elem(il, 0, &a);
+                        fi[gi] = as_i64(i0);
+                        if (a) ray_release(i0);
+                    }
+                    int64_t nc = ray_table_ncols(eval_tbl);
+                    for (int64_t c = 0; c < nc; c++) {
+                        int64_t cn = ray_table_col_name(eval_tbl, c);
+                        if (cn == by_expr->i64) continue;
+                        ray_t* sc = ray_table_get_col_idx(eval_tbl, c);
+                        if (sc->type == RAY_STR) {
+                            ray_t* dst = ray_vec_new(RAY_STR, n_groups);
+                            for (int64_t gi = 0; gi < n_groups && dst && !RAY_IS_ERR(dst); gi++) {
+                                size_t slen = 0;
+                                const char* sp = ray_str_vec_get(sc, fi[gi], &slen);
+                                dst = ray_str_vec_append(dst, sp ? sp : "", sp ? slen : 0);
+                            }
+                            if (dst && !RAY_IS_ERR(dst)) { result = ray_table_add_col(result, cn, dst); ray_release(dst); }
+                        } else if (sc->type == RAY_LIST) {
+                            ray_t* dst = ray_alloc(n_groups * sizeof(ray_t*));
+                            if (dst) { dst->type = RAY_LIST; dst->len = n_groups;
+                                ray_t** dout = (ray_t**)ray_data(dst);
+                                ray_t** sitems = (ray_t**)ray_data(sc);
+                                for (int64_t gi = 0; gi < n_groups; gi++) { dout[gi] = sitems[fi[gi]]; ray_retain(dout[gi]); }
+                                result = ray_table_add_col(result, cn, dst); ray_release(dst);
+                            }
+                        } else {
+                            ray_t* dst = ray_vec_new(sc->type, n_groups);
+                            if (dst && !RAY_IS_ERR(dst)) {
+                                for (int64_t gi = 0; gi < n_groups; gi++) {
+                                    int a = 0; ray_t* v = collection_elem(sc, fi[gi], &a);
+                                    store_typed_elem(dst, gi, v);
+                                    if (a) ray_release(v);
+                                }
+                                dst->len = n_groups;
+                                result = ray_table_add_col(result, cn, dst); ray_release(dst);
+                            }
+                        }
+                    }
+                }
+                if (fi_hdr) ray_free(fi_hdr);
+            }
+
             ray_release(groups);
             if (eval_tbl != tbl) ray_release(eval_tbl);
             ray_release(tbl);
