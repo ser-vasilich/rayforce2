@@ -81,7 +81,7 @@ code {
   margin-right: 16px; text-decoration: none;
 }
 .nav-brand:hover { text-decoration: none; }
-.nav-brand img { height: 20px; width: auto; }
+.nav-brand img { height: 32px; width: auto; }
 .nav-links {
   display: flex; align-items: center; gap: 4px; list-style: none;
 }
