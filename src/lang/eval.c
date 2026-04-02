@@ -12022,12 +12022,15 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
      * then build an empty result with the correct schema. */
     int64_t ncols = ray_table_ncols(result);
     if (ncols == 0 && n_find_vars > 0) {
-        /* Check each find var appears as a ?variable in some body clause */
+        /* Check each find var appears in a binding clause (triple or rule),
+         * not just in a filter which doesn't produce bindings. */
         for (int fi = 0; fi < n_find_vars; fi++) {
             bool found = false;
             for (int64_t ci = 1; ci < where_len && !found; ci++) {
                 ray_t* clause = where_elems[ci];
                 if (!is_list(clause)) continue;
+                int kind = dl_classify_clause(clause);
+                if (kind != 0 && kind != 1) continue; /* skip filters */
                 ray_t** ce = (ray_t**)ray_data(clause);
                 int64_t clen = ray_len(clause);
                 for (int64_t j = 0; j < clen && !found; j++) {
