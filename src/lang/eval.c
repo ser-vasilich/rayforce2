@@ -10788,7 +10788,7 @@ static ray_t* ray_datoms_fn(ray_t** args, int64_t n) {
     ray_release(a_col);
     if (RAY_IS_ERR(tbl)) return tbl;
 
-    /* v column: RAY_I64 (symbols stored as their intern ID) */
+    /* v column: RAY_I64 (symbols stored as intern ID, integers as-is) */
     ray_t* v_col = ray_vec_new(RAY_I64, 0);
     if (RAY_IS_ERR(v_col)) { ray_release(tbl); return v_col; }
     tbl = ray_table_add_col(tbl, v_id, v_col);
@@ -10818,7 +10818,7 @@ static ray_t* ray_assert_fact_fn(ray_t** args, int64_t n) {
     if (attr->type != -RAY_SYM)
         return ray_error("type", "assert-fact: attr must be a symbol");
 
-    /* Value: accept i64 or sym. Store as i64 (sym → intern ID) */
+    /* Value: accept i64 or sym. Store as i64 (sym → intern ID). */
     int64_t v_val;
     if (value->type == -RAY_I64) {
         v_val = value->i64;
@@ -10935,13 +10935,13 @@ static ray_t* ray_scan_eav_fn(ray_t** args, int64_t n) {
         int64_t attr_id   = attr_arg->i64;
 
         const int64_t* e_data = (const int64_t*)ray_data(e_col);
+
         const int64_t* v_data = (const int64_t*)ray_data(v_col);
 
         for (int64_t r = 0; r < nrows; r++) {
             if (e_data[r] != entity_id) continue;
             int64_t a_val = ray_read_sym(ray_data(a_col), r, a_col->type, a_col->attrs);
             if (a_val == attr_id) {
-                /* Return value as i64 atom */
                 return ray_i64(v_data[r]);
             }
         }
@@ -11212,7 +11212,7 @@ static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
             }
         }
 
-        /* Single pass: filter rows, collect only variable columns */
+        /* Single pass: filter rows, collect only variable columns. */
         ray_t* e_col = ray_table_get_col_idx(result, 0);
         ray_t* v_col = ray_table_get_col_idx(result, 1);
         int64_t nrows = ray_table_nrows(result);

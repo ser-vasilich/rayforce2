@@ -426,7 +426,7 @@ Entity 3 salary:
 90000</code></pre>
 
       <div class="info-box">
-        <strong>Note:</strong> Symbol values (like names and departments) appear as integer IDs in the output because they are dictionary-encoded (<code>RAY_SYM</code>). The integers are indices into the global symbol intern table. This is the same encoding used throughout Rayforce for efficient comparison and storage.
+        <strong>Note:</strong> In the EAV value column, symbol values are stored as their intern table IDs (integers). This enables efficient joins where a value from one triple can be used as an entity ID in another triple (e.g., transitive closure). Use <code>(pull db entity)</code> for human-readable attribute display.
       </div>
 
       <!-- Prev/Next -->
