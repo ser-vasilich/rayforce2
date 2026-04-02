@@ -11820,6 +11820,16 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
                 for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
                 return tbl;
             }
+            /* Fully-ground clause returns bool sentinel */
+            if (tbl && !RAY_IS_ERR(tbl) && tbl->type == -RAY_BOOL) {
+                bool exists = tbl->b8;
+                ray_release(tbl);
+                if (!exists) {
+                    for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
+                    return ray_table_new(0);
+                }
+                continue;
+            }
             intermediates[n_intermediates++] = tbl;
         } else if (kind == 1) {
             /* Rule invocation */
