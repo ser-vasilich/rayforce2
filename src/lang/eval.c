@@ -10691,9 +10691,9 @@ static ray_t* ray_sym_name_fn(ray_t* x) {
         }
         return out;
     }
-    /* Already sym (atom or vector), or empty vector — passthrough */
+    /* Already sym (atom or vector), or empty I64/SYM vector — passthrough */
     if (x->type == -RAY_SYM || x->type == RAY_SYM ||
-        (ray_is_vec(x) && x->len == 0)) {
+        ((x->type == RAY_I64 || x->type == RAY_SYM) && x->len == 0)) {
         ray_retain(x); return x;
     }
     return ray_error("type", "sym-name: expected i64 or i64 vector");
