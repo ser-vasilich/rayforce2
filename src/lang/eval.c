@@ -4182,15 +4182,16 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             ray_t* key_col_src = ray_table_get_col(eval_tbl, by_expr->i64);
             if (key_col_src && key_col_src->type == RAY_STR) {
                 ray_t* key_vec = ray_vec_new(RAY_STR, n_groups);
-                for (int64_t gi = 0; gi < n_groups && !RAY_IS_ERR(key_vec); gi++) {
+                for (int64_t gi = 0; gi < n_groups && key_vec && !RAY_IS_ERR(key_vec); gi++) {
                     ray_t* k = grp_items[gi * 2];
                     const char* sp = ray_str_ptr(k);
                     size_t slen = ray_str_len(k);
                     key_vec = ray_str_vec_append(key_vec, sp ? sp : "", sp ? slen : 0);
                 }
-                if (RAY_IS_ERR(key_vec)) {
+                if (!key_vec || RAY_IS_ERR(key_vec)) {
                     for (int i = 0; i < n_agg_out; i++) { if (agg_results[i]) ray_release(agg_results[i]); }
-                    ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl); return key_vec;
+                    ray_release(result); ray_release(groups); if (eval_tbl != tbl) ray_release(eval_tbl); ray_release(tbl);
+                    return key_vec ? key_vec : ray_error("oom", NULL);
                 }
                 result = ray_table_add_col(result, by_expr->i64, key_vec);
                 ray_release(key_vec);
