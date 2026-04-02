@@ -16,22 +16,21 @@
 
 Rayforce is a pure C17 zero-dependency embeddable engine where columnar
 analytics and graph traversals share a single operation DAG, pass through a
-10-pass optimizer, and execute as fused morsel-driven bytecode. No malloc.
-22 graph algorithms. 143 query builtins.
+multi-pass optimizer, and execute as fused morsel-driven bytecode. No malloc.
 
 ## Quick Start
 
 ```bash
 make            # debug build (ASan + UBSan)
 make release    # optimized build
-make test       # 563 tests across 32 suites
+make test       # run full test suite
 ./rayforce      # start the Rayfall REPL
 ```
 
 ## Rayfall REPL
 
-Rayforce ships with **Rayfall** — a Lisp-like query language with 143 builtins.
-The REPL prompt is `‣`:
+Rayforce ships with **Rayfall** — a Lisp-like query language with a rich set
+of builtins. The REPL prompt is `‣`:
 
 <!-- Verified output from: ./rayforce /tmp/readme_test.rfl -->
 ```
@@ -67,10 +66,9 @@ The REPL prompt is `‣`:
 
 ## C API
 
-Headers: [`include/rayforce.h`](include/rayforce.h) (64 functions — types,
-memory, atoms, vectors, tables, symbols), `src/ops/ops.h` (124 functions —
-DAG construction, 88 opcodes, optimizer, executor, graph algorithms),
-`src/mem/heap.h` (allocator lifecycle).
+Headers: [`include/rayforce.h`](include/rayforce.h) (types, memory, atoms,
+vectors, tables, symbols), `src/ops/ops.h` (DAG construction, opcodes,
+optimizer, executor, graph algorithms), `src/mem/heap.h` (allocator lifecycle).
 
 <!-- Verified: compiles with cc -Iinclude -Isrc -->
 ```c
@@ -114,7 +112,7 @@ int main(void) {
 |                              | Rayforce | DuckDB | Polars |
 |------------------------------|:--------:|:------:|:------:|
 | Native graph engine (CSR)    |    ✓     |        |        |
-| 22 graph algorithms          |    ✓     |        |        |
+| Graph algorithms             |    ✓     |        |        |
 | Worst-case optimal joins     |    ✓     |        |        |
 | Factorized execution         |    ✓     |        |        |
 | SIP optimizer                |    ✓     |        |        |
@@ -122,17 +120,17 @@ int main(void) {
 | Zero external dependencies   |    ✓     |        |        |
 | Built-in query language      |    ✓     |        |        |
 | Fused morsel pipelines       |    ✓     |   ✓    |   ✓    |
-| 10-pass query optimizer      |    ✓     |   ✓    |        |
+| Multi-pass query optimizer   |    ✓     |   ✓    |        |
 | COW ref counting             |    ✓     |        |   ✓    |
 | Custom memory allocator      |    ✓     |   ✓    |        |
 | Window functions & ASOF join |    ✓     |   ✓    |   ✓    |
 
 ## How It Works
 
-**Build** — Construct a lazy DAG with 88 opcodes: scans, filters, joins,
-aggregations, window functions, graph traversals. Nothing executes yet.
+**Build** — Construct a lazy DAG: scans, filters, joins, aggregations, window
+functions, graph traversals. Nothing executes yet.
 
-**Optimize** — 10 rewrite passes: type inference → constant folding → SIP →
+**Optimize** — Multi-pass rewriting: type inference → constant folding → SIP →
 factorize → predicate pushdown → filter reorder → projection pushdown →
 partition pruning → fusion → DCE.
 
@@ -143,20 +141,20 @@ Thread pool dispatches morsels in parallel.
 ## Features
 
 **Execution engine**
-- Lazy DAG with 88 opcodes — nothing runs until `ray_execute`
-- 10-pass optimizer with sideways information passing
+- Lazy operation DAG — nothing runs until `ray_execute`
+- Multi-pass optimizer with sideways information passing
 - Fused morsel-driven bytecode — element-wise ops merged into single-pass chunks
 - Radix-partitioned hash joins sized for L2 cache
 - Thread pool with parallel morsel dispatch
 
 **Graph engine**
 - Double-indexed CSR storage (forward + reverse), mmap support
-- 22 algorithms: BFS, DFS, Dijkstra, A*, PageRank, Louvain, Betweenness, LFTJ, ...
+- BFS, DFS, Dijkstra, A*, PageRank, Louvain, Betweenness, LFTJ, and more
 - Factorized execution avoids materializing cross-products
 - SIP propagates selection bitmaps backward through expand chains
 
 **Rayfall language**
-- 143 builtins: arithmetic, string, aggregation, joins, higher-order, I/O
+- Arithmetic, string, aggregation, joins, higher-order, I/O builtins
 - Lambdas compile lazily to bytecode, run in computed-goto VM
 - `select`/`update`/`pivot` bridge to the DAG optimizer at runtime
 
@@ -178,13 +176,13 @@ src/core/                   Type system, platform abstraction, runtime
 src/vec/                    Vector, list, string, selection bitmap ops
 src/table/                  Table, symbol intern table
 src/store/                  Column files, CSR, splayed/parted tables, HNSW
-src/ops/                    DAG, optimizer (10 passes), fused executor, LFTJ
+src/ops/                    DAG, optimizer, fused executor, LFTJ
 src/io/                     CSV reader/writer (parallel mmap)
-src/lang/                   Rayfall parser, evaluator, bytecode VM (143 builtins)
+src/lang/                   Rayfall parser, evaluator, bytecode VM
 src/app/                    REPL, terminal, pretty-printer
-test/                       563 tests across 32 suites
-examples/rfl/               18 Rayfall example scripts
-examples/                   4 C API examples
+test/                       Test suites
+examples/rfl/               Rayfall example scripts
+examples/                   C API examples
 website/                    Documentation site (GitHub Pages)
 ```
 
@@ -193,11 +191,11 @@ website/                    Documentation site (GitHub Pages)
 Full docs: **[rayforcedb.github.io/rayforce2](https://rayforcedb.github.io/rayforce2/)**
 
 - [Quick Start](https://rayforcedb.github.io/rayforce2/docs/quick-start.html) — build, REPL, first query
-- [Rayfall Language](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html) — syntax, 143 builtins
-- [Data Types](https://rayforcedb.github.io/rayforce2/docs/data-types.html) — 12 types, collections
+- [Rayfall Language](https://rayforcedb.github.io/rayforce2/docs/rayfall-syntax.html) — syntax and builtins
+- [Data Types](https://rayforcedb.github.io/rayforce2/docs/data-types.html) — types and collections
 - [Queries](https://rayforcedb.github.io/rayforce2/docs/queries-select.html) — select, joins, pivot, window
-- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — 64 + 124 functions across two headers
-- [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html) — 22 algorithms
+- [C API](https://rayforcedb.github.io/rayforce2/docs/c-api-core.html) — full API reference
+- [Graph Engine](https://rayforcedb.github.io/rayforce2/docs/graph-algorithms.html) — algorithms
 - [Architecture](https://rayforcedb.github.io/rayforce2/docs/architecture-pipeline.html) — DAG, optimizer, memory
 
 ## License

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rayforce — Columnar Analytics and Graph Traversal in One Pipeline</title>
-  <meta name="description" content="Pure C17 zero-dependency embeddable engine where analytics and graph operations share a single operation DAG, pass through a 10-pass optimizer, and execute as fused morsel-driven bytecode.">
+  <meta name="description" content="Pure C17 zero-dependency embeddable engine where columnar analytics and graph operations share a single operation DAG, pass through a multi-pass optimizer, and execute as fused morsel-driven bytecode.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -44,7 +44,7 @@
       <div class="hero-content">
         <div class="hero-eyebrow">PURE C17 &middot; ZERO DEPS &middot; GRAPH + ANALYTICS</div>
         <h1>Columnar analytics and<br>graph traversal in <span class="highlight">one pipeline</span></h1>
-        <p class="hero-desc">Rayforce is a zero-dependency embeddable engine where columnar analytics and graph operations share a single operation DAG, pass through a 10-pass optimizer, and execute as fused morsel-driven bytecode. Pure C17. No malloc. 22 graph algorithms. 143 query builtins.</p>
+        <p class="hero-desc">Rayforce is a zero-dependency embeddable engine where columnar analytics and graph operations share a single operation DAG, pass through a multi-pass optimizer, and execute as fused morsel-driven bytecode. Pure C17. No malloc.</p>
         <div class="hero-actions">
           <a href="docs/quick-start.html" class="btn-hero">
             Get Started
@@ -66,22 +66,22 @@
           <span class="num-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
           </span>
-          <span class="num-title">10-Pass Optimizer</span>
-          <span class="num-label">SIP, factorize, predicate pushdown, fusion</span>
+          <span class="num-title">Multi-Pass Optimizer</span>
+          <span class="num-label">SIP, factorize, predicate pushdown, fusion, DCE</span>
         </div>
         <div class="hero-number">
           <span class="num-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
           </span>
-          <span class="num-title">22 Graph Algorithms</span>
-          <span class="num-label">PageRank to A* in the same pipeline</span>
+          <span class="num-title">Graph Algorithms</span>
+          <span class="num-label">PageRank, Dijkstra, A*, Louvain, LFTJ &mdash; in the same pipeline</span>
         </div>
         <div class="hero-number">
           <span class="num-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
           </span>
-          <span class="num-title">143 Builtins</span>
-          <span class="num-label">Rayfall &mdash; a Lisp-like query language with REPL</span>
+          <span class="num-title">Rayfall Language</span>
+          <span class="num-label">Lisp-like query language with REPL and rich builtins</span>
         </div>
       </div>
     </div>
@@ -117,7 +117,7 @@
         </div>
 
         <div class="why-card why-card-small">
-          <div class="why-card-label">10-PASS OPTIMIZER</div>
+          <div class="why-card-label">MULTI-PASS OPTIMIZER</div>
           <p class="why-card-desc">Type inference, constant folding, sideways information passing, factorize, predicate pushdown, filter reorder, fusion, and DCE &mdash; all in one pass over the DAG before a single element is touched.</p>
         </div>
 
@@ -128,7 +128,7 @@
 
         <div class="why-card why-card-small">
           <div class="why-card-label">CSR GRAPH ENGINE</div>
-          <p class="why-card-desc">Double-indexed compressed sparse rows. Forward + reverse indices, mmap-friendly persistence, and 22 algorithms from BFS to worst-case optimal joins.</p>
+          <p class="why-card-desc">Double-indexed compressed sparse rows. Forward + reverse indices, mmap-friendly persistence, and algorithms from BFS to worst-case optimal joins.</p>
         </div>
       </div>
     </div>
@@ -155,7 +155,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
             <h3>Graph Engine</h3>
           </div>
-          <p>Double-indexed CSR with 22 algorithms. BFS, Dijkstra, A*, PageRank, Louvain, LFTJ &mdash; all in the same DAG.</p>
+          <p>Double-indexed CSR storage. BFS, Dijkstra, A*, PageRank, Louvain, LFTJ &mdash; all in the same DAG.</p>
         </div>
 
         <div class="feature-card">
@@ -163,13 +163,13 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
             <h3>Rayfall Language</h3>
           </div>
-          <p>Lisp-like query REPL with 143 builtins. Lambdas compile lazily to bytecode. <code>select</code>/<code>update</code> bridge to the DAG optimizer.</p>
+          <p>Lisp-like query REPL with rich builtins. Lambdas compile lazily to bytecode. <code>select</code>/<code>update</code> bridge to the DAG optimizer.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-card-header">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-            <h3>10-Pass Optimizer</h3>
+            <h3>Multi-Pass Optimizer</h3>
           </div>
           <p>Type inference &rarr; constant folding &rarr; SIP &rarr; factorize &rarr; predicate pushdown &rarr; filter reorder &rarr; fusion &rarr; DCE.</p>
         </div>
@@ -198,7 +198,7 @@
     <div class="container">
       <span class="section-tag">ARCHITECTURE</span>
       <h2 class="arch-title">Build, optimize, execute</h2>
-      <p class="arch-subtitle">Data flows from lazy DAG construction through a 10-pass optimizer into fused morsel-driven bytecode execution.</p>
+      <p class="arch-subtitle">Data flows from lazy DAG construction through a multi-pass optimizer into fused morsel-driven bytecode execution.</p>
 
       <div class="arch-diagram">
         <svg class="arch-svg" viewBox="0 0 800 180" xmlns="http://www.w3.org/2000/svg">
@@ -292,7 +292,7 @@
         </svg>
       </div>
 
-      <p class="arch-caption">Lazy DAG nodes &#8594; <strong>10-pass optimizer</strong> (type inference, SIP, factorize, predicate pushdown, fusion, DCE) &#8594; <strong>fused morsel-driven executor</strong> with register-slot bytecode. Graph algorithms run in the same pipeline &mdash; no serialization between analytics and traversal.</p>
+      <p class="arch-caption">Lazy DAG nodes &#8594; <strong>multi-pass optimizer</strong> (type inference, SIP, factorize, predicate pushdown, fusion, DCE) &#8594; <strong>fused morsel-driven executor</strong> with register-slot bytecode. Graph algorithms run in the same pipeline &mdash; no serialization between analytics and traversal.</p>
     </div>
   </section>
 
