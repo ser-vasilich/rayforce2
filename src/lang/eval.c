@@ -12017,10 +12017,30 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
     ray_release(db);
     if (RAY_IS_ERR(result)) return result;
 
-    /* If body returned 0-column table (all-ground short-circuit),
-     * build empty result with correct find-variable schema. */
+    /* If body returned 0-column table (ground-clause short-circuit),
+     * validate that find variables appear in at least one body clause,
+     * then build an empty result with the correct schema. */
     int64_t ncols = ray_table_ncols(result);
     if (ncols == 0 && n_find_vars > 0) {
+        /* Check each find var appears as a ?variable in some body clause */
+        for (int fi = 0; fi < n_find_vars; fi++) {
+            bool found = false;
+            for (int64_t ci = 1; ci < where_len && !found; ci++) {
+                ray_t* clause = where_elems[ci];
+                if (!is_list(clause)) continue;
+                ray_t** ce = (ray_t**)ray_data(clause);
+                int64_t clen = ray_len(clause);
+                for (int64_t j = 0; j < clen && !found; j++) {
+                    if (is_dl_var(ce[j]) && ce[j]->i64 == find_vars[fi])
+                        found = true;
+                }
+            }
+            if (!found) {
+                ray_release(result);
+                return ray_error("domain", "query: find variable not bound by any body clause");
+            }
+        }
+        /* All find vars validated — build empty schema */
         ray_release(result);
         result = ray_table_new(n_find_vars);
         if (!RAY_IS_ERR(result)) {
