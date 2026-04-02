@@ -11713,11 +11713,8 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
         }
     }
 
-    if (n_intermediates == 0) {
-        if (n_ground_passed_o > 0)
-            return ray_table_new(0);
-        return ray_error("domain", "query: no pattern clauses in body");
-    }
+    if (n_intermediates == 0)
+        return ray_error("domain", "query: no variable-binding clauses in body");
 
     /* Join intermediates pairwise */
     ray_t* result = intermediates[0];
@@ -11855,11 +11852,8 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
         }
     }
 
-    if (n_intermediates == 0) {
-        if (n_ground_passed > 0)
-            return ray_table_new(0);
-        return ray_error("domain", "query: no pattern clauses in body");
-    }
+    if (n_intermediates == 0)
+        return ray_error("domain", "query: no variable-binding clauses in body");
 
     /* Join intermediates pairwise */
     ray_t* result = intermediates[0];
