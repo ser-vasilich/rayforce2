@@ -1541,8 +1541,8 @@ ray_t* ray_count_fn(ray_t* x) {
     if (ray_is_atom(x) && (-x->type) == RAY_STR)
         return make_i64((int64_t)ray_str_len(x));
     if (ray_is_vec(x)) {
-        /* GUID vectors: return length directly (DAG count doesn't handle GUID) */
-        if (x->type == RAY_GUID) return make_i64(x->len);
+        /* GUID/STR vectors: return length directly (DAG count doesn't handle these) */
+        if (x->type == RAY_GUID || x->type == RAY_STR) return make_i64(x->len);
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return ray_error("oom", NULL);
         ray_op_t* in = ray_graph_input_vec(g, x);
@@ -1783,9 +1783,9 @@ ray_t* ray_first_fn(ray_t* x) {
     }
     if (ray_is_vec(x)) {
         if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
-        /* For SYM, GUID and other non-numeric types, use collection_elem directly */
+        /* For SYM, GUID, STR and other non-numeric types, use collection_elem directly */
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
-            x->type == RAY_GUID) {
+            x->type == RAY_GUID || x->type == RAY_STR) {
             int alloc = 0;
             return collection_elem(x, 0, &alloc);
         }
@@ -1824,7 +1824,7 @@ ray_t* ray_last_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
-            x->type == RAY_GUID) {
+            x->type == RAY_GUID || x->type == RAY_STR) {
             int alloc = 0;
             return collection_elem(x, ray_len(x) - 1, &alloc);
         }
@@ -4410,16 +4410,14 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 int8_t ct = src_col->type;
 
                 if (ct == RAY_STR) {
-                    /* String column: build list of string atoms */
-                    ray_t* dst = ray_alloc(n_groups * sizeof(ray_t*));
-                    if (!dst) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return ray_error("oom", NULL); }
-                    dst->type = RAY_LIST;
-                    dst->len = n_groups;
-                    ray_t** dout = (ray_t**)ray_data(dst);
+                    /* String column: build STR vector */
+                    ray_t* dst = ray_vec_new(RAY_STR, n_groups);
+                    if (!dst || RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst ? dst : ray_error("oom", NULL); }
                     for (int64_t gi = 0; gi < n_groups; gi++) {
                         size_t slen = 0;
                         const char* sp = ray_str_vec_get(src_col, first_idx[gi], &slen);
-                        dout[gi] = ray_str(sp ? sp : "", sp ? slen : 0);
+                        dst = ray_str_vec_append(dst, sp ? sp : "", sp ? slen : 0);
+                        if (RAY_IS_ERR(dst)) { if (first_idx != first_idx_stack) ray_free((ray_t*)((char*)first_idx - 32)); ray_release(groups); ray_release(tbl); ray_release(result); return dst; }
                     }
                     result = ray_table_add_col(result, col_name, dst);
                     ray_release(dst);
@@ -6683,6 +6681,26 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             ray_t* formatted = ray_fmt(val, 0);
             if (formatted && !RAY_IS_ERR(formatted)) return formatted;
             if (formatted) ray_release(formatted);
+        }
+        /* Vector/list → STR vector: cast each element to string */
+        if (ray_is_vec(val) || val->type == RAY_LIST) {
+            int64_t n2 = val->len;
+            ray_t* vec = ray_vec_new(RAY_STR, n2);
+            if (!vec || RAY_IS_ERR(vec)) return vec ? vec : ray_error("oom", NULL);
+            for (int64_t i = 0; i < n2; i++) {
+                int alloc = 0;
+                ray_t* elem = collection_elem(val, i, &alloc);
+                if (RAY_IS_ERR(elem)) { ray_release(vec); return elem; }
+                ray_t* cast = ray_cast_fn(type_sym, elem);
+                if (alloc) ray_release(elem);
+                if (RAY_IS_ERR(cast)) { ray_release(vec); return cast; }
+                const char* sp = ray_str_ptr(cast);
+                size_t slen = ray_str_len(cast);
+                vec = ray_str_vec_append(vec, sp ? sp : "", sp ? slen : 0);
+                ray_release(cast);
+                if (RAY_IS_ERR(vec)) return vec;
+            }
+            return vec;
         }
         return ray_error("type", NULL);
     }
