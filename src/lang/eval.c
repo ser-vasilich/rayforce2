@@ -11672,6 +11672,7 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
 
     ray_t* intermediates[32];
     int n_intermediates = 0;
+    int n_ground_passed_o = 0;
     ray_t* filters[32];
     int n_filters = 0;
 
@@ -11692,6 +11693,7 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
                     for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
                     return ray_table_new(0);
                 }
+                n_ground_passed_o++;
                 continue;
             }
             intermediates[n_intermediates++] = tbl;
@@ -11711,8 +11713,11 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
         }
     }
 
-    if (n_intermediates == 0)
+    if (n_intermediates == 0) {
+        if (n_ground_passed_o > 0)
+            return ray_table_new(0);
         return ray_error("domain", "query: no pattern clauses in body");
+    }
 
     /* Join intermediates pairwise */
     ray_t* result = intermediates[0];
@@ -11727,7 +11732,7 @@ static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_cla
         result = joined;
     }
 
-    /* Apply filters (same logic as dl_compile_body) */
+    /* Apply filters */
     for (int i = 0; i < n_filters; i++) {
         ray_t* fclause = filters[i];
         ray_t** fe = (ray_t**)ray_data(fclause);
@@ -11807,6 +11812,7 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
     /* Separate clauses into pattern/rule clauses and filter clauses */
     ray_t* intermediates[32];
     int n_intermediates = 0;
+    int n_ground_passed = 0; /* ground clauses that matched (existence checks) */
 
     ray_t* filters[32];
     int n_filters = 0;
@@ -11828,6 +11834,7 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
                     for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
                     return ray_table_new(0);
                 }
+                n_ground_passed++;
                 continue;
             }
             intermediates[n_intermediates++] = tbl;
@@ -11848,8 +11855,11 @@ static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int
         }
     }
 
-    if (n_intermediates == 0)
+    if (n_intermediates == 0) {
+        if (n_ground_passed > 0)
+            return ray_table_new(0);
         return ray_error("domain", "query: no pattern clauses in body");
+    }
 
     /* Join intermediates pairwise */
     ray_t* result = intermediates[0];
