@@ -758,6 +758,20 @@ static ray_t* parse_expr(ray_parser_t *p) {
         case PA_RPAREN: return ray_error("parse", NULL);
         case PA_RBRACK: return ray_error("parse", NULL);
         case PA_RBRACE: return ray_error("parse", NULL);
+        case PA_COLON: {
+            /* Keyword literal :name — parse as symbol (like 'name) */
+            p->pos++;  /* skip : */
+            const char *kstart = p->pos;
+            while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT
+                   || *p->pos == '_' || *p->pos == '.' || *p->pos == '-'
+                   || *p->pos == '/' || *p->pos == '?')
+                p->pos++;
+            size_t klen = (size_t)(p->pos - kstart);
+            if (klen == 0) { result = ray_error("parse", "empty keyword"); break; }
+            int64_t kid = ray_sym_intern(kstart, klen);
+            result = ray_sym(kid);
+            break;
+        }
         default:        result = parse_name(p); break;  /* operators like +, *, etc. */
     }
 
