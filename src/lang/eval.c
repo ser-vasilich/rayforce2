@@ -12346,6 +12346,64 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
         result = projected;
     }
 
+    /* Auto-resolve: convert I64 columns to SYM for find variables that
+     * appear ONLY in value position (index 2) of triple patterns, never
+     * in entity position (index 0). This is a static analysis — no guessing. */
+    if (n_find_vars > 0 && result && !RAY_IS_ERR(result) && result->type == RAY_TABLE) {
+        for (int fi = 0; fi < n_find_vars; fi++) {
+            bool in_entity_pos = false;
+            bool in_value_pos = false;
+            for (int64_t ci = 1; ci < where_len; ci++) {
+                ray_t* clause = where_elems[ci];
+                if (!is_list(clause)) continue;
+                int kind = dl_classify_clause(clause);
+                if (kind != 0) continue; /* only check triple patterns */
+                ray_t** ce = (ray_t**)ray_data(clause);
+                if (is_dl_var(ce[0]) && ce[0]->i64 == find_vars[fi]) in_entity_pos = true;
+                if (ray_len(clause) >= 3 && is_dl_var(ce[2]) && ce[2]->i64 == find_vars[fi]) in_value_pos = true;
+            }
+            /* Only resolve if appears in value position and NEVER in entity position */
+            if (in_value_pos && !in_entity_pos) {
+                ray_t* col = ray_table_get_col(result, find_vars[fi]);
+                if (col && col->type == RAY_I64) {
+                    int64_t nr = col->len;
+                    const int64_t* data = (const int64_t*)ray_data(col);
+                    ray_t* sym_col = ray_vec_new(RAY_SYM, nr);
+                    if (sym_col && !RAY_IS_ERR(sym_col)) {
+                        for (int64_t r = 0; r < nr; r++)
+                            sym_col = ray_vec_append(sym_col, &data[r]);
+                        ray_table_set_col_name(result, -1, 0); /* find col index */
+                        /* Replace column in result */
+                        int64_t colidx = -1;
+                        for (int64_t c = 0; c < ray_table_ncols(result); c++) {
+                            if (ray_table_col_name(result, c) == find_vars[fi]) { colidx = c; break; }
+                        }
+                        if (colidx >= 0) {
+                            /* Build new table with replaced column */
+                            int64_t nc = ray_table_ncols(result);
+                            ray_t* new_result = ray_table_new(nc);
+                            if (!RAY_IS_ERR(new_result)) {
+                                for (int64_t c = 0; c < nc; c++) {
+                                    int64_t cn = ray_table_col_name(result, c);
+                                    ray_t* cc = (c == colidx) ? sym_col : ray_table_get_col_idx(result, c);
+                                    new_result = ray_table_add_col(new_result, cn, cc);
+                                    if (RAY_IS_ERR(new_result)) break;
+                                }
+                                if (!RAY_IS_ERR(new_result)) {
+                                    ray_release(result);
+                                    result = new_result;
+                                } else {
+                                    ray_release(new_result);
+                                }
+                            }
+                        }
+                        ray_release(sym_col);
+                    }
+                }
+            }
+        }
+    }
+
     return result;
 }
 
