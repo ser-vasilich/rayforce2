@@ -10681,6 +10681,84 @@ static ray_t* ray_xrank_fn(ray_t* n_obj, ray_t* vec) {
 }
 
 /* ══════════════════════════════════════════
+ * union-all / table-distinct
+ * ══════════════════════════════════════════ */
+
+/* (union-all t1 t2) — concatenate two tables row-wise (same schema) */
+static ray_t* ray_union_all_fn(ray_t* t1, ray_t* t2) {
+    if (t1->type != RAY_TABLE)
+        return ray_error("type", "union-all: first arg must be a table");
+    if (t2->type != RAY_TABLE)
+        return ray_error("type", "union-all: second arg must be a table");
+
+    int64_t ncols = ray_table_ncols(t1);
+    if (ncols != ray_table_ncols(t2))
+        return ray_error("type", "union-all: tables must have same number of columns");
+
+    /* Validate matching column names */
+    for (int64_t c = 0; c < ncols; c++) {
+        if (ray_table_col_name(t1, c) != ray_table_col_name(t2, c))
+            return ray_error("type", "union-all: column names must match");
+    }
+
+    ray_t* result = ray_table_new(ncols);
+    if (!result || RAY_IS_ERR(result)) return result;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t name_id = ray_table_col_name(t1, c);
+        ray_t* col1 = ray_table_get_col_idx(t1, c);
+        ray_t* col2 = ray_table_get_col_idx(t2, c);
+
+        if (!col1 || !col2) {
+            ray_release(result);
+            return ray_error("type", "union-all: missing column");
+        }
+
+        ray_t* combined = ray_vec_concat(col1, col2);
+        if (!combined || RAY_IS_ERR(combined)) {
+            ray_release(result);
+            return combined ? combined : ray_error("oom", NULL);
+        }
+
+        result = ray_table_add_col(result, name_id, combined);
+        ray_release(combined);
+        if (!result || RAY_IS_ERR(result)) return result;
+    }
+
+    return result;
+}
+
+/* (table-distinct t) — remove duplicate rows via DAG group-by */
+static ray_t* ray_table_distinct_fn(ray_t* tbl) {
+    if (tbl->type != RAY_TABLE)
+        return ray_error("type", "table-distinct expects a table");
+
+    int64_t ncols = ray_table_ncols(tbl);
+    if (ncols == 0) { ray_retain(tbl); return tbl; }
+
+    ray_graph_t* g = ray_graph_new(tbl);
+    if (!g) return ray_error("oom", NULL);
+
+    ray_op_t* keys[256];
+    if (ncols > 256) { ray_graph_free(g); return ray_error("range", "too many columns"); }
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t name_id = ray_table_col_name(tbl, c);
+        ray_t* name_str = ray_sym_str(name_id);
+        if (!name_str) { ray_graph_free(g); return ray_error("type", "bad column name"); }
+        keys[c] = ray_scan(g, ray_str_ptr(name_str));
+        if (!keys[c]) { ray_graph_free(g); return ray_error("oom", NULL); }
+    }
+
+    ray_op_t* root = ray_distinct(g, keys, (uint8_t)ncols);
+    if (!root) { ray_graph_free(g); return ray_error("oom", NULL); }
+
+    ray_t* result = ray_execute(g, root);
+    ray_graph_free(g);
+    return result;
+}
+
+/* ══════════════════════════════════════════
  * Builtin registration
  * ══════════════════════════════════════════ */
 
@@ -10790,6 +10868,8 @@ static void ray_register_builtins(void) {
     register_binary("table",   RAY_FN_NONE, ray_table);
     register_unary("key",      RAY_FN_NONE, ray_key);
     register_unary("value",    RAY_FN_NONE, ray_value);
+    register_binary("union-all",      RAY_FN_NONE, ray_union_all_fn);
+    register_unary("table-distinct",  RAY_FN_NONE, ray_table_distinct_fn);
 
     /* Query operations */
     register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
