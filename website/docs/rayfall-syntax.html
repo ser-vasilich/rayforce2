@@ -393,10 +393,10 @@ ray_retain(obj);                  <span class="hl-comment">// increment refcount
 ray_csr_build(&amp;csr, src_ids, dst_ids, n_edges);
 
 <span class="hl-comment">// Persist to disk</span>
-ray_csr_save(&amp;csr, <span class="hl-str">"edges.col"</span>);
+ray_csr_save(&amp;csr, <span class="hl-str">"edges"</span>);
 
 <span class="hl-comment">// Memory-map for zero-copy access</span>
-ray_csr_mmap(&amp;csr, <span class="hl-str">"edges.col"</span>);</code></pre>
+ray_csr_mmap(&amp;csr, <span class="hl-str">"edges"</span>);</code></pre>
 
       <h2 id="graph-algorithms">Graph Algorithms</h2>
       <p>Available as DAG opcodes, all integrated into the same morsel-driven pipeline:</p>
@@ -453,7 +453,7 @@ Result (ray_t)</code></pre>
       <!-- ── Storage ── -->
       <h2 id="storage">Files &amp; Partitions</h2>
       <ul>
-        <li><strong>Column files</strong> (<code>.col</code>) &mdash; native binary format for vectors and CSR graphs, supports mmap</li>
+        <li><strong>Column files</strong> &mdash; native binary format for vectors and CSR graphs, supports mmap</li>
         <li><strong>Sym table</strong> &mdash; global string intern table, arena-backed, append-only persistence with file locking</li>
         <li><strong>CSV loader</strong> &mdash; mmap-based, parallel parse, automatic type inference, null handling, sym merge</li>
         <li><strong>File I/O</strong> &mdash; cross-platform locking (flock/LockFileEx), fsync, atomic rename</li>

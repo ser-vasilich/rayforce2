@@ -38,7 +38,7 @@ Core abstraction is `ray_t` — a 32-byte block header. Every object (atom, vect
 **Strings**: two representations — `RAY_SYM` (dictionary-encoded symbol columns, integer indices into global intern table) and `RAY_STR` (variable-length 16-byte `ray_str_t` elements: strings <= 12 bytes stored inline, longer strings in a per-vector pool with 4-byte prefix for fast comparison rejection). All string opcodes (comparisons, STRLEN, UPPER/LOWER/TRIM, SUBSTR, REPLACE, CONCAT, IF) support both types. String transformation opcodes (STRLEN, UPPER/LOWER/TRIM, SUBSTR, REPLACE, CONCAT) propagate nulls: null input rows produce null output rows (CONCAT is null if any argument is null). Access via `ray_str_vec_get()`; executor uses `str_resolve()` to get element array + pool pointer. Hash via `ray_str_t_hash()`, compare via `ray_str_t_cmp()`/`ray_str_t_eq()`. During execution, `col_propagate_str_pool()` shares the source pool with the destination vector; both src and dst must be RAY_STR.
 
 **Graph engine**: CSR edge indices (`ray_csr_t`, `ray_rel_t`) alongside columnar tables.
-- Storage: double-indexed CSR (forward + reverse), persisted as `.col` files, supports mmap
+- Storage: double-indexed CSR (forward + reverse), persisted as column files, supports mmap
 - Opcodes: `OP_EXPAND` (1-hop), `OP_VAR_EXPAND` (BFS), `OP_SHORTEST_PATH`, `OP_ASTAR` (A*), `OP_K_SHORTEST` (Yen's), `OP_CLUSTER_COEFF`, `OP_RANDOM_WALK`, `OP_WCO_JOIN` (LFTJ), `OP_BETWEENNESS` (Brandes), `OP_CLOSENESS` (closeness centrality), `OP_MST` (Kruskal)
 - Factorized execution: `ray_fvec_t` / `ray_ftable_t` avoid materializing cross-products
 - Optimizer: SIP pass propagates `RAY_SEL` bitmaps backward through `OP_EXPAND` chains

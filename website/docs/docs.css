@@ -139,6 +139,61 @@ code {
   font-weight: 600;
 }
 
+/* ── Sidebar Search ────────────────────────── */
+.sidebar-search { margin-bottom: 24px; }
+.search-input-wrap {
+  position: relative; display: flex; align-items: center;
+}
+.search-icon {
+  position: absolute; left: 10px; width: 15px; height: 15px;
+  color: var(--text-dim); pointer-events: none;
+}
+.search-input {
+  width: 100%; padding: 8px 12px 8px 32px;
+  background: rgba(233, 160, 51, 0.06);
+  border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-family: var(--font); font-size: .85rem;
+  outline: none; transition: border-color .15s;
+}
+.search-input::placeholder { color: var(--text-dim); }
+.search-input:focus { border-color: var(--primary); }
+.search-kbd {
+  position: absolute; right: 8px;
+  font-family: var(--mono); font-size: .65rem; font-weight: 600;
+  color: var(--text-dim); background: rgba(233, 160, 51, 0.08);
+  padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); pointer-events: none;
+}
+.search-results {
+  margin-top: 8px;
+}
+.search-empty {
+  padding: 12px; text-align: center;
+  font-size: .85rem; color: var(--text-dim);
+}
+.search-page { margin-bottom: 16px; }
+.search-page-title {
+  font-family: var(--mono); font-size: .65rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em;
+  color: var(--primary); margin-bottom: 6px; padding-left: 12px;
+}
+.search-hit {
+  display: block; padding: 6px 12px; border-radius: 8px;
+  margin-bottom: 2px; transition: background .15s;
+}
+.search-hit:hover { background: rgba(233, 160, 51, 0.06); }
+.search-hit-title {
+  display: block; font-size: .875rem; font-weight: 500; color: var(--text-muted);
+}
+.search-hit-text {
+  display: block; font-size: .75rem; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.search-hit mark {
+  background: rgba(233, 160, 51, 0.25); color: var(--primary-lighter);
+  border-radius: 2px; padding: 0 1px;
+}
+
 /* ── Content Area ───────────────────────────── */
 .docs-content {
   margin-left: 260px;

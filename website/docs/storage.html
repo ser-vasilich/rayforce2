@@ -104,12 +104,12 @@
       <h1>Storage</h1>
       <p class="page-subtitle">Columnar file I/O, splayed tables, date-partitioned storage, symbol table persistence, and CSV import/export &mdash; everything for getting data in and out of Rayforce.</p>
 
-      <h2 id="col-files">Columnar .col Files</h2>
-      <p>The <code>.col</code> format is Rayforce's native binary representation for a single vector. Each file stores a 32-byte header followed by the raw element data and an optional null bitmap. The format is designed for direct memory mapping &mdash; no deserialization needed.</p>
+      <h2 id="col-files">Columnar Files</h2>
+      <p>Rayforce's native binary format stores a single vector per file. Each file contains a 32-byte header followed by the raw element data and an optional null bitmap. The format is designed for direct memory mapping &mdash; no deserialization needed.</p>
 
       <h3>File Structure</h3>
       <pre><code><span class="hl-comment">/*
- * .col file layout:
+ * Column file layout:
  *
  * Bytes  0-31:   ray_t header (type, attrs, len, etc.)
  * Bytes 32-N:    element data (len * elem_size bytes)
@@ -128,28 +128,28 @@
         <tbody>
           <tr>
             <td><code>ray_col_save(vec, path)</code></td>
-            <td>Write a vector to a <code>.col</code> file. Handles slices, external null bitmaps, and string pools transparently.</td>
+            <td>Write a vector to a column file. Handles slices, external null bitmaps, and string pools transparently.</td>
           </tr>
           <tr>
             <td><code>ray_col_load(path)</code></td>
-            <td>Read a <code>.col</code> file into a heap-allocated vector. The file is read entirely into memory.</td>
+            <td>Read a column file into a heap-allocated vector. The file is read entirely into memory.</td>
           </tr>
           <tr>
             <td><code>ray_col_mmap(path)</code></td>
-            <td>Memory-map a <code>.col</code> file for zero-copy access. The returned vector points directly into the mapped file pages. Ideal for large datasets that exceed available RAM.</td>
+            <td>Memory-map a column file for zero-copy access. The returned vector points directly into the mapped file pages. Ideal for large datasets that exceed available RAM.</td>
           </tr>
         </tbody>
       </table>
 
       <pre><code><span class="hl-comment">// Save a vector</span>
 <span class="hl-type">ray_t</span>* prices = <span class="hl-fn">ray_vec_from_raw</span>(RAY_F64, data, <span class="hl-num">1000000</span>);
-<span class="hl-type">ray_err_t</span> err = <span class="hl-fn">ray_col_save</span>(prices, <span class="hl-str">"db/trades/price.col"</span>);
+<span class="hl-type">ray_err_t</span> err = <span class="hl-fn">ray_col_save</span>(prices, <span class="hl-str">"db/trades/price"</span>);
 
 <span class="hl-comment">// Load into memory</span>
-<span class="hl-type">ray_t</span>* loaded = <span class="hl-fn">ray_col_load</span>(<span class="hl-str">"db/trades/price.col"</span>);
+<span class="hl-type">ray_t</span>* loaded = <span class="hl-fn">ray_col_load</span>(<span class="hl-str">"db/trades/price"</span>);
 
 <span class="hl-comment">// Memory-map for zero-copy access</span>
-<span class="hl-type">ray_t</span>* mapped = <span class="hl-fn">ray_col_mmap</span>(<span class="hl-str">"db/trades/price.col"</span>);
+<span class="hl-type">ray_t</span>* mapped = <span class="hl-fn">ray_col_mmap</span>(<span class="hl-str">"db/trades/price"</span>);
 <span class="hl-comment">// mapped->data points into file pages — no allocation</span></code></pre>
 
       <div class="info-box">
@@ -157,15 +157,15 @@
       </div>
 
       <h2 id="splayed-tables">Splayed Tables</h2>
-      <p>A splayed table stores each column as a separate <code>.col</code> file in a directory. This is the standard on-disk representation for a Rayforce table. The schema (column names and types) is stored alongside the data files.</p>
+      <p>A splayed table stores each column as a separate file in a directory. This is the standard on-disk representation for a Rayforce table. The schema (column names) is stored in a <code>.d</code> file alongside the data files.</p>
 
       <h3>Directory Layout</h3>
       <pre><code><span class="hl-comment">db/trades/
-  .schema.col        — I64 vector of column name symbol IDs
-  sym.col            — SYM column (stock tickers)
-  price.col          — F64 column (trade prices)
-  qty.col            — I64 column (quantities)
-  time.col           — TIMESTAMP column</span></code></pre>
+  .d                 — I64 vector of column name symbol IDs
+  sym                — SYM column (stock tickers)
+  price              — F64 column (trade prices)
+  qty                — I64 column (quantities)
+  time               — TIMESTAMP column</span></code></pre>
 
       <h3>C API</h3>
       <table>
@@ -178,7 +178,7 @@
         <tbody>
           <tr>
             <td><code>ray_splay_save(tbl, dir, sym_path)</code></td>
-            <td>Save a table as a splayed directory. Each column becomes a <code>.col</code> file named after its column symbol. Pass <code>sym_path</code> to also save the symbol table.</td>
+            <td>Save a table as a splayed directory. Each column becomes a file named after its column symbol. Pass <code>sym_path</code> to also save the symbol table.</td>
           </tr>
           <tr>
             <td><code>ray_splay_load(dir, sym_path)</code></td>
@@ -204,15 +204,15 @@
       <pre><code><span class="hl-comment">db/trades/
   sym                 — shared symbol table
   2024.01.15/
-    sym.col
-    price.col
-    qty.col
-    time.col
+    sym
+    price
+    qty
+    time
   2024.01.16/
-    sym.col
-    price.col
-    qty.col
-    time.col
+    sym
+    price
+    qty
+    time
   2024.01.17/
     ...</span></code></pre>
 

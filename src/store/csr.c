@@ -361,22 +361,23 @@ int64_t ray_rel_n_nodes(ray_rel_t* rel, uint8_t direction) {
  * CSR persistence — save/load/mmap using existing column file format
  * -------------------------------------------------------------------------- */
 
+
 static ray_err_t csr_save(ray_csr_t* csr, const char* dir, const char* prefix) {
     char path[1024];
     int len;
 
-    len = snprintf(path, sizeof(path), "%s/%s_offsets.col", dir, prefix);
+    len = snprintf(path, sizeof(path), "%s/%s_offsets", dir, prefix);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
     ray_err_t err = ray_col_save(csr->offsets, path);
     if (err != RAY_OK) return err;
 
-    len = snprintf(path, sizeof(path), "%s/%s_targets.col", dir, prefix);
+    len = snprintf(path, sizeof(path), "%s/%s_targets", dir, prefix);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
     err = ray_col_save(csr->targets, path);
     if (err != RAY_OK) return err;
 
     if (csr->rowmap) {
-        len = snprintf(path, sizeof(path), "%s/%s_rowmap.col", dir, prefix);
+        len = snprintf(path, sizeof(path), "%s/%s_rowmap", dir, prefix);
         if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
         err = ray_col_save(csr->rowmap, path);
         if (err != RAY_OK) return err;
@@ -390,7 +391,7 @@ static ray_err_t csr_load_impl(ray_csr_t* csr, const char* dir, const char* pref
     char path[1024];
     int len;
 
-    len = snprintf(path, sizeof(path), "%s/%s_offsets.col", dir, prefix);
+    len = snprintf(path, sizeof(path), "%s/%s_offsets", dir, prefix);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
     csr->offsets = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
     if (!csr->offsets || RAY_IS_ERR(csr->offsets)) {
@@ -398,7 +399,7 @@ static ray_err_t csr_load_impl(ray_csr_t* csr, const char* dir, const char* pref
         return RAY_ERR_IO;
     }
 
-    len = snprintf(path, sizeof(path), "%s/%s_targets.col", dir, prefix);
+    len = snprintf(path, sizeof(path), "%s/%s_targets", dir, prefix);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
     csr->targets = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
     if (!csr->targets || RAY_IS_ERR(csr->targets)) {
@@ -407,7 +408,7 @@ static ray_err_t csr_load_impl(ray_csr_t* csr, const char* dir, const char* pref
         return RAY_ERR_IO;
     }
 
-    len = snprintf(path, sizeof(path), "%s/%s_rowmap.col", dir, prefix);
+    len = snprintf(path, sizeof(path), "%s/%s_rowmap", dir, prefix);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
     csr->rowmap = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
     if (!csr->rowmap || RAY_IS_ERR(csr->rowmap)) {
@@ -463,7 +464,7 @@ ray_err_t ray_rel_save(ray_rel_t* rel, const char* dir) {
 
     /* Save metadata (from_table, to_table, name_sym, sorted flags) */
     char path[1024];
-    int len = snprintf(path, sizeof(path), "%s/meta.col", dir);
+    int len = snprintf(path, sizeof(path), "%s/meta", dir);
     if (len < 0 || (size_t)len >= sizeof(path)) return RAY_ERR_IO;
 
     /* Pack metadata into an I64 vector: [from_table, to_table, name_sym, fwd_sorted, rev_sorted] */
@@ -500,7 +501,7 @@ static ray_rel_t* rel_load_impl(const char* dir, bool use_mmap) {
 
     /* Load metadata */
     char path[1024];
-    int len = snprintf(path, sizeof(path), "%s/meta.col", dir);
+    int len = snprintf(path, sizeof(path), "%s/meta", dir);
     if (len >= 0 && (size_t)len < sizeof(path)) {
         ray_t* meta = use_mmap ? ray_col_mmap(path) : ray_col_load(path);
         if (meta && !RAY_IS_ERR(meta) && meta->len >= 5) {

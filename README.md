@@ -172,7 +172,7 @@ Thread pool dispatches morsels in parallel.
 - No system allocator — `ray_alloc`/`ray_free` for everything
 
 **Storage**
-- Columnar `.col` files with mmap, splayed tables, date-partitioned tables
+- Columnar files with mmap, splayed tables, date-partitioned tables
 - CSV reader with parallel mmap parse, type inference, null handling
 
 ## Project Structure

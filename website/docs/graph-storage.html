@@ -258,15 +258,15 @@ edges = <span class="hl-fn">ray_table_add_col</span>(edges, dst_sym, dst);
 
       <h3>Save</h3>
       <pre><code><span class="hl-type">ray_err_t</span> <span class="hl-fn">ray_rel_save</span>(<span class="hl-type">ray_rel_t</span>* rel, <span class="hl-kw">const char</span>* dir);</code></pre>
-      <p>Writes the forward and reverse CSR arrays (offsets, targets, rowmap) as <code>.col</code> files in the given directory. Returns <code>RAY_OK</code> on success.</p>
+      <p>Writes the forward and reverse CSR arrays (offsets, targets, rowmap) as column files in the given directory. Returns <code>RAY_OK</code> on success.</p>
 
       <h3>Load (eager)</h3>
       <pre><code><span class="hl-type">ray_rel_t</span>* <span class="hl-fn">ray_rel_load</span>(<span class="hl-kw">const char</span>* dir);</code></pre>
-      <p>Reads the <code>.col</code> files into memory and reconstructs the <code>ray_rel_t</code>. The loaded vectors use the standard Rayforce allocator and participate in COW ref counting.</p>
+      <p>Reads the column files into memory and reconstructs the <code>ray_rel_t</code>. The loaded vectors use the standard Rayforce allocator and participate in COW ref counting.</p>
 
       <h3>Memory-mapped Load</h3>
       <pre><code><span class="hl-type">ray_rel_t</span>* <span class="hl-fn">ray_rel_mmap</span>(<span class="hl-kw">const char</span>* dir);</code></pre>
-      <p>Maps the <code>.col</code> files directly into the address space without copying. The vectors are marked as <code>mmod=1</code> (file-mmap), making them read-only. This is ideal for large graphs that exceed available RAM &mdash; the OS page cache handles eviction transparently.</p>
+      <p>Maps the column files directly into the address space without copying. The vectors are marked as <code>mmod=1</code> (file-mmap), making them read-only. This is ideal for large graphs that exceed available RAM &mdash; the OS page cache handles eviction transparently.</p>
 
       <div class="info-box">
         <strong>mmap vs. eager load.</strong> Use <code>ray_rel_mmap</code> for graphs that are larger than available memory or when startup time matters. Use <code>ray_rel_load</code> when you need to mutate the graph or want predictable query latency without page faults.

@@ -565,7 +565,7 @@
         <div class="fn-card-header">
           <span class="fn-name">ray_rel_save / ray_rel_load / ray_rel_mmap</span>
         </div>
-        <div class="fn-desc">Persist and load CSR indices as <code>.col</code> files in a directory. <code>ray_rel_mmap</code> memory-maps the files for zero-copy access.</div>
+        <div class="fn-desc">Persist and load CSR indices as column files in a directory. <code>ray_rel_mmap</code> memory-maps the files for zero-copy access.</div>
         <div class="fn-example">
 <span class="hl-type">ray_err_t</span>  <span class="hl-fn">ray_rel_save</span>(<span class="hl-type">ray_rel_t</span>* rel, <span class="hl-kw">const</span> <span class="hl-type">char</span>* dir);
 <span class="hl-type">ray_rel_t</span>* <span class="hl-fn">ray_rel_load</span>(<span class="hl-kw">const</span> <span class="hl-type">char</span>* dir);
@@ -593,7 +593,7 @@
         <div class="fn-card-header">
           <span class="fn-name">ray_col_save / ray_col_load / ray_col_mmap</span>
         </div>
-        <div class="fn-desc">Save a vector to a <code>.col</code> file, load it back, or memory-map it for zero-copy reads. The file format includes type, length, null bitmap, and element data.</div>
+        <div class="fn-desc">Save a vector to a column file, load it back, or memory-map it for zero-copy reads. The file format includes type, length, null bitmap, and element data.</div>
         <div class="fn-example">
 <span class="hl-type">ray_err_t</span> <span class="hl-fn">ray_col_save</span>(<span class="hl-type">ray_t</span>* vec, <span class="hl-kw">const</span> <span class="hl-type">char</span>* path);
 <span class="hl-type">ray_t</span>*    <span class="hl-fn">ray_col_load</span>(<span class="hl-kw">const</span> <span class="hl-type">char</span>* path);
@@ -606,7 +606,7 @@
         <div class="fn-card-header">
           <span class="fn-name">ray_splay_save / ray_splay_load</span>
         </div>
-        <div class="fn-desc">Save a table as a directory of <code>.col</code> files (one per column) plus a symbol table. Load reconstructs the table from the directory.</div>
+        <div class="fn-desc">Save a table as a directory of column files (one per column) plus a symbol table. Load reconstructs the table from the directory.</div>
         <div class="fn-example">
 <span class="hl-type">ray_err_t</span> <span class="hl-fn">ray_splay_save</span>(<span class="hl-type">ray_t</span>* tbl, <span class="hl-kw">const</span> <span class="hl-type">char</span>* dir,
                         <span class="hl-kw">const</span> <span class="hl-type">char</span>* sym_path);

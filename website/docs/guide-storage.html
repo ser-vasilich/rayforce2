@@ -160,14 +160,14 @@ ray_err_t ray_sym_load(<span class="hl-kw">const</span> <span class="hl-kw">char
       <div class="info-box">
         <strong>C API only.</strong> The functions below are in internal headers (<code>src/store/col.h</code>, <code>src/store/splay.h</code>, <code>src/store/part.h</code>). Compile with <code>-Isrc</code> and include the specific header. These are not yet exposed as Rayfall builtins.
       </div>
-      <p>A <strong>.col file</strong> stores a single vector (column) in Rayforce&rsquo;s native binary format. This is the building block for all higher-level storage.</p>
-      <pre><code><span class="hl-comment">// Save a vector to a .col file</span>
+      <p>A <strong>column file</strong> stores a single vector (column) in Rayforce&rsquo;s native binary format. This is the building block for all higher-level storage.</p>
+      <pre><code><span class="hl-comment">// Save a vector to a column file</span>
 ray_err_t ray_col_save(ray_t* vec, <span class="hl-kw">const</span> <span class="hl-kw">char</span>* path);
 
-<span class="hl-comment">// Load a vector from a .col file</span>
+<span class="hl-comment">// Load a vector from a column file</span>
 ray_t* ray_col_load(<span class="hl-kw">const</span> <span class="hl-kw">char</span>* path);
 
-<span class="hl-comment">// Memory-map a .col file (zero-copy, read-only)</span>
+<span class="hl-comment">// Memory-map a column file (zero-copy, read-only)</span>
 ray_t* ray_col_mmap(<span class="hl-kw">const</span> <span class="hl-kw">char</span>* path);</code></pre>
       <p>The file format is compact: a header with type and length, followed by the raw element data. For string columns (<code>RAY_STR</code>), the pool data is written after the element array.</p>
       <p>The difference between <code>ray_col_load</code> and <code>ray_col_mmap</code>:</p>
@@ -198,7 +198,7 @@ ray_t* ray_col_mmap(<span class="hl-kw">const</span> <span class="hl-kw">char</s
 
       <!-- 4. Splayed tables -->
       <h2 id="splayed-tables">4. Splayed Tables</h2>
-      <p>A <strong>splayed table</strong> stores each column as a separate <code>.col</code> file inside a directory. This allows loading individual columns on demand instead of the entire table.</p>
+      <p>A <strong>splayed table</strong> stores each column as a separate file inside a directory. This allows loading individual columns on demand instead of the entire table.</p>
       <pre><code><span class="hl-comment">// Save a table as a splayed directory</span>
 ray_err_t ray_splay_save(ray_t* tbl, <span class="hl-kw">const</span> <span class="hl-kw">char</span>* dir,
                          <span class="hl-kw">const</span> <span class="hl-kw">char</span>* sym_path);
@@ -208,9 +208,10 @@ ray_t* ray_splay_load(<span class="hl-kw">const</span> <span class="hl-kw">char<
                       <span class="hl-kw">const</span> <span class="hl-kw">char</span>* sym_path);</code></pre>
       <p>The directory layout looks like:</p>
       <pre><code>trades/
-  Symbol.col    <span class="hl-comment"># sym column</span>
-  Price.col     <span class="hl-comment"># f64 column</span>
-  Qty.col       <span class="hl-comment"># i64 column</span></code></pre>
+  .d            <span class="hl-comment"># schema (column name symbol IDs)</span>
+  Symbol        <span class="hl-comment"># sym column</span>
+  Price         <span class="hl-comment"># f64 column</span>
+  Qty           <span class="hl-comment"># i64 column</span></code></pre>
       <p>Pass a <code>sym_path</code> to automatically save/load the symbol table alongside the data. Pass <code>NULL</code> if you manage symbols separately.</p>
 
       <!-- 5. Partitioned tables -->
@@ -224,14 +225,14 @@ ray_t* ray_part_load(<span class="hl-kw">const</span> <span class="hl-kw">char</
   sym                  <span class="hl-comment"># shared symbol table</span>
   2024.01.01/
     trades/
-      Symbol.col
-      Price.col
-      Qty.col
+      Symbol
+      Price
+      Qty
   2024.01.02/
     trades/
-      Symbol.col
-      Price.col
-      Qty.col
+      Symbol
+      Price
+      Qty
   ...</code></pre>
       <p>The loader:</p>
       <ol>
@@ -262,7 +263,7 @@ ray_t* ray_part_load(<span class="hl-kw">const</span> <span class="hl-kw">char</
 
       <h3>Usage</h3>
       <p>Use <code>ray_col_mmap</code> for individual columns:</p>
-      <pre><code>ray_t* prices = ray_col_mmap(<span class="hl-str">"db/2024.01.01/trades/Price.col"</span>);</code></pre>
+      <pre><code>ray_t* prices = ray_col_mmap(<span class="hl-str">"db/2024.01.01/trades/Price"</span>);</code></pre>
       <p>Splayed table loading can also use mmap internally. For most analytics workloads &mdash; scans, filters, aggregations &mdash; mmap provides the best combination of startup time and throughput.</p>
 
       <h2 id="choosing">Choosing a Storage Layer</h2>
@@ -281,7 +282,7 @@ ray_t* ray_part_load(<span class="hl-kw">const</span> <span class="hl-kw">char</
             <td>Data interchange, small datasets, prototyping</td>
           </tr>
           <tr>
-            <td>Columnar (.col)</td>
+            <td>Columnar</td>
             <td>C API</td>
             <td>Single-vector persistence, embedding in applications</td>
           </tr>
