@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Pipeline &amp; Optimizer — Rayforce Documentation</title>
-  <meta name="description" content="Rayforce DAG pipeline architecture: lazy graph construction, 10-pass optimizer, morsel-driven fused execution, and parallel dispatch.">
+  <meta name="description" content="Rayforce DAG pipeline architecture: lazy graph construction, multi-pass optimizer, morsel-driven fused execution, and parallel dispatch.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -109,7 +109,7 @@
       <p>Every Rayforce query goes through three phases:</p>
       <ol>
         <li><strong>Build</strong> &mdash; Construct a lazy DAG of operations using the C API or Rayfall <code>select</code>/<code>update</code> builtins. No data is processed at this stage.</li>
-        <li><strong>Optimize</strong> &mdash; Transform the DAG through 10 optimization passes that rewrite, reorder, and fuse operations.</li>
+        <li><strong>Optimize</strong> &mdash; Transform the DAG through multiple optimization passes that rewrite, reorder, and fuse operations.</li>
         <li><strong>Execute</strong> &mdash; Walk the optimized DAG and process data in 1024-element morsels using fused bytecode with computed-goto dispatch.</li>
       </ol>
 
@@ -179,7 +179,7 @@
 
       <!-- ====== OPTIMIZER ====== -->
       <h2>Optimizer Passes</h2>
-      <p>The optimizer runs 10 passes in a fixed order. Each pass walks the DAG and rewrites it in-place.</p>
+      <p>The optimizer runs multiple passes in a fixed order. Each pass walks the DAG and rewrites it in-place.</p>
 
       <h3>1. Type Inference</h3>
       <p>Bottom-up pass that propagates types from leaf nodes (SCAN, CONST) through the DAG. Determines the <code>out_type</code> of every node and populates <code>est_rows</code> estimates. This information drives all subsequent passes.</p>
@@ -292,7 +292,7 @@
       </ol>
 
       <h3>Per-Thread Heaps</h3>
-      <p>Each worker thread has its own heap (<code>heap_id</code> in the <code>ray_t</code> header). Vectors allocated during parallel execution are tagged with their owning heap. Cross-heap frees are deferred to a lock-free LIFO and reclaimed when the owning heap flushes. See <a href="architecture-memory.html">Memory Model</a> for details.</p>
+      <p>Each worker thread has its own heap (<code>heap_id</code> in the pool header). Vectors allocated during parallel execution are tagged with their owning heap via the pool they reside in. Cross-heap frees are deferred to a lock-free LIFO and reclaimed when the owning heap flushes. See <a href="architecture-memory.html">Memory Model</a> for details.</p>
 
       <!-- ====== FULL EXAMPLE ====== -->
       <h2>Full Pipeline Example</h2>
