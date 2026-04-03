@@ -11320,7 +11320,8 @@ static bool dl_is_triple_pattern(ray_t* clause) {
      * Triple patterns: (?e :attr ?v), (_ :attr ?v), (1 :attr ?v) */
     if (is_dl_var(ce[0])) return true;
     if (ce[0]->type == -RAY_I64) return true;
-    if (dl_is_wildcard(ce[0])) return true;
+    if (dl_is_wildcard(ce[0]) && ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
+        return true;
     /* Quoted symbol (no RAY_ATTR_NAME) in position 0 + non-var symbol in position 1 */
     if (ce[0]->type == -RAY_SYM && !(ce[0]->attrs & RAY_ATTR_NAME)) {
         if (ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
