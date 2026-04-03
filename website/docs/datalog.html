@@ -131,16 +131,16 @@
 
       <p><strong>Verified output</strong> (from <code>scan-eav db 'salary</code>):</p>
       <pre><code>All salaries:
-+-----+-------------------------------+
-|  e  |               v               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 80000                         |
-| 2   | 60000                         |
-| 3   | 90000                         |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│  e  │               v               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 80000                         │
+│ 2   │ 60000                         │
+│ 3   │ 90000                         │
+├─────┼───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 Entity 3 salary:
 90000</code></pre>
 
@@ -167,15 +167,15 @@ Entity 3 salary:
 
       <p><strong>Verified output</strong>:</p>
       <pre><code>Employees (via rule):
-+-----+-------------------------------+
-| ?n  |              ?d               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 158 | 161                           |
-| 159 | 162                           |
-+-----+-------------------------------+
-| 2 rows (2 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+┌─────┬───────────────────────────────┐
+│ ?n  │              ?d               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 158 │ 161                           │
+│ 159 │ 162                           │
+├─────┼───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h3>OR semantics with multiple clauses</h3>
       <p>Define multiple rules with the <strong>same head</strong> to express disjunction (OR). Each rule clause contributes its own set of results, and they are combined:</p>
@@ -194,16 +194,16 @@ Entity 3 salary:
       <pre><code><span class="hl-comment">;; Find all entities and their names</span>
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> <span class="hl-sym">?e</span> <span class="hl-sym">?n</span>) (<span class="hl-fn">where</span> (<span class="hl-sym">?e</span> <span class="hl-op">:name</span> <span class="hl-sym">?n</span>))))</code></pre>
       <p><strong>Verified output</strong>:</p>
-      <pre><code>+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 2   | 159                           |
-| 3   | 160                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 2   │ 159                           │
+│ 3   │ 160                           │
+├─────┼───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
       <p>The <code>?n</code> column contains symbol intern IDs. Use <code>(sym-name id)</code> to convert them to readable names (see <a href="#sym-name">sym-name</a> below).</p>
 
       <h3>Join query</h3>
@@ -211,47 +211,47 @@ Entity 3 salary:
       <pre><code><span class="hl-comment">;; Find name + department (join on entity ?e)</span>
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> <span class="hl-sym">?n</span> <span class="hl-sym">?d</span>) (<span class="hl-fn">where</span> (<span class="hl-sym">?e</span> <span class="hl-op">:name</span> <span class="hl-sym">?n</span>) (<span class="hl-sym">?e</span> <span class="hl-op">:dept</span> <span class="hl-sym">?d</span>))))</code></pre>
       <p><strong>Verified output</strong>:</p>
-      <pre><code>+-----+-------------------------------+
-| ?n  |              ?d               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 158 | 162                           |
-| 159 | 163                           |
-| 160 | 162                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?n  │              ?d               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 158 │ 162                           │
+│ 159 │ 163                           │
+│ 160 │ 162                           │
+├─────┼───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h3>Constant value patterns</h3>
       <p>Use a literal value instead of a variable to filter by a specific attribute value:</p>
       <pre><code><span class="hl-comment">;; Only entities in the Engineering department</span>
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> <span class="hl-sym">?e</span> <span class="hl-sym">?n</span>) (<span class="hl-fn">where</span> (<span class="hl-sym">?e</span> <span class="hl-op">:name</span> <span class="hl-sym">?n</span>) (<span class="hl-sym">?e</span> <span class="hl-op">:dept</span> <span class="hl-sym">'Engineering</span>))))</code></pre>
       <p><strong>Verified output</strong> (filters to entities 1 and 3):</p>
-      <pre><code>+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 3   | 160                           |
-+-----+-------------------------------+
-| 2 rows (2 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 3   │ 160                           │
+├─────┼───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h3>Wildcard patterns</h3>
       <p>Use <code>_</code> to match any value without binding it to a variable:</p>
       <pre><code><span class="hl-comment">;; All entities that have any dept attribute</span>
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> <span class="hl-sym">?e</span>) (<span class="hl-fn">where</span> (<span class="hl-sym">?e</span> <span class="hl-op">:dept</span> _))))</code></pre>
       <p><strong>Verified output</strong>:</p>
-      <pre><code>+-------------------------------------+
-|                 ?e                  |
-|                 i64                 |
-+-------------------------------------+
-| 1                                   |
-| 2                                   |
-| 3                                   |
-+-------------------------------------+
-| 3 rows (3 shown) 1 columns (1 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────────────────────────────────────┐
+│                 ?e                  │
+│                 i64                 │
+├─────────────────────────────────────┤
+│ 1                                   │
+│ 2                                   │
+│ 3                                   │
+├─────────────────────────────────────┤
+│ 3 rows (3 shown) 1 columns (1 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h3>How queries compile to the DAG</h3>
       <p>Under the hood, each query compiles to Rayforce's DAG execution pipeline:</p>
@@ -276,14 +276,14 @@ Entity 3 salary:
          (<span class="hl-kw">not</span> (<span class="hl-sym">?e</span> <span class="hl-op">:manager</span> <span class="hl-sym">?m</span>)))))</code></pre>
 
       <p><strong>Verified output</strong> (only Bob, entity 2, is not a manager):</p>
-      <pre><code>+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 2   | 159                           |
-+-----+-------------------------------+
-| 1 rows (1 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 2   │ 159                           │
+├─────┼───────────────────────────────┤
+│ 1 rows (1 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <p>The negated pattern must share at least one variable with a positive clause (here <code>?e</code>) so the antijoin knows which column to match on.</p>
 
@@ -308,19 +308,19 @@ Entity 3 salary:
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> gdb (<span class="hl-fn">find</span> <span class="hl-sym">?x</span> <span class="hl-sym">?y</span>) (<span class="hl-fn">where</span> (<span class="hl-fn">reachable</span> <span class="hl-sym">?x</span> <span class="hl-sym">?y</span>))))</code></pre>
 
       <p><strong>Verified output</strong> (6 reachable pairs from 3 edges: direct + transitive):</p>
-      <pre><code>+-----+-------------------------------+
-| ?x  |              ?y               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 2                             |
-| 1   | 3                             |
-| 2   | 3                             |
-| 2   | 4                             |
-| 3   | 4                             |
-| 1   | 4                             |
-+-----+-------------------------------+
-| 6 rows (6 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?x  │              ?y               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 2                             │
+│ 1   │ 3                             │
+│ 2   │ 3                             │
+│ 2   │ 4                             │
+│ 3   │ 4                             │
+│ 1   │ 4                             │
+├─────┼───────────────────────────────┤
+│ 6 rows (6 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h3>Semi-naive evaluation</h3>
       <p>Rayforce uses <strong>semi-naive evaluation</strong> for fixpoint computation, which is significantly faster than naive re-evaluation:</p>
@@ -430,16 +430,16 @@ Pull name + salary for entity 2:
 (<span class="hl-fn">show</span> (<span class="hl-fn">dl-query</span> prog <span class="hl-sym">'edge</span>))</code></pre>
 
       <p><strong>Verified output</strong>:</p>
-      <pre><code>+----------+--------------------------+
-| edge__c0 |         edge__c1         |
-|   i64    |           i64            |
-+----------+--------------------------+
-| 1        | 2                        |
-| 2        | 3                        |
-| 3        | 4                        |
-+----------+--------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌──────────┬──────────────────────────┐
+│ edge__c0 │         edge__c1         │
+│   i64    │           i64            │
+├──────────┼──────────────────────────┤
+│ 1        │ 2                        │
+│ 2        │ 3                        │
+│ 3        │ 4                        │
+├──────────┼──────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <!-- ── 11. retract-fact ────────────────────── -->
       <h2 id="retract-fact">retract-fact</h2>
@@ -452,15 +452,15 @@ Pull name + salary for entity 2:
 (<span class="hl-fn">show</span> (<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> <span class="hl-sym">?e</span> <span class="hl-sym">?n</span>) (<span class="hl-fn">where</span> (<span class="hl-sym">?e</span> <span class="hl-op">:name</span> <span class="hl-sym">?n</span>))))</code></pre>
 
       <p><strong>Verified output</strong> (2 rows after retraction):</p>
-      <pre><code>+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 3   | 164                           |
-+-----+-------------------------------+
-| 2 rows (2 shown) 2 columns (2 shown)|
-+-------------------------------------+</code></pre>
+      <pre><code>┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 3   │ 164                           │
+├─────┼───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <!-- ── 12. How Datalog Maps to Rayforce ────── -->
       <h2 id="mapping">How Datalog Maps to Rayforce</h2>
@@ -643,123 +643,124 @@ Pull name + salary for entity 2:
       <h3>Output</h3>
       <p>Running <code>./rayforce examples/rfl/datalog.rfl</code> produces:</p>
       <pre><code>--- All names ---
-+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 2   | 162                           |
-| 3   | 164                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 2   │ 162                           │
+│ 3   │ 164                           │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Name + Department ---
-+-----+-------------------------------+
-| ?n  |              ?d               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 158 | 160                           |
-| 162 | 163                           |
-| 164 | 160                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?n  │              ?d               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 158 │ 160                           │
+│ 162 │ 163                           │
+│ 164 │ 160                           │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Engineers only (constant pattern) ---
-+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 3   | 164                           |
-+-----+-------------------------------+
-| 2 rows (2 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 3   │ 164                           │
+├─────┴───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Entities with any dept (wildcard _) ---
-+-------------------------------------+
-|                 ?e                  |
-|                 i64                 |
-+-------------------------------------+
-| 1                                   |
-| 2                                   |
-| 3                                   |
-+-------------------------------------+
-| 3 rows (3 shown) 1 columns (1 shown)|
-+-------------------------------------+
+┌─────────────────────────────────────┐
+│                 ?e                  │
+│                 i64                 │
+├─────────────────────────────────────┤
+│ 1                                   │
+│ 2                                   │
+│ 3                                   │
+├─────────────────────────────────────┤
+│ 3 rows (3 shown) 1 columns (1 shown)│
+└─────────────────────────────────────┘
 --- Employees (via rule) ---
-+-----+-------------------------------+
-| ?n  |              ?d               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 158 | 160                           |
-| 162 | 163                           |
-| 164 | 160                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?n  │              ?d               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 158 │ 160                           │
+│ 162 │ 163                           │
+│ 164 │ 160                           │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Non-managers (negation) ---
-+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 2   | 162                           |
-+-----+-------------------------------+
-| 1 rows (1 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 2   │ 162                           │
+├─────┴───────────────────────────────┤
+│ 1 rows (1 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Reachable pairs (transitive closure) ---
-+-----+-------------------------------+
-| ?x  |              ?y               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 2                             |
-| 1   | 3                             |
-| 2   | 3                             |
-| 2   | 4                             |
-| 3   | 4                             |
-| 1   | 4                             |
-+-----+-------------------------------+
-| 6 rows (6 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?x  │              ?y               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 2                             │
+│ 1   │ 3                             │
+│ 2   │ 3                             │
+│ 2   │ 4                             │
+│ 3   │ 4                             │
+│ 1   │ 4                             │
+├─────┴───────────────────────────────┤
+│ 6 rows (6 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Pull entity 1 (all attributes) ---
-['name 158 'dept 160 'salary 80000 'manager 172]
+[&#x27;name 158 &#x27;dept 160 &#x27;salary 80000 &#x27;manager 172]
 --- Pull entity 2 (name + salary only) ---
-['name 162 'salary 60000]
+[&#x27;name 162 &#x27;salary 60000]
 --- sym-name: convert intern IDs ---
 158
-'Alice
+&#x27;Alice
 --- Before retract ---
-+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 2   | 162                           |
-| 3   | 164                           |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 2   │ 162                           │
+│ 3   │ 164                           │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- After retract (Bob removed) ---
-+-----+-------------------------------+
-| ?e  |              ?n               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 158                           |
-| 3   | 164                           |
-+-----+-------------------------------+
-| 2 rows (2 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│ ?e  │              ?n               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 158                           │
+│ 3   │ 164                           │
+├─────┴───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- All salaries (scan-eav) ---
-+-----+-------------------------------+
-|  e  |               v               |
-| i64 |              i64              |
-+-----+-------------------------------+
-| 1   | 80000                         |
-| 2   | 60000                         |
-| 3   | 90000                         |
-+-----+-------------------------------+
-| 3 rows (3 shown) 2 columns (2 shown)|
-+-------------------------------------+
+┌─────┬───────────────────────────────┐
+│  e  │               v               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 80000                         │
+│ 2   │ 60000                         │
+│ 3   │ 90000                         │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 --- Entity 3 salary ---
-90000</code></pre>
+9
+</code></pre>
 
       <div class="info-box">
         <strong>Note:</strong> Symbol intern IDs (like 158 for <code>'Alice</code>) are assigned at runtime and may differ between sessions. The row counts and structure are stable. Use <code>(sym-name id)</code> to convert any intern ID back to its readable symbol name.
