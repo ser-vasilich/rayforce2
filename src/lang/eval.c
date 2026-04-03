@@ -11312,12 +11312,7 @@ static bool dl_is_wildcard(ray_t* node) {
     return s && ray_str_len(s) == 1 && ray_str_ptr(s)[0] == '_';
 }
 
-static bool dl_is_known_rule(const char* name) {
-    for (int i = 0; i < g_dl_n_rules; i++) {
-        if (strcmp(g_dl_rules[i].head_pred, name) == 0) return true;
-    }
-    return false;
-}
+
 
 static bool dl_is_triple_pattern(ray_t* clause) {
     if (!is_list(clause) || ray_len(clause) != 3) return false;
@@ -11327,9 +11322,8 @@ static bool dl_is_triple_pattern(ray_t* clause) {
      * Triple patterns: (?e :attr ?v), (_ :attr ?v), (1 :attr ?v) */
     if (is_dl_var(ce[0])) return true;
     if (ce[0]->type == -RAY_I64) return true;
-    if (dl_is_wildcard(ce[0]) && !dl_is_known_rule("_") &&
-        ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
-        return true;
+    if (dl_is_wildcard(ce[0]) && ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
+        return true;  /* _ is always wildcard — reserved, never a predicate */
     /* Quoted symbol (no RAY_ATTR_NAME) in position 0 + non-var symbol in position 1 */
     if (ce[0]->type == -RAY_SYM && !(ce[0]->attrs & RAY_ATTR_NAME)) {
         if (ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
@@ -11573,6 +11567,10 @@ static ray_t* ray_rule_fn(ray_t** args, int64_t n) {
     ray_t* head_name_str = ray_sym_str(hd[0]->i64);
     if (!head_name_str)
         return ray_error("type", "rule: cannot resolve head name");
+
+    /* _ is reserved as wildcard — cannot be a rule predicate name */
+    if (ray_str_len(head_name_str) == 1 && ray_str_ptr(head_name_str)[0] == '_')
+        return ray_error("domain", "rule: _ is reserved as wildcard");
 
     if (g_dl_n_rules >= DL_MAX_RULES)
         return ray_error("domain", "rule: too many rules (max 128)");
