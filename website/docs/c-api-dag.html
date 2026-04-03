@@ -631,6 +631,163 @@
       </div>
 
       <!-- ============================================================ -->
+      <h2 id="datalog">Datalog API</h2>
+      <p>Build, stratify, and evaluate Datalog programs over Rayforce tables. Include <code>"datalog/datalog.h"</code> for all Datalog types and functions.</p>
+
+      <h3 id="dl-program-new">dl_program_new / dl_program_free</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_program_new / dl_program_free</span>
+        </div>
+        <div class="fn-desc">Create a new empty Datalog program, or free one and release all owned tables.</div>
+        <div class="fn-example">
+<span class="hl-type">dl_program_t</span>* <span class="hl-fn">dl_program_new</span>(<span class="hl-type">void</span>);
+<span class="hl-type">void</span> <span class="hl-fn">dl_program_free</span>(<span class="hl-type">dl_program_t</span>* prog);
+        </div>
+      </div>
+
+      <h3 id="dl-add-edb">dl_add_edb</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_add_edb</span>
+        </div>
+        <div class="fn-desc">Register an extensional (base fact) relation backed by an existing columnar table. Column names are auto-generated as <code>"c0"</code>, <code>"c1"</code>, &hellip; unless the table already has named columns. Returns the relation index.</div>
+        <div class="fn-example">
+<span class="hl-type">int</span> <span class="hl-fn">dl_add_edb</span>(<span class="hl-type">dl_program_t</span>* prog, <span class="hl-kw">const</span> <span class="hl-type">char</span>* name,
+              <span class="hl-type">ray_t</span>* table, <span class="hl-type">int</span> arity);
+        </div>
+      </div>
+
+      <h3 id="dl-add-rule">dl_add_rule</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_add_rule</span>
+        </div>
+        <div class="fn-desc">Add a rule to the program. The rule struct is copied. Returns the rule index. Use the rule builder helpers (<code>dl_rule_init</code>, <code>dl_rule_add_atom</code>, etc.) to construct rules.</div>
+        <div class="fn-example">
+<span class="hl-type">int</span> <span class="hl-fn">dl_add_rule</span>(<span class="hl-type">dl_program_t</span>* prog, <span class="hl-kw">const</span> <span class="hl-type">dl_rule_t</span>* rule);
+        </div>
+      </div>
+
+      <h3 id="dl-stratify">dl_stratify</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_stratify</span>
+        </div>
+        <div class="fn-desc">Compute stratification (topological sort of the negation dependency graph). Returns 0 on success, &minus;1 if the program has an unstratifiable negation cycle.</div>
+        <div class="fn-example">
+<span class="hl-type">int</span> <span class="hl-fn">dl_stratify</span>(<span class="hl-type">dl_program_t</span>* prog);
+        </div>
+      </div>
+
+      <h3 id="dl-eval">dl_eval</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_eval</span>
+        </div>
+        <div class="fn-desc">Evaluate the program to fixpoint using semi-naive evaluation. Returns 0 on success, &minus;1 on error. After evaluation, derived relations are populated and queryable.</div>
+        <div class="fn-example">
+<span class="hl-type">int</span> <span class="hl-fn">dl_eval</span>(<span class="hl-type">dl_program_t</span>* prog);
+        </div>
+      </div>
+
+      <h3 id="dl-query">dl_query</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_query</span>
+        </div>
+        <div class="fn-desc">Query the result of a derived relation after evaluation. Returns the backing <code>ray_t*</code> table. The caller does <strong>not</strong> own the result &mdash; do not release it.</div>
+        <div class="fn-example">
+<span class="hl-type">ray_t</span>* <span class="hl-fn">dl_query</span>(<span class="hl-type">dl_program_t</span>* prog, <span class="hl-kw">const</span> <span class="hl-type">char</span>* pred_name);
+        </div>
+      </div>
+
+      <h3 id="dl-rule-builder">Rule Builder Helpers</h3>
+      <div class="fn-card">
+        <div class="fn-card-header">
+          <span class="fn-name">dl_rule_init / dl_rule_add_atom / dl_body_set_var / dl_body_set_const</span>
+        </div>
+        <div class="fn-desc">Build rules programmatically: initialize a rule with a head predicate, add positive body atoms, and bind arguments to variables or constants.</div>
+        <div class="fn-example">
+<span class="hl-type">void</span> <span class="hl-fn">dl_rule_init</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-kw">const</span> <span class="hl-type">char</span>* head_pred, <span class="hl-type">int</span> head_arity);
+<span class="hl-type">void</span> <span class="hl-fn">dl_rule_head_var</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-type">int</span> pos, <span class="hl-type">int</span> var_idx);
+<span class="hl-type">int</span>  <span class="hl-fn">dl_rule_add_atom</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-kw">const</span> <span class="hl-type">char</span>* pred, <span class="hl-type">int</span> arity);
+<span class="hl-type">void</span> <span class="hl-fn">dl_body_set_var</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-type">int</span> body_idx, <span class="hl-type">int</span> pos, <span class="hl-type">int</span> var_idx);
+<span class="hl-type">void</span> <span class="hl-fn">dl_body_set_const</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-type">int</span> body_idx, <span class="hl-type">int</span> pos, <span class="hl-type">int64_t</span> val);
+<span class="hl-type">int</span>  <span class="hl-fn">dl_rule_add_neg</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-kw">const</span> <span class="hl-type">char</span>* pred, <span class="hl-type">int</span> arity);
+<span class="hl-type">int</span>  <span class="hl-fn">dl_rule_add_cmp_const</span>(<span class="hl-type">dl_rule_t</span>* rule, <span class="hl-type">int</span> cmp_op,
+                            <span class="hl-type">int</span> lhs_var, <span class="hl-type">int64_t</span> rhs_val);
+        </div>
+      </div>
+
+      <h4>Datalog example: transitive closure</h4>
+      <pre><code><span class="hl-kw">#include</span> <span class="hl-str">&lt;rayforce.h&gt;</span>
+<span class="hl-kw">#include</span> <span class="hl-str">"ops/ops.h"</span>
+<span class="hl-kw">#include</span> <span class="hl-str">"mem/heap.h"</span>
+<span class="hl-kw">#include</span> <span class="hl-str">"datalog/datalog.h"</span>
+
+<span class="hl-type">int</span> <span class="hl-fn">main</span>(<span class="hl-type">void</span>) {
+    <span class="hl-fn">ray_heap_init</span>();
+    <span class="hl-fn">ray_sym_init</span>();
+
+    <span class="hl-comment">/* Build edge table: 0-&gt;1, 1-&gt;2, 2-&gt;3 */</span>
+    <span class="hl-type">ray_t</span>* c0 = <span class="hl-fn">ray_vec_from_raw</span>(<span class="hl-num">RAY_I64</span>, (<span class="hl-type">int64_t</span>[]){<span class="hl-num">0</span>,<span class="hl-num">1</span>,<span class="hl-num">2</span>}, <span class="hl-num">3</span>);
+    <span class="hl-type">ray_t</span>* c1 = <span class="hl-fn">ray_vec_from_raw</span>(<span class="hl-num">RAY_I64</span>, (<span class="hl-type">int64_t</span>[]){<span class="hl-num">1</span>,<span class="hl-num">2</span>,<span class="hl-num">3</span>}, <span class="hl-num">3</span>);
+    <span class="hl-type">ray_t</span>* edges = <span class="hl-fn">ray_table_new</span>(<span class="hl-num">2</span>);
+    edges = <span class="hl-fn">ray_table_add_col</span>(edges, <span class="hl-fn">ray_sym_intern</span>(<span class="hl-str">"c0"</span>, <span class="hl-num">2</span>), c0);
+    edges = <span class="hl-fn">ray_table_add_col</span>(edges, <span class="hl-fn">ray_sym_intern</span>(<span class="hl-str">"c1"</span>, <span class="hl-num">2</span>), c1);
+
+    <span class="hl-comment">/* Create Datalog program */</span>
+    <span class="hl-type">dl_program_t</span>* prog = <span class="hl-fn">dl_program_new</span>();
+    <span class="hl-fn">dl_add_edb</span>(prog, <span class="hl-str">"edge"</span>, edges, <span class="hl-num">2</span>);
+
+    <span class="hl-comment">/* Rule 1: reach(X, Y) :- edge(X, Y). */</span>
+    <span class="hl-type">dl_rule_t</span> r1;
+    <span class="hl-fn">dl_rule_init</span>(&amp;r1, <span class="hl-str">"reach"</span>, <span class="hl-num">2</span>);
+    <span class="hl-fn">dl_rule_head_var</span>(&amp;r1, <span class="hl-num">0</span>, <span class="hl-num">0</span>);  <span class="hl-comment">/* X */</span>
+    <span class="hl-fn">dl_rule_head_var</span>(&amp;r1, <span class="hl-num">1</span>, <span class="hl-num">1</span>);  <span class="hl-comment">/* Y */</span>
+    <span class="hl-type">int</span> b = <span class="hl-fn">dl_rule_add_atom</span>(&amp;r1, <span class="hl-str">"edge"</span>, <span class="hl-num">2</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r1, b, <span class="hl-num">0</span>, <span class="hl-num">0</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r1, b, <span class="hl-num">1</span>, <span class="hl-num">1</span>);
+    r1.n_vars = <span class="hl-num">2</span>;
+    <span class="hl-fn">dl_add_rule</span>(prog, &amp;r1);
+
+    <span class="hl-comment">/* Rule 2: reach(X, Z) :- reach(X, Y), edge(Y, Z). */</span>
+    <span class="hl-type">dl_rule_t</span> r2;
+    <span class="hl-fn">dl_rule_init</span>(&amp;r2, <span class="hl-str">"reach"</span>, <span class="hl-num">2</span>);
+    <span class="hl-fn">dl_rule_head_var</span>(&amp;r2, <span class="hl-num">0</span>, <span class="hl-num">0</span>);  <span class="hl-comment">/* X */</span>
+    <span class="hl-fn">dl_rule_head_var</span>(&amp;r2, <span class="hl-num">1</span>, <span class="hl-num">2</span>);  <span class="hl-comment">/* Z */</span>
+    <span class="hl-type">int</span> b1 = <span class="hl-fn">dl_rule_add_atom</span>(&amp;r2, <span class="hl-str">"reach"</span>, <span class="hl-num">2</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r2, b1, <span class="hl-num">0</span>, <span class="hl-num">0</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r2, b1, <span class="hl-num">1</span>, <span class="hl-num">1</span>);
+    <span class="hl-type">int</span> b2 = <span class="hl-fn">dl_rule_add_atom</span>(&amp;r2, <span class="hl-str">"edge"</span>, <span class="hl-num">2</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r2, b2, <span class="hl-num">0</span>, <span class="hl-num">1</span>);
+    <span class="hl-fn">dl_body_set_var</span>(&amp;r2, b2, <span class="hl-num">1</span>, <span class="hl-num">2</span>);
+    r2.n_vars = <span class="hl-num">3</span>;
+    <span class="hl-fn">dl_add_rule</span>(prog, &amp;r2);
+
+    <span class="hl-comment">/* Stratify, evaluate, query */</span>
+    <span class="hl-fn">dl_stratify</span>(prog);
+    <span class="hl-fn">dl_eval</span>(prog);
+    <span class="hl-type">ray_t</span>* result = <span class="hl-fn">dl_query</span>(prog, <span class="hl-str">"reach"</span>);
+    <span class="hl-comment">/* result is a table with columns c0, c1:
+     *   0 | 1
+     *   1 | 2
+     *   2 | 3
+     *   0 | 2
+     *   1 | 3
+     *   0 | 3  */</span>
+
+    <span class="hl-fn">dl_program_free</span>(prog);
+    <span class="hl-fn">ray_release</span>(c0);
+    <span class="hl-fn">ray_release</span>(c1);
+    <span class="hl-fn">ray_release</span>(edges);
+    <span class="hl-fn">ray_sym_destroy</span>();
+    <span class="hl-fn">ray_heap_destroy</span>();
+    <span class="hl-kw">return</span> <span class="hl-num">0</span>;
+}</code></pre>
+
+      <!-- ============================================================ -->
       <h2 id="examples">Complete Examples</h2>
 
       <h3 id="ex-filter-group">Example 1: Filter + Group + Sum</h3>
