@@ -876,6 +876,17 @@ ray_op_t* dl_compile_rule(dl_program_t* prog, dl_rule_t* rule,
             if (rel_idx < 0) { ray_release(accum); return NULL; }
             dl_rel_t* rel = &prog->rels[rel_idx];
 
+            /* Apply constant filters to the negated relation first */
+            ray_t* neg_tbl = rel->table;
+            ray_retain(neg_tbl);
+            for (int c = 0; c < body->arity; c++) {
+                if (body->vars[c] == DL_CONST) {
+                    ray_t* filtered = dl_filter_eq(neg_tbl, c, body->const_vals[c]);
+                    ray_release(neg_tbl);
+                    neg_tbl = filtered;
+                }
+            }
+
             int lkeys[DL_MAX_ARITY], rkeys[DL_MAX_ARITY];
             int n_keys = 0;
             for (int c = 0; c < body->arity; c++) {
@@ -889,10 +900,11 @@ ray_op_t* dl_compile_rule(dl_program_t* prog, dl_rule_t* rule,
             }
 
             if (n_keys > 0) {
-                ray_t* result = dl_antijoin_tables(accum, rel->table, lkeys, rkeys, n_keys);
+                ray_t* result = dl_antijoin_tables(accum, neg_tbl, lkeys, rkeys, n_keys);
                 ray_release(accum);
                 accum = result;
             }
+            ray_release(neg_tbl);
             break;
         }
 

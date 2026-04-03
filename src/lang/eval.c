@@ -28,6 +28,8 @@
 #include "core/types.h"
 #include "io/csv.h"
 #include "ops/ops.h"
+#include "datalog/datalog.h"
+#include "table/sym.h"
 #include "ops/pool.h"
 #include "table/sym.h"
 #include "mem/heap.h"
@@ -11221,19 +11223,325 @@ static int is_dl_var(ray_t* x) {
     return p && p[0] == '?';
 }
 
-/* Rule storage */
-typedef struct {
-    int64_t  name_sym;            /* head relation name (interned) */
-    int64_t  head_vars[16];       /* variable sym IDs in head */
-    int       n_head_vars;
-    ray_t*   body;                /* raw AST list of body clauses */
-} ray_dl_rule_t;
+/* ══════════════════════════════════════════
+ * Datalog wrappers — thin layer over src/datalog/datalog.h
+ *
+ * Global rule storage lives in g_dl_rules[] / g_dl_n_rules.
+ * ray_rule_fn parses Rayfall (rule ...) syntax and stores rules.
+ * ray_query_fn builds a temporary dl_program_t, copies global rules,
+ * registers the EAV table, evaluates to fixpoint, and returns results.
+ * ══════════════════════════════════════════ */
 
-static ray_dl_rule_t dl_rules[64];
-static int           dl_n_rules = 0;
+/* Global rule storage: rules defined via (rule ...) persist across queries */
+static dl_rule_t  g_dl_rules[DL_MAX_RULES];
+static int        g_dl_n_rules = 0;
+
+/* Variable name → index map for parsing a single rule or query body */
+typedef struct {
+    int64_t syms[DL_MAX_ARITY * DL_MAX_BODY];
+    int     n;
+} dl_var_map_t;
+
+static int dl_var_get_or_create(dl_var_map_t* map, int64_t sym_id) {
+    for (int i = 0; i < map->n; i++)
+        if (map->syms[i] == sym_id) return i;
+    if (map->n >= DL_MAX_ARITY * DL_MAX_BODY) return -1;
+    map->syms[map->n] = sym_id;
+    return map->n++;
+}
+
+/* Map Rayfall comparison operator name to DL_CMP_* constant.
+ * Returns -1 if not a recognized comparison. */
+static int dl_cmp_op_from_name(const char* name) {
+    if (strcmp(name, ">")  == 0) return DL_CMP_GT;
+    if (strcmp(name, ">=") == 0) return DL_CMP_GE;
+    if (strcmp(name, "<")  == 0) return DL_CMP_LT;
+    if (strcmp(name, "<=") == 0) return DL_CMP_LE;
+    if (strcmp(name, "==") == 0) return DL_CMP_EQ;
+    if (strcmp(name, "!=") == 0) return DL_CMP_NE;
+    return -1;
+}
+
+/* Map Rayfall arithmetic operator name to OP_* constant for dl_expr_t.
+ * Returns -1 if not recognized. */
+static int dl_arith_op_from_name(const char* name) {
+    if (strcmp(name, "+") == 0) return OP_ADD;
+    if (strcmp(name, "-") == 0) return OP_SUB;
+    if (strcmp(name, "*") == 0) return OP_MUL;
+    if (strcmp(name, "/") == 0) return OP_DIV;
+    return -1;
+}
+
+/* Build a dl_expr_t from a Rayfall AST node.
+ * Handles: integer constants, ?variables, (op expr expr). */
+static dl_expr_t* dl_build_expr(ray_t* node, dl_var_map_t* vars) {
+    if (!node) return NULL;
+    if (node->type == -RAY_I64)
+        return dl_expr_const(node->i64);
+    if (node->type == -RAY_SYM && is_dl_var(node)) {
+        int vi = dl_var_get_or_create(vars, node->i64);
+        return (vi >= 0) ? dl_expr_var(vi) : NULL;
+    }
+    if (is_list(node) && ray_len(node) == 3) {
+        ray_t** elems = (ray_t**)ray_data(node);
+        if (elems[0]->type == -RAY_SYM) {
+            ray_t* op_str = ray_sym_str(elems[0]->i64);
+            if (op_str) {
+                int op = dl_arith_op_from_name(ray_str_ptr(op_str));
+                if (op >= 0) {
+                    dl_expr_t* l = dl_build_expr(elems[1], vars);
+                    dl_expr_t* r = dl_build_expr(elems[2], vars);
+                    if (l && r) return dl_expr_binop(op, l, r);
+                }
+            }
+        }
+    }
+    /* Fallback: treat symbols (non-variable) as constants (sym ID) */
+    if (node->type == -RAY_SYM)
+        return dl_expr_const(node->i64);
+    return NULL;
+}
+
+/* Check if a Rayfall list clause is a triple pattern: (?e :attr ?v)
+ * A triple pattern has exactly 3 elements and the first element is a
+ * ?variable (distinguishing it from rule invocations where the first
+ * element is a predicate name symbol). */
+static bool dl_is_triple_pattern(ray_t* clause) {
+    if (!is_list(clause) || ray_len(clause) != 3) return false;
+    ray_t** ce = (ray_t**)ray_data(clause);
+    /* Position 0 must be a ?variable or constant (not a plain name symbol
+     * that could be a rule predicate). Triple patterns start with ?e or a
+     * literal entity, never with a bare predicate name. */
+    if (is_dl_var(ce[0])) return true;
+    if (ce[0]->type == -RAY_I64) return true;
+    /* If position 0 is a symbol with RAY_ATTR_NAME it's a name reference
+     * (could be a rule invocation), not a triple pattern. If it's a plain
+     * symbol (e.g., from quote), it could be an entity constant. We check
+     * that position 1 is a non-variable symbol to confirm EAV shape. */
+    if (ce[0]->type == -RAY_SYM && !(ce[0]->attrs & RAY_ATTR_NAME)) {
+        /* Position 1 must be a non-variable symbol (the attribute) */
+        if (ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
+            return true;
+    }
+    return false;
+}
+
+/* Check if a clause is a negation: (not (...)) */
+static bool dl_is_negation(ray_t* clause) {
+    if (!is_list(clause) || ray_len(clause) != 2) return false;
+    ray_t** ce = (ray_t**)ray_data(clause);
+    if (ce[0]->type != -RAY_SYM) return false;
+    ray_t* name = ray_sym_str(ce[0]->i64);
+    return name && strcmp(ray_str_ptr(name), "not") == 0;
+}
+
+/* Check if a clause is a comparison: (> ?x ?y) or (> ?x 100) */
+static bool dl_is_comparison(ray_t* clause) {
+    if (!is_list(clause) || ray_len(clause) < 3) return false;
+    ray_t** ce = (ray_t**)ray_data(clause);
+    if (ce[0]->type != -RAY_SYM) return false;
+    ray_t* name = ray_sym_str(ce[0]->i64);
+    if (!name) return false;
+    return dl_cmp_op_from_name(ray_str_ptr(name)) >= 0;
+}
+
+/* Check if a clause is an assignment: (= ?var expr) */
+static bool dl_is_assignment(ray_t* clause) {
+    if (!is_list(clause) || ray_len(clause) != 3) return false;
+    ray_t** ce = (ray_t**)ray_data(clause);
+    if (ce[0]->type != -RAY_SYM) return false;
+    ray_t* name = ray_sym_str(ce[0]->i64);
+    if (!name || strcmp(ray_str_ptr(name), "=") != 0) return false;
+    /* LHS must be a variable */
+    return is_dl_var(ce[1]);
+}
+
+/* Resolve an AST node to a variable or constant in a body atom.
+ * Sets the body position to either a variable or constant.
+ * For expressions like (quote x), evaluates them first. */
+static ray_t* dl_set_body_pos(dl_rule_t* rule, int bidx, int pos,
+                                ray_t* node, dl_var_map_t* vars) {
+    if (is_dl_var(node)) {
+        int vi = dl_var_get_or_create(vars, node->i64);
+        dl_body_set_var(rule, bidx, pos, vi);
+        return NULL;
+    }
+    if (node->type == -RAY_I64) {
+        dl_body_set_const(rule, bidx, pos, node->i64);
+        return NULL;
+    }
+    if (node->type == -RAY_SYM) {
+        ray_t* s = ray_sym_str(node->i64);
+        if (s && strcmp(ray_str_ptr(s), "_") == 0) {
+            /* Wildcard: create a fresh variable */
+            int vi = vars->n++;
+            vars->syms[vi] = -1 - vi;
+            dl_body_set_var(rule, bidx, pos, vi);
+        } else {
+            dl_body_set_const(rule, bidx, pos, node->i64);
+        }
+        return NULL;
+    }
+    /* For other forms (e.g., (quote x)), evaluate to get constant */
+    ray_t* val = ray_eval(node);
+    if (!val || RAY_IS_ERR(val))
+        return val ? val : ray_error("type", "rule: cannot evaluate constant in body");
+    if (val->type == -RAY_I64) {
+        dl_body_set_const(rule, bidx, pos, val->i64);
+    } else if (val->type == -RAY_SYM) {
+        dl_body_set_const(rule, bidx, pos, val->i64);
+    } else {
+        ray_release(val);
+        return ray_error("type", "rule: unsupported constant type in body");
+    }
+    ray_release(val);
+    return NULL;
+}
+
+/* Parse a single body clause and add it to the dl_rule_t.
+ * Handles triple patterns, negations, comparisons, assignments,
+ * and rule invocations (positive atoms). */
+static ray_t* dl_parse_body_clause(dl_rule_t* rule, ray_t* clause,
+                                     dl_var_map_t* vars) {
+    if (!is_list(clause) || ray_len(clause) < 1)
+        return ray_error("type", "rule/query: body clause must be a list");
+
+    ray_t** ce = (ray_t**)ray_data(clause);
+    int64_t clen = ray_len(clause);
+
+    /* ── Triple pattern: (?e :attr ?v) ── */
+    if (dl_is_triple_pattern(clause)) {
+        /* Register as 3-arity atom on "eav" relation:
+         * position 0 = entity, 1 = attr (constant), 2 = value */
+        int bidx = dl_rule_add_atom(rule, "eav", 3);
+        if (bidx < 0) return ray_error("domain", "rule: too many body literals");
+
+        ray_t* err;
+        err = dl_set_body_pos(rule, bidx, 0, ce[0], vars);
+        if (err) return err;
+        err = dl_set_body_pos(rule, bidx, 1, ce[1], vars);
+        if (err) return err;
+        err = dl_set_body_pos(rule, bidx, 2, ce[2], vars);
+        if (err) return err;
+        return NULL; /* success */
+    }
+
+    /* ── Negation: (not (?e :attr ?v))  or  (not (rule-name ?args...)) ── */
+    if (dl_is_negation(clause)) {
+        ray_t* inner = ce[1];
+        if (!is_list(inner) || ray_len(inner) < 1)
+            return ray_error("type", "not: inner clause must be a list");
+        ray_t** ie = (ray_t**)ray_data(inner);
+        int64_t ilen = ray_len(inner);
+
+        if (dl_is_triple_pattern(inner)) {
+            /* Negated triple: (not (?e :attr ?v)) */
+            int bidx = dl_rule_add_neg(rule, "eav", 3);
+            if (bidx < 0) return ray_error("domain", "rule: too many body literals");
+
+            ray_t* err;
+            err = dl_set_body_pos(rule, bidx, 0, ie[0], vars);
+            if (err) return err;
+            err = dl_set_body_pos(rule, bidx, 1, ie[1], vars);
+            if (err) return err;
+            err = dl_set_body_pos(rule, bidx, 2, ie[2], vars);
+            if (err) return err;
+        } else {
+            /* Negated rule invocation: (not (rule-name ?a ?b)) */
+            if (ie[0]->type != -RAY_SYM)
+                return ray_error("type", "not: inner clause head must be a symbol");
+            ray_t* pred_name = ray_sym_str(ie[0]->i64);
+            if (!pred_name)
+                return ray_error("type", "not: cannot resolve predicate name");
+
+            int bidx = dl_rule_add_neg(rule, ray_str_ptr(pred_name), (int)(ilen - 1));
+            if (bidx < 0) return ray_error("domain", "rule: too many body literals");
+
+            for (int64_t j = 1; j < ilen; j++) {
+                ray_t* err = dl_set_body_pos(rule, bidx, (int)(j - 1), ie[j], vars);
+                if (err) return err;
+            }
+        }
+        return NULL;
+    }
+
+    /* ── Assignment: (= ?var expr) ── */
+    if (dl_is_assignment(clause)) {
+        int target_vi = dl_var_get_or_create(vars, ce[1]->i64);
+        dl_expr_t* expr = dl_build_expr(ce[2], vars);
+        if (!expr)
+            return ray_error("type", "rule: cannot parse assignment expression");
+        dl_rule_add_assign(rule, target_vi, DL_OP_EQ, expr);
+        return NULL;
+    }
+
+    /* ── Comparison: (> ?x ?y) or (> ?x 100) ── */
+    if (dl_is_comparison(clause)) {
+        ray_t* op_str = ray_sym_str(ce[0]->i64);
+        int cmp_op = dl_cmp_op_from_name(ray_str_ptr(op_str));
+
+        /* LHS */
+        bool lhs_is_var = is_dl_var(ce[1]);
+        int lhs_vi = lhs_is_var ? dl_var_get_or_create(vars, ce[1]->i64) : -1;
+        bool lhs_is_const = (!lhs_is_var && (ce[1]->type == -RAY_I64 || ce[1]->type == -RAY_SYM));
+        int64_t lhs_const = lhs_is_const ? ce[1]->i64 : 0;
+
+        /* RHS */
+        bool rhs_is_var = (clen > 2) && is_dl_var(ce[2]);
+        int rhs_vi = rhs_is_var ? dl_var_get_or_create(vars, ce[2]->i64) : -1;
+        bool rhs_is_const = (clen > 2) && !rhs_is_var &&
+                            (ce[2]->type == -RAY_I64 || ce[2]->type == -RAY_SYM);
+        int64_t rhs_const = rhs_is_const ? ce[2]->i64 : 0;
+
+        if (lhs_is_var && rhs_is_var) {
+            dl_rule_add_cmp(rule, cmp_op, lhs_vi, rhs_vi);
+        } else if (lhs_is_var && rhs_is_const) {
+            dl_rule_add_cmp_const(rule, cmp_op, lhs_vi, rhs_const);
+        } else if (lhs_is_const && rhs_is_var) {
+            /* Flip: const op var → var flipped_op const */
+            int flipped = cmp_op;
+            switch (cmp_op) {
+            case DL_CMP_GT: flipped = DL_CMP_LT; break;
+            case DL_CMP_GE: flipped = DL_CMP_LE; break;
+            case DL_CMP_LT: flipped = DL_CMP_GT; break;
+            case DL_CMP_LE: flipped = DL_CMP_GE; break;
+            default: break;
+            }
+            dl_rule_add_cmp_const(rule, flipped, rhs_vi, lhs_const);
+        } else {
+            /* Expression-based comparison */
+            dl_expr_t* le = dl_build_expr(ce[1], vars);
+            dl_expr_t* re = (clen > 2) ? dl_build_expr(ce[2], vars) : NULL;
+            if (le && re)
+                dl_rule_add_cmp_expr(rule, cmp_op, le, re);
+            else
+                return ray_error("type", "rule: cannot parse comparison operands");
+        }
+        return NULL;
+    }
+
+    /* ── Rule invocation / positive atom: (pred-name ?a ?b ...) ── */
+    if (ce[0]->type == -RAY_SYM) {
+        ray_t* pred_name = ray_sym_str(ce[0]->i64);
+        if (!pred_name)
+            return ray_error("type", "rule: cannot resolve predicate name");
+
+        int bidx = dl_rule_add_atom(rule, ray_str_ptr(pred_name), (int)(clen - 1));
+        if (bidx < 0) return ray_error("domain", "rule: too many body literals");
+
+        for (int64_t j = 1; j < clen; j++) {
+            ray_t* err = dl_set_body_pos(rule, bidx, (int)(j - 1), ce[j], vars);
+            if (err) return err;
+        }
+        return NULL;
+    }
+
+    return ray_error("type", "rule/query: unrecognized body clause form");
+}
 
 /* (rule (head-name ?v1 ?v2 ...) clause1 clause2 ...)
- * Special form: args are NOT evaluated. */
+ * Special form: args are NOT evaluated.
+ * Parses the head and body into a dl_rule_t and stores it globally. */
 static ray_t* ray_rule_fn(ray_t** args, int64_t n) {
     if (n < 2)
         return ray_error("arity", "rule expects at least a head and one body clause");
@@ -11249,1011 +11557,54 @@ static ray_t* ray_rule_fn(ray_t** args, int64_t n) {
     /* Head name */
     if (hd[0]->type != -RAY_SYM)
         return ray_error("type", "rule: head name must be a symbol");
-    int64_t name_sym = hd[0]->i64;
 
-    if (dl_n_rules >= 64)
-        return ray_error("domain", "rule: too many rules (max 64)");
+    ray_t* head_name_str = ray_sym_str(hd[0]->i64);
+    if (!head_name_str)
+        return ray_error("type", "rule: cannot resolve head name");
 
-    ray_dl_rule_t* rule = &dl_rules[dl_n_rules];
-    rule->name_sym = name_sym;
-    rule->n_head_vars = 0;
+    if (g_dl_n_rules >= DL_MAX_RULES)
+        return ray_error("domain", "rule: too many rules (max 128)");
+
+    /* Build variable map */
+    dl_var_map_t vars;
+    memset(&vars, 0, sizeof(vars));
+
+    int head_arity = (int)(hlen - 1);
+    dl_rule_t rule;
+    dl_rule_init(&rule, ray_str_ptr(head_name_str), head_arity);
 
     /* Head variables */
-    for (int64_t i = 1; i < hlen && rule->n_head_vars < 16; i++) {
-        if (!is_dl_var(hd[i]))
-            return ray_error("type", "rule: head arguments must be ?variables");
-        rule->head_vars[rule->n_head_vars++] = hd[i]->i64;
+    for (int i = 0; i < head_arity; i++) {
+        ray_t* harg = hd[i + 1];
+        if (is_dl_var(harg)) {
+            int vi = dl_var_get_or_create(&vars, harg->i64);
+            dl_rule_head_var(&rule, i, vi);
+        } else if (harg->type == -RAY_I64) {
+            dl_rule_head_const(&rule, i, harg->i64);
+        } else if (harg->type == -RAY_SYM) {
+            dl_rule_head_const(&rule, i, harg->i64);
+        } else {
+            return ray_error("type", "rule: head arguments must be ?variables or constants");
+        }
     }
 
-    /* Body: wrap remaining args into a list for storage.
-     * We retain each body clause AST so it outlives the parse. */
-    ray_t* body = ray_list_new(n - 1);
-    if (RAY_IS_ERR(body)) return body;
+    /* Body clauses */
     for (int64_t i = 1; i < n; i++) {
-        ray_retain(args[i]);
-        body = ray_list_append(body, args[i]);
-        ray_release(args[i]);
-        if (RAY_IS_ERR(body)) return body;
+        ray_t* err = dl_parse_body_clause(&rule, args[i], &vars);
+        if (err) return err;
     }
-    rule->body = body;  /* owns reference */
 
-    dl_n_rules++;
+    rule.n_vars = vars.n;
+
+    /* Store globally */
+    memcpy(&g_dl_rules[g_dl_n_rules++], &rule, sizeof(dl_rule_t));
     return ray_bool(true);
 }
 
-/* Find a rule by name. Returns NULL if not found. */
-static ray_dl_rule_t* dl_find_rule(int64_t name_sym) {
-    for (int i = 0; i < dl_n_rules; i++) {
-        if (dl_rules[i].name_sym == name_sym)
-            return &dl_rules[i];
-    }
-    return NULL;
-}
-
-/* Find ALL rules with a given name. Returns count, fills out[] (max max_out). */
-static int dl_find_all_rules(int64_t name_sym, ray_dl_rule_t** out, int max_out) {
-    int count = 0;
-    for (int i = 0; i < dl_n_rules && count < max_out; i++) {
-        if (dl_rules[i].name_sym == name_sym)
-            out[count++] = &dl_rules[i];
-    }
-    return count;
-}
-
-/* Check if a rule clause body references a given rule name (direct recursion). */
-static bool dl_body_references_rule(ray_t* body, int64_t name_sym) {
-    ray_t** elems = (ray_t**)ray_data(body);
-    int64_t len = ray_len(body);
-    for (int64_t i = 0; i < len; i++) {
-        if (!is_list(elems[i])) continue;
-        int64_t clen = ray_len(elems[i]);
-        if (clen < 2) continue;
-        ray_t** ce = (ray_t**)ray_data(elems[i]);
-        if (ce[0]->type == -RAY_SYM && (ce[0]->attrs & RAY_ATTR_NAME) &&
-            ce[0]->i64 == name_sym)
-            return true;
-    }
-    return false;
-}
-
-/* ── Query helpers ── */
-
-/* Classify a body clause:
- *   0 = triple pattern (?e :attr ?v)  — has exactly 3 elements, middle is a constant sym
- *   1 = rule invocation (rulename ?a ?b) — head sym matches a known rule
- *   2 = filter (> ?x 100) — head sym is a known comparison operator
- *   3 = negation (not (...)) — negated pattern
- *  -1 = unknown */
-static int dl_classify_clause(ray_t* clause) {
-    if (!is_list(clause)) return -1;
-    int64_t clen = ray_len(clause);
-    if (clen < 2) return -1;
-    ray_t** ce = (ray_t**)ray_data(clause);
-
-    /* Check for negation: (not (...)) */
-    if (ce[0]->type == -RAY_SYM && (ce[0]->attrs & RAY_ATTR_NAME)) {
-        ray_t* name_str = ray_sym_str(ce[0]->i64);
-        if (name_str && ray_str_len(name_str) == 3 &&
-            memcmp(ray_str_ptr(name_str), "not", 3) == 0)
-            return 3;
-    }
-
-    /* Check if first element is a known rule name */
-    if (ce[0]->type == -RAY_SYM) {
-        int64_t sym = ce[0]->i64;
-        /* Check for rule invocation (name with RAY_ATTR_NAME that matches a rule) */
-        if ((ce[0]->attrs & RAY_ATTR_NAME) && dl_find_rule(sym))
-            return 1;
-    }
-
-    /* Triple pattern: 3 elements, middle is a constant symbol (no RAY_ATTR_NAME = quoted sym) */
-    if (clen == 3 && ce[1]->type == -RAY_SYM && !(ce[1]->attrs & RAY_ATTR_NAME))
-        return 0;
-
-    /* Filter: head is a comparison operator name */
-    if (ce[0]->type == -RAY_SYM && (ce[0]->attrs & RAY_ATTR_NAME)) {
-        ray_t* fn = ray_env_get(ce[0]->i64);
-        if (fn && fn->type == RAY_BINARY)
-            return 2;
-    }
-
-    return -1;
-}
-
-/* Compile a triple pattern (?e :attr ?v) against db.
- * Returns a 2-column table with columns named by the variable sym IDs. */
-static ray_t* dl_compile_triple(ray_t* db, ray_t* clause) {
-    ray_t** ce = (ray_t**)ray_data(clause);
-    /* ce[0] = ?entity var, ce[1] = attribute sym, ce[2] = ?value var */
-    int64_t attr_sym = ce[1]->i64;
-
-    /* Call scan-eav to get [e, v] table */
-    ray_t* attr_arg = ray_sym(attr_sym);
-    if (RAY_IS_ERR(attr_arg)) return attr_arg;
-
-    ray_t* scan_args[2] = { db, attr_arg };
-    ray_t* result = ray_scan_eav_fn(scan_args, 2);
-    ray_release(attr_arg);
-    if (RAY_IS_ERR(result)) return result;
-
-    /* Determine which positions are ?variables vs constants/wildcards.
-     * Only ?variable positions become output columns. Constants filter
-     * then drop. Wildcards drop without filtering. All handled in one
-     * pass to avoid sequential column-index confusion. */
-    bool e_is_var = is_dl_var(ce[0]);
-    bool v_is_var = is_dl_var(ce[2]);
-
-    /* Rename variable columns */
-    if (e_is_var) ray_table_set_col_name(result, 0, ce[0]->i64);
-    if (v_is_var) ray_table_set_col_name(result, 1, ce[2]->i64);
-
-    /* If both are variables, result is already correct [?e, ?v] */
-    if (!e_is_var || !v_is_var) {
-        /* Compute filter predicates */
-        int64_t const_e = 0; bool filt_e = false;
-        int64_t const_v = 0; bool filt_v = false;
-
-        if (!e_is_var) {
-            if (ce[0]->type == -RAY_I64) { const_e = ce[0]->i64; filt_e = true; }
-            else if (ce[0]->type == -RAY_SYM) {
-                ray_t* sn = ray_sym_str(ce[0]->i64);
-                bool wc = sn && ray_str_len(sn) == 1 && ray_str_ptr(sn)[0] == '_';
-                if (!wc) { const_e = ce[0]->i64; filt_e = true; }
-            }
-        }
-        if (!v_is_var) {
-            if (ce[2]->type == -RAY_I64) { const_v = ce[2]->i64; filt_v = true; }
-            else if (ce[2]->type == -RAY_SYM) {
-                ray_t* sn = ray_sym_str(ce[2]->i64);
-                bool wc = sn && ray_str_len(sn) == 1 && ray_str_ptr(sn)[0] == '_';
-                if (!wc) { const_v = ce[2]->i64; filt_v = true; }
-            }
-        }
-
-        /* Single pass: filter rows, collect only variable columns. */
-        ray_t* e_col = ray_table_get_col_idx(result, 0);
-        ray_t* v_col = ray_table_get_col_idx(result, 1);
-        int64_t nrows = ray_table_nrows(result);
-        const int64_t* ed = (const int64_t*)ray_data(e_col);
-        const int64_t* vd = (const int64_t*)ray_data(v_col);
-
-        ray_t* out_e = e_is_var ? ray_vec_new(RAY_I64, nrows) : NULL;
-        ray_t* out_v = v_is_var ? ray_vec_new(RAY_I64, nrows) : NULL;
-        if ((e_is_var && RAY_IS_ERR(out_e)) || (v_is_var && RAY_IS_ERR(out_v))) {
-            if (out_e && !RAY_IS_ERR(out_e)) ray_release(out_e);
-            if (out_v && !RAY_IS_ERR(out_v)) ray_release(out_v);
-            ray_release(result);
-            return ray_error("oom", NULL);
-        }
-
-        for (int64_t r = 0; r < nrows; r++) {
-            if (filt_e && ed[r] != const_e) continue;
-            if (filt_v && vd[r] != const_v) continue;
-            if (out_e) out_e = ray_vec_append(out_e, &ed[r]);
-            if (out_v) out_v = ray_vec_append(out_v, &vd[r]);
-        }
-
-        int64_t n_e, n_v;
-        if (result && !RAY_IS_ERR(result) && result->type == RAY_TABLE) {
-            n_e = ray_table_ncols(result) > 0 ? ray_table_col_name(result, 0) : ray_sym_intern("e", 1);
-            n_v = ray_table_ncols(result) > 1 ? ray_table_col_name(result, 1) : ray_sym_intern("v", 1);
-        } else {
-            n_e = ray_sym_intern("e", 1);
-            n_v = ray_sym_intern("v", 1);
-        }
-        if (result) ray_release(result);
-
-        int ncols = (e_is_var ? 1 : 0) + (v_is_var ? 1 : 0);
-        if (ncols == 0) {
-            /* Both non-variable: existence check. Count matching rows.
-             * Return a bool atom (not a table) as sentinel for the caller. */
-            int64_t count = 0;
-            for (int64_t r = 0; r < nrows; r++) {
-                if (filt_e && ed[r] != const_e) continue;
-                if (filt_v && vd[r] != const_v) continue;
-                count++;
-            }
-            result = ray_bool(count > 0);
-        } else {
-            result = ray_table_new(ncols);
-            if (!RAY_IS_ERR(result)) {
-                if (e_is_var) { result = ray_table_add_col(result, n_e, out_e); ray_release(out_e); out_e = NULL; }
-                if (v_is_var && !RAY_IS_ERR(result)) { result = ray_table_add_col(result, n_v, out_v); ray_release(out_v); out_v = NULL; }
-            }
-        }
-        if (out_e) ray_release(out_e);
-        if (out_v) ray_release(out_v);
-    }
-
-    return result;
-}
-
-/* Forward declarations for compilation with optional override table */
-static ray_t* dl_compile_rule_invocation(ray_t* db, ray_t* clause, int depth);
-static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int depth);
-static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_clauses,
-                                        int depth, int64_t override_rule, ray_t* override_tbl);
-static ray_t* dl_compile_rule_invocation_override(ray_t* db, ray_t* clause, int depth,
-                                                   int64_t override_rule, ray_t* override_tbl);
-static ray_t* dl_fixpoint_eval(ray_t* db, ray_t* clause, int depth);
-
-/* Build a new table by copying columns from src with renamed column names.
- * Rule head vars map to caller vars. Returns new table (caller must release src). */
-static ray_t* dl_table_with_renamed_cols(ray_t* src, ray_dl_rule_t* rule, ray_t** ce, int64_t clen) {
-    int64_t ncols = ray_table_ncols(src);
-    ray_t* dst = ray_table_new(ncols);
-    if (RAY_IS_ERR(dst)) return dst;
-
-    for (int64_t c = 0; c < ncols; c++) {
-        int64_t col_name = ray_table_col_name(src, c);
-        /* Check if this column should be renamed */
-        for (int i = 0; i < rule->n_head_vars && i + 1 < clen; i++) {
-            if (col_name == rule->head_vars[i]) {
-                col_name = ce[i + 1]->i64;
-                break;
-            }
-        }
-        ray_t* col = ray_table_get_col_idx(src, c);
-        dst = ray_table_add_col(dst, col_name, col);
-        if (RAY_IS_ERR(dst)) return dst;
-    }
-    return dst;
-}
-
-/* In-place rename result columns from rule head vars to caller vars.
- * Safe when result is exclusively owned (rc==1). */
-static void dl_rename_columns(ray_t* result, ray_dl_rule_t* rule, ray_t** ce, int64_t clen) {
-    int64_t ncols = ray_table_ncols(result);
-    /* Collect all renames first to avoid sequential collision */
-    int64_t old_names[16], new_names[16];
-    int n_renames = 0;
-    for (int i = 0; i < rule->n_head_vars && i + 1 < clen; i++) {
-        int64_t head_var = rule->head_vars[i];
-        int64_t caller_var = ce[i + 1]->i64;
-        if (head_var == caller_var) continue;
-        old_names[n_renames] = head_var;
-        new_names[n_renames] = caller_var;
-        n_renames++;
-    }
-    /* Apply all renames: for each column, find the first matching rename */
-    for (int64_t c = 0; c < ncols; c++) {
-        int64_t name = ray_table_col_name(result, c);
-        for (int r = 0; r < n_renames; r++) {
-            if (name == old_names[r]) {
-                ray_table_set_col_name(result, c, new_names[r]);
-                break;
-            }
-        }
-    }
-}
-
-/* Compile a single rule clause body, substituting self-references with override_tbl.
- * When override_rule == 0 or override_tbl == NULL, behaves like dl_compile_body. */
-static ray_t* dl_compile_rule_invocation_override(ray_t* db, ray_t* clause, int depth,
-                                                   int64_t override_rule, ray_t* override_tbl) {
-    if (depth > 16)
-        return ray_error("domain", "query: rule recursion too deep");
-
-    ray_t** ce = (ray_t**)ray_data(clause);
-    int64_t clen = ray_len(clause);
-    int64_t rule_name = ce[0]->i64;
-
-    /* If this invocation matches the override rule, return a copy of the
-     * override table with columns renamed to match the caller's variable names. */
-    if (override_tbl && rule_name == override_rule) {
-        ray_dl_rule_t* rule = dl_find_rule(rule_name);
-        if (!rule) return ray_error("domain", "query: unknown rule");
-        return dl_table_with_renamed_cols(override_tbl, rule, ce, clen);
-    }
-
-    ray_dl_rule_t* rule = dl_find_rule(rule_name);
-    if (!rule) return ray_error("domain", "query: unknown rule");
-
-    /* Compile the rule body with override propagated */
-    ray_t** body_elems = (ray_t**)ray_data(rule->body);
-    int64_t body_len = ray_len(rule->body);
-    ray_t* result = dl_compile_body_override(db, body_elems, body_len, depth + 1,
-                                              override_rule, override_tbl);
-    if (RAY_IS_ERR(result)) return result;
-
-    dl_rename_columns(result, rule, ce, clen);
-    return result;
-}
-
-/* Compile a rule invocation, detecting recursion and using fixpoint if needed. */
-static ray_t* dl_compile_rule_invocation(ray_t* db, ray_t* clause, int depth) {
-    if (depth > 16)
-        return ray_error("domain", "query: rule recursion too deep");
-
-    ray_t** ce = (ray_t**)ray_data(clause);
-    int64_t clen = ray_len(clause);
-    int64_t rule_name = ce[0]->i64;
-
-    /* Check if this rule is recursive (any clause with this name references itself). */
-    ray_dl_rule_t* all_rules[64];
-    int n_rules = dl_find_all_rules(rule_name, all_rules, 64);
-    if (n_rules == 0) return ray_error("domain", "query: unknown rule");
-
-    bool is_recursive = false;
-    for (int i = 0; i < n_rules; i++) {
-        if (dl_body_references_rule(all_rules[i]->body, rule_name)) {
-            is_recursive = true;
-            break;
-        }
-    }
-
-    if (is_recursive)
-        return dl_fixpoint_eval(db, clause, depth);
-
-    /* Non-recursive: compile all clauses with this name (OR semantics) and union. */
-    ray_t* result = NULL;
-    for (int i = 0; i < n_rules; i++) {
-        ray_t** body_elems = (ray_t**)ray_data(all_rules[i]->body);
-        int64_t body_len = ray_len(all_rules[i]->body);
-        ray_t* partial = dl_compile_body(db, body_elems, body_len, depth + 1);
-        if (RAY_IS_ERR(partial)) {
-            if (result) ray_release(result);
-            return partial;
-        }
-        /* Rename columns from this rule's head vars to caller vars */
-        dl_rename_columns(partial, all_rules[i], ce, clen);
-
-        if (!result) {
-            result = partial;
-        } else {
-            ray_t* merged = ray_union_all_fn(result, partial);
-            ray_release(result);
-            ray_release(partial);
-            if (RAY_IS_ERR(merged)) return merged;
-            result = merged;
-        }
-    }
-    return result;
-}
-
-/* Project a table to only the specified columns (by name sym IDs).
- * Returns a new table with only those columns, renamed to canonical names. */
-static ray_t* dl_project_to_head(ray_t* tbl, ray_dl_rule_t* rule,
-                                  int64_t* canonical_names, int n_canonical) {
-    if (rule->n_head_vars != n_canonical) return ray_error("domain", "head var count mismatch");
-    ray_t* proj = ray_table_new(n_canonical);
-    if (RAY_IS_ERR(proj)) return proj;
-
-    for (int i = 0; i < n_canonical; i++) {
-        int64_t head_var = rule->head_vars[i];
-        ray_t* col = ray_table_get_col(tbl, head_var);
-        if (!col) {
-            ray_release(proj);
-            return ray_error("domain", "query: head variable not found in body result");
-        }
-        proj = ray_table_add_col(proj, canonical_names[i], col);
-        if (RAY_IS_ERR(proj)) return proj;
-    }
-    return proj;
-}
-
-/* Semi-naive fixpoint evaluation for recursive rules.
- *
- * Algorithm:
- * 1. Separate rule clauses into base (non-self-referencing) and recursive
- * 2. Compute initial facts from base clauses
- * 3. Iterate: apply recursive clauses with delta substituted for self-reference
- * 4. new_facts = antijoin(new, all_facts) then distinct
- * 5. Accumulate and repeat until delta is empty or max iterations reached
- */
-static ray_t* dl_fixpoint_eval(ray_t* db, ray_t* clause, int depth) {
-    ray_t** ce = (ray_t**)ray_data(clause);
-    int64_t clen = ray_len(clause);
-    int64_t rule_name = ce[0]->i64;
-
-    ray_dl_rule_t* all_rules[64];
-    int n_rules = dl_find_all_rules(rule_name, all_rules, 64);
-
-    /* Separate into base and recursive clauses */
-    ray_dl_rule_t* base_rules[64];
-    ray_dl_rule_t* rec_rules[64];
-    int n_base = 0, n_rec = 0;
-
-    for (int i = 0; i < n_rules; i++) {
-        if (dl_body_references_rule(all_rules[i]->body, rule_name))
-            rec_rules[n_rec++] = all_rules[i];
-        else
-            base_rules[n_base++] = all_rules[i];
-    }
-
-    if (n_base == 0)
-        return ray_error("domain", "query: recursive rule has no base case");
-
-    /* Canonical column names: use first rule's head vars */
-    ray_dl_rule_t* canonical_rule = all_rules[0];
-    int n_head = canonical_rule->n_head_vars;
-    int64_t canonical_names[16];
-    for (int i = 0; i < n_head; i++)
-        canonical_names[i] = canonical_rule->head_vars[i];
-
-    /* Step 1: Compute base facts (union of all base clauses, projected to head vars) */
-    ray_t* all_facts = NULL;
-    for (int i = 0; i < n_base; i++) {
-        ray_t** body_elems = (ray_t**)ray_data(base_rules[i]->body);
-        int64_t body_len = ray_len(base_rules[i]->body);
-        ray_t* partial = dl_compile_body(db, body_elems, body_len, depth + 1);
-        if (RAY_IS_ERR(partial)) {
-            if (all_facts) ray_release(all_facts);
-            return partial;
-        }
-        /* Project body result to head vars and rename to canonical names */
-        ray_t* projected = dl_project_to_head(partial, base_rules[i], canonical_names, n_head);
-        ray_release(partial);
-        if (RAY_IS_ERR(projected)) {
-            if (all_facts) ray_release(all_facts);
-            return projected;
-        }
-
-        if (!all_facts) {
-            all_facts = projected;
-        } else {
-            ray_t* merged = ray_union_all_fn(all_facts, projected);
-            ray_release(all_facts);
-            ray_release(projected);
-            if (RAY_IS_ERR(merged)) return merged;
-            all_facts = merged;
-        }
-    }
-
-    /* Deduplicate base facts */
-    ray_t* deduped = ray_table_distinct_fn(all_facts);
-    ray_release(all_facts);
-    if (RAY_IS_ERR(deduped)) return deduped;
-    all_facts = deduped;
-
-    /* delta = base facts initially */
-    ray_t* delta = all_facts;
-    ray_retain(delta);
-
-    int64_t ncols = (int64_t)n_head;
-
-    /* Step 2: Iterate until fixpoint */
-    int max_iter = 1000;
-    for (int iter = 0; iter < max_iter && ray_table_nrows(delta) > 0; iter++) {
-        /* Apply each recursive clause, substituting self-reference with delta */
-        ray_t* new_facts = NULL;
-        for (int i = 0; i < n_rec; i++) {
-            ray_t** body_elems = (ray_t**)ray_data(rec_rules[i]->body);
-            int64_t body_len = ray_len(rec_rules[i]->body);
-
-            /* Compile body with override: self-references resolve to delta */
-            ray_t* partial = dl_compile_body_override(db, body_elems, body_len,
-                                                       depth + 1, rule_name, delta);
-            if (RAY_IS_ERR(partial)) {
-                ray_release(delta);
-                ray_release(all_facts);
-                if (new_facts) ray_release(new_facts);
-                return partial;
-            }
-
-            /* Project to head vars and rename to canonical names */
-            ray_t* projected = dl_project_to_head(partial, rec_rules[i], canonical_names, n_head);
-            ray_release(partial);
-            if (RAY_IS_ERR(projected)) {
-                ray_release(delta);
-                ray_release(all_facts);
-                if (new_facts) ray_release(new_facts);
-                return projected;
-            }
-
-            if (!new_facts) {
-                new_facts = projected;
-            } else {
-                ray_t* merged = ray_union_all_fn(new_facts, projected);
-                ray_release(new_facts);
-                ray_release(projected);
-                if (RAY_IS_ERR(merged)) {
-                    ray_release(delta);
-                    ray_release(all_facts);
-                    return merged;
-                }
-                new_facts = merged;
-            }
-        }
-
-        ray_release(delta);
-
-        if (!new_facts || ray_table_nrows(new_facts) == 0) {
-            if (new_facts) ray_release(new_facts);
-            break;
-        }
-
-        /* Deduplicate new_facts */
-        ray_t* distinct_new = ray_table_distinct_fn(new_facts);
-        ray_release(new_facts);
-        if (RAY_IS_ERR(distinct_new)) { ray_release(all_facts); return distinct_new; }
-        new_facts = distinct_new;
-
-        /* antijoin: remove already-known facts */
-        ray_t* keys = ray_list_new(ncols);
-        if (RAY_IS_ERR(keys)) { ray_release(new_facts); ray_release(all_facts); return keys; }
-        for (int64_t c = 0; c < ncols; c++) {
-            int64_t name_id = ray_table_col_name(all_facts, c);
-            ray_t* ks = ray_sym(name_id);
-            if (RAY_IS_ERR(ks)) {
-                ray_release(keys); ray_release(new_facts); ray_release(all_facts);
-                return ks;
-            }
-            ks->attrs |= RAY_ATTR_NAME;
-            keys = ray_list_append(keys, ks);
-            ray_release(ks);
-            if (RAY_IS_ERR(keys)) { ray_release(new_facts); ray_release(all_facts); return keys; }
-        }
-
-        ray_t* aj_args[3] = { new_facts, all_facts, keys };
-        delta = ray_antijoin_fn(aj_args, 3);
-        ray_release(keys);
-        ray_release(new_facts);
-        if (RAY_IS_ERR(delta)) { ray_release(all_facts); return delta; }
-
-        if (ray_table_nrows(delta) == 0) {
-            ray_release(delta);
-            break;
-        }
-
-        /* Accumulate: all_facts = union(all_facts, delta) */
-        ray_t* accumulated = ray_union_all_fn(all_facts, delta);
-        ray_release(all_facts);
-        if (RAY_IS_ERR(accumulated)) { ray_release(delta); return accumulated; }
-        all_facts = accumulated;
-    }
-
-    /* Rename from canonical head vars to caller vars */
-    ray_dl_rule_t* rule = dl_find_rule(rule_name);
-    if (rule) dl_rename_columns(all_facts, rule, ce, clen);
-
-    return all_facts;
-}
-
-/* Find shared variable names between two tables. Returns count, fills shared[] with sym IDs. */
-static int dl_find_shared_vars(ray_t* t1, ray_t* t2, int64_t* shared, int max) {
-    int count = 0;
-    int64_t nc1 = ray_table_ncols(t1);
-    int64_t nc2 = ray_table_ncols(t2);
-    for (int64_t i = 0; i < nc1 && count < max; i++) {
-        int64_t name1 = ray_table_col_name(t1, i);
-        for (int64_t j = 0; j < nc2; j++) {
-            if (ray_table_col_name(t2, j) == name1) {
-                shared[count++] = name1;
-                break;
-            }
-        }
-    }
-    return count;
-}
-
-/* Join two intermediate tables on shared variables.
- * If no shared variables, return cross product (not implemented — error). */
-static ray_t* dl_join_tables(ray_t* t1, ray_t* t2) {
-    int64_t shared[16];
-    int n_shared = dl_find_shared_vars(t1, t2, shared, 16);
-
-    if (n_shared == 0) {
-        /* No shared variables — this shouldn't happen in a well-formed query.
-         * Return t1 as-is (degenerate case). */
-        ray_retain(t1);
-        return t1;
-    }
-
-    /* Build key list for inner-join */
-    ray_t* keys = ray_list_new(n_shared);
-    if (RAY_IS_ERR(keys)) return keys;
-    for (int i = 0; i < n_shared; i++) {
-        ray_t* ks = ray_sym(shared[i]);
-        if (RAY_IS_ERR(ks)) { ray_release(keys); return ks; }
-        ks->attrs |= RAY_ATTR_NAME;
-        keys = ray_list_append(keys, ks);
-        ray_release(ks);
-        if (RAY_IS_ERR(keys)) return keys;
-    }
-
-    /* Call inner-join */
-    ray_t* join_args[3] = { t1, t2, keys };
-    ray_t* result = ray_inner_join(join_args, 3);
-    ray_release(keys);
-    return result;
-}
-
-/* Compile a sequence of body clauses into a single result table.
- * Strategy: compile each clause into an intermediate table, then join them pairwise. */
-/* Compile body clauses with an optional override: when a rule invocation matches
- * override_rule, substitute override_tbl instead of recursing. */
-static ray_t* dl_compile_body_override(ray_t* db, ray_t** clauses, int64_t n_clauses,
-                                        int depth, int64_t override_rule, ray_t* override_tbl) {
-    if (n_clauses == 0)
-        return ray_error("domain", "query: empty body");
-
-    ray_t* intermediates[32];
-    int n_intermediates = 0;
-    int n_ground_passed_o = 0;
-    ray_t* filters[32];
-    int n_filters = 0;
-    ray_t* negations[32];
-    int n_negations = 0;
-
-    for (int64_t i = 0; i < n_clauses; i++) {
-        int kind = dl_classify_clause(clauses[i]);
-        if (kind == 0) {
-            ray_t* tbl = dl_compile_triple(db, clauses[i]);
-            if (RAY_IS_ERR(tbl)) {
-                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                return tbl;
-            }
-            /* Fully-ground clause returns bool sentinel (not a table).
-             * true = fact exists (pass-through), false = no match (empty). */
-            if (tbl && !RAY_IS_ERR(tbl) && tbl->type == -RAY_BOOL) {
-                bool exists = tbl->b8;
-                ray_release(tbl);
-                if (!exists) {
-                    for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                    return ray_table_new(0);
-                }
-                n_ground_passed_o++;
-                continue;
-            }
-            intermediates[n_intermediates++] = tbl;
-        } else if (kind == 1) {
-            ray_t* tbl = dl_compile_rule_invocation_override(db, clauses[i], depth,
-                                                              override_rule, override_tbl);
-            if (RAY_IS_ERR(tbl)) {
-                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                return tbl;
-            }
-            intermediates[n_intermediates++] = tbl;
-        } else if (kind == 2) {
-            filters[n_filters++] = clauses[i];
-        } else if (kind == 3) {
-            negations[n_negations++] = clauses[i];
-        } else {
-            for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-            return ray_error("domain", "query: unrecognized clause form");
-        }
-    }
-
-    if (n_intermediates == 0)
-        return ray_error("domain", "query: no variable-binding clauses in body");
-
-    /* Join intermediates pairwise */
-    ray_t* result = intermediates[0];
-    for (int i = 1; i < n_intermediates; i++) {
-        ray_t* joined = dl_join_tables(result, intermediates[i]);
-        ray_release(result);
-        ray_release(intermediates[i]);
-        if (RAY_IS_ERR(joined)) {
-            for (int j = i + 1; j < n_intermediates; j++) ray_release(intermediates[j]);
-            return joined;
-        }
-        result = joined;
-    }
-
-    /* Apply negation clauses via antijoin */
-    for (int i = 0; i < n_negations; i++) {
-        ray_t* neg_clause = negations[i];
-        ray_t** ne = (ray_t**)ray_data(neg_clause);
-        int64_t nlen = ray_len(neg_clause);
-        if (nlen < 2) { ray_release(result); return ray_error("domain", "query: (not ...) requires an inner clause"); }
-        ray_t* inner = ne[1]; /* the inner clause */
-
-        /* Compile inner clause */
-        int inner_kind = dl_classify_clause(inner);
-        ray_t* neg_tbl = NULL;
-        if (inner_kind == 0) {
-            neg_tbl = dl_compile_triple(db, inner);
-        } else if (inner_kind == 1) {
-            neg_tbl = dl_compile_rule_invocation_override(db, inner, depth,
-                                                           override_rule, override_tbl);
-        } else {
-            ray_release(result);
-            return ray_error("domain", "query: (not ...) inner clause must be a triple or rule");
-        }
-        if (RAY_IS_ERR(neg_tbl)) { ray_release(result); return neg_tbl; }
-
-        /* Find shared variables between result and neg_tbl */
-        int64_t shared[16];
-        int n_shared = dl_find_shared_vars(result, neg_tbl, shared, 16);
-        if (n_shared > 0) {
-            ray_t* keys = ray_list_new(n_shared);
-            if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
-            for (int k = 0; k < n_shared; k++) {
-                ray_t* ks = ray_sym(shared[k]);
-                if (RAY_IS_ERR(ks)) { ray_release(keys); ray_release(neg_tbl); ray_release(result); return ks; }
-                ks->attrs |= RAY_ATTR_NAME;
-                keys = ray_list_append(keys, ks);
-                ray_release(ks);
-                if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
-            }
-            ray_t* aj_args[3] = { result, neg_tbl, keys };
-            ray_t* filtered = ray_antijoin_fn(aj_args, 3);
-            ray_release(keys);
-            ray_release(neg_tbl);
-            ray_release(result);
-            if (RAY_IS_ERR(filtered)) return filtered;
-            result = filtered;
-        } else {
-            ray_release(neg_tbl);
-        }
-    }
-
-    /* Apply filters */
-    for (int i = 0; i < n_filters; i++) {
-        ray_t* fclause = filters[i];
-        ray_t** fe = (ray_t**)ray_data(fclause);
-        int64_t flen = ray_len(fclause);
-        if (flen < 3) { ray_release(result); return ray_error("domain", "query: filter needs at least 3 elements"); }
-
-        ray_graph_t* g = ray_graph_new(result);
-        if (!g) { ray_release(result); return ray_error("oom", NULL); }
-        ray_op_t* root = ray_const_table(g, result);
-
-        ray_op_t* left_op = NULL;
-        if (is_dl_var(fe[1])) {
-            ray_t* vname = ray_sym_str(fe[1]->i64);
-            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
-            left_op = ray_scan(g, ray_str_ptr(vname));
-        }
-
-        ray_op_t* right_op = NULL;
-        if (is_dl_var(fe[2])) {
-            ray_t* vname = ray_sym_str(fe[2]->i64);
-            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
-            right_op = ray_scan(g, ray_str_ptr(vname));
-        } else {
-            ray_t* cval = ray_eval(fe[2]);
-            if (!cval || RAY_IS_ERR(cval)) { ray_graph_free(g); ray_release(result); return cval ? cval : ray_error("type", NULL); }
-            if (cval->type == -RAY_I64)
-                right_op = ray_const_i64(g, cval->i64);
-            else if (cval->type == -RAY_F64)
-                right_op = ray_const_f64(g, cval->f64);
-            else if (cval->type == -RAY_SYM)
-                right_op = ray_const_i64(g, cval->i64);
-            else {
-                ray_release(cval); ray_graph_free(g); ray_release(result);
-                return ray_error("type", "query: unsupported filter constant type");
-            }
-            ray_release(cval);
-        }
-
-        if (!left_op || !right_op) {
-            ray_graph_free(g); ray_release(result);
-            return ray_error("domain", "query: cannot resolve filter operands");
-        }
-
-        ray_t* op_name_str = ray_sym_str(fe[0]->i64);
-        const char* op_name = op_name_str ? ray_str_ptr(op_name_str) : "";
-        ray_op_t* cmp = NULL;
-        if      (strcmp(op_name, ">")  == 0) cmp = ray_gt(g, left_op, right_op);
-        else if (strcmp(op_name, ">=") == 0) cmp = ray_ge(g, left_op, right_op);
-        else if (strcmp(op_name, "<")  == 0) cmp = ray_lt(g, left_op, right_op);
-        else if (strcmp(op_name, "<=") == 0) cmp = ray_le(g, left_op, right_op);
-        else if (strcmp(op_name, "==") == 0) cmp = ray_eq(g, left_op, right_op);
-        else if (strcmp(op_name, "!=") == 0) cmp = ray_ne(g, left_op, right_op);
-        else {
-            ray_graph_free(g); ray_release(result);
-            return ray_error("domain", "query: unsupported filter operator");
-        }
-
-        if (!cmp) { ray_graph_free(g); ray_release(result); return ray_error("oom", NULL); }
-        root = ray_filter(g, root, cmp);
-        root = ray_optimize(g, root);
-        ray_t* filtered = ray_execute(g, root);
-        ray_graph_free(g);
-        ray_release(result);
-        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
-        if (ray_is_lazy(filtered)) filtered = ray_lazy_materialize(filtered);
-        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
-        result = filtered;
-    }
-
-    return result;
-}
-
-static ray_t* dl_compile_body(ray_t* db, ray_t** clauses, int64_t n_clauses, int depth) {
-    if (n_clauses == 0)
-        return ray_error("domain", "query: empty body");
-
-    /* Separate clauses into pattern/rule clauses, filter clauses, and negations */
-    ray_t* intermediates[32];
-    int n_intermediates = 0;
-    int n_ground_passed = 0; /* ground clauses that matched (existence checks) */
-
-    ray_t* filters[32];
-    int n_filters = 0;
-    ray_t* negations[32];
-    int n_negations = 0;
-
-    for (int64_t i = 0; i < n_clauses; i++) {
-        int kind = dl_classify_clause(clauses[i]);
-        if (kind == 0) {
-            /* Triple pattern */
-            ray_t* tbl = dl_compile_triple(db, clauses[i]);
-            if (RAY_IS_ERR(tbl)) {
-                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                return tbl;
-            }
-            /* Fully-ground clause returns bool sentinel */
-            if (tbl && !RAY_IS_ERR(tbl) && tbl->type == -RAY_BOOL) {
-                bool exists = tbl->b8;
-                ray_release(tbl);
-                if (!exists) {
-                    for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                    return ray_table_new(0);
-                }
-                n_ground_passed++;
-                continue;
-            }
-            intermediates[n_intermediates++] = tbl;
-        } else if (kind == 1) {
-            /* Rule invocation */
-            ray_t* tbl = dl_compile_rule_invocation(db, clauses[i], depth);
-            if (RAY_IS_ERR(tbl)) {
-                for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-                return tbl;
-            }
-            intermediates[n_intermediates++] = tbl;
-        } else if (kind == 2) {
-            /* Filter — save for later */
-            filters[n_filters++] = clauses[i];
-        } else if (kind == 3) {
-            /* Negation — save for later */
-            negations[n_negations++] = clauses[i];
-        } else {
-            for (int j = 0; j < n_intermediates; j++) ray_release(intermediates[j]);
-            return ray_error("domain", "query: unrecognized clause form");
-        }
-    }
-
-    if (n_intermediates == 0)
-        return ray_error("domain", "query: no variable-binding clauses in body");
-
-    /* Join intermediates pairwise */
-    ray_t* result = intermediates[0];
-    for (int i = 1; i < n_intermediates; i++) {
-        ray_t* joined = dl_join_tables(result, intermediates[i]);
-        ray_release(result);
-        ray_release(intermediates[i]);
-        if (RAY_IS_ERR(joined)) {
-            for (int j = i + 1; j < n_intermediates; j++) ray_release(intermediates[j]);
-            return joined;
-        }
-        result = joined;
-    }
-
-    /* Apply negation clauses via antijoin */
-    for (int i = 0; i < n_negations; i++) {
-        ray_t* neg_clause = negations[i];
-        ray_t** ne = (ray_t**)ray_data(neg_clause);
-        int64_t nlen = ray_len(neg_clause);
-        if (nlen < 2) { ray_release(result); return ray_error("domain", "query: (not ...) requires an inner clause"); }
-        ray_t* inner = ne[1]; /* the inner clause */
-
-        /* Compile inner clause */
-        int inner_kind = dl_classify_clause(inner);
-        ray_t* neg_tbl = NULL;
-        if (inner_kind == 0) {
-            neg_tbl = dl_compile_triple(db, inner);
-        } else if (inner_kind == 1) {
-            neg_tbl = dl_compile_rule_invocation(db, inner, depth);
-        } else {
-            ray_release(result);
-            return ray_error("domain", "query: (not ...) inner clause must be a triple or rule");
-        }
-        if (RAY_IS_ERR(neg_tbl)) { ray_release(result); return neg_tbl; }
-
-        /* Find shared variables between result and neg_tbl */
-        int64_t shared[16];
-        int n_shared = dl_find_shared_vars(result, neg_tbl, shared, 16);
-        if (n_shared > 0) {
-            ray_t* keys = ray_list_new(n_shared);
-            if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
-            for (int k = 0; k < n_shared; k++) {
-                ray_t* ks = ray_sym(shared[k]);
-                if (RAY_IS_ERR(ks)) { ray_release(keys); ray_release(neg_tbl); ray_release(result); return ks; }
-                ks->attrs |= RAY_ATTR_NAME;
-                keys = ray_list_append(keys, ks);
-                ray_release(ks);
-                if (RAY_IS_ERR(keys)) { ray_release(neg_tbl); ray_release(result); return keys; }
-            }
-            ray_t* aj_args[3] = { result, neg_tbl, keys };
-            ray_t* filtered = ray_antijoin_fn(aj_args, 3);
-            ray_release(keys);
-            ray_release(neg_tbl);
-            ray_release(result);
-            if (RAY_IS_ERR(filtered)) return filtered;
-            result = filtered;
-        } else {
-            ray_release(neg_tbl);
-        }
-    }
-
-    /* Apply filters.
-     * Each filter is (op ?var const) or (op ?var1 ?var2).
-     * We compile to a DAG filter on the result table. */
-    for (int i = 0; i < n_filters; i++) {
-        ray_t* fclause = filters[i];
-        ray_t** fe = (ray_t**)ray_data(fclause);
-        int64_t flen = ray_len(fclause);
-        if (flen < 3) { ray_release(result); return ray_error("domain", "query: filter needs at least 3 elements"); }
-
-        /* Build DAG: scan column, compare to constant or another column */
-        ray_graph_t* g = ray_graph_new(result);
-        if (!g) { ray_release(result); return ray_error("oom", NULL); }
-
-        ray_op_t* root = ray_const_table(g, result);
-
-        /* Resolve left operand: variable -> column scan */
-        ray_op_t* left_op = NULL;
-        if (is_dl_var(fe[1])) {
-            ray_t* vname = ray_sym_str(fe[1]->i64);
-            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
-            left_op = ray_scan(g, ray_str_ptr(vname));
-        }
-
-        /* Resolve right operand: constant or variable */
-        ray_op_t* right_op = NULL;
-        if (is_dl_var(fe[2])) {
-            ray_t* vname = ray_sym_str(fe[2]->i64);
-            if (!vname) { ray_graph_free(g); ray_release(result); return ray_error("domain", "query: unknown variable in filter"); }
-            right_op = ray_scan(g, ray_str_ptr(vname));
-        } else {
-            /* Constant: evaluate it */
-            ray_t* cval = ray_eval(fe[2]);
-            if (!cval || RAY_IS_ERR(cval)) { ray_graph_free(g); ray_release(result); return cval ? cval : ray_error("type", NULL); }
-            if (cval->type == -RAY_I64)
-                right_op = ray_const_i64(g, cval->i64);
-            else if (cval->type == -RAY_F64)
-                right_op = ray_const_f64(g, cval->f64);
-            else if (cval->type == -RAY_SYM)
-                right_op = ray_const_i64(g, cval->i64);  /* sym stored as i64 in EAV */
-            else {
-                ray_release(cval); ray_graph_free(g); ray_release(result);
-                return ray_error("type", "query: unsupported filter constant type");
-            }
-            ray_release(cval);
-        }
-
-        if (!left_op || !right_op) {
-            ray_graph_free(g); ray_release(result);
-            return ray_error("domain", "query: cannot resolve filter operands");
-        }
-
-        /* Map operator name to DAG comparison function */
-        ray_t* op_name_str = ray_sym_str(fe[0]->i64);
-        const char* op_name = op_name_str ? ray_str_ptr(op_name_str) : "";
-        ray_op_t* cmp = NULL;
-        if      (strcmp(op_name, ">")  == 0) cmp = ray_gt(g, left_op, right_op);
-        else if (strcmp(op_name, ">=") == 0) cmp = ray_ge(g, left_op, right_op);
-        else if (strcmp(op_name, "<")  == 0) cmp = ray_lt(g, left_op, right_op);
-        else if (strcmp(op_name, "<=") == 0) cmp = ray_le(g, left_op, right_op);
-        else if (strcmp(op_name, "==") == 0) cmp = ray_eq(g, left_op, right_op);
-        else if (strcmp(op_name, "!=") == 0) cmp = ray_ne(g, left_op, right_op);
-        else {
-            ray_graph_free(g); ray_release(result);
-            return ray_error("domain", "query: unsupported filter operator");
-        }
-
-        if (!cmp) { ray_graph_free(g); ray_release(result); return ray_error("oom", NULL); }
-        root = ray_filter(g, root, cmp);
-
-        root = ray_optimize(g, root);
-        ray_t* filtered = ray_execute(g, root);
-        ray_graph_free(g);
-        ray_release(result);
-        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
-        if (ray_is_lazy(filtered)) filtered = ray_lazy_materialize(filtered);
-        if (!filtered || RAY_IS_ERR(filtered)) return filtered ? filtered : ray_error("domain", NULL);
-        result = filtered;
-    }
-
-    return result;
-}
-
 /* (query db (find ?a ?b ...) (where clause1 clause2 ...))
- * Special form: db is evaluated, find/where are NOT evaluated. */
+ * Special form: db is evaluated, find/where are NOT evaluated.
+ * Creates a temporary dl_program_t, registers the EAV table,
+ * copies global rules, builds a synthetic query rule, and evaluates. */
 static ray_t* ray_query_fn(ray_t** args, int64_t n) {
     if (n < 3)
         return ray_error("arity", "query expects: db (find ...) (where ...)");
@@ -12283,15 +11634,15 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
         return ray_error("type", "query: expected (find ...) as second argument");
     }
 
-    /* Collect find variables */
-    int64_t find_vars[16];
+    /* Collect find variable sym IDs */
+    int64_t find_var_syms[DL_MAX_ARITY];
     int n_find_vars = 0;
-    for (int64_t i = 1; i < find_len && n_find_vars < 16; i++) {
+    for (int64_t i = 1; i < find_len && n_find_vars < DL_MAX_ARITY; i++) {
         if (!is_dl_var(find_elems[i])) {
             ray_release(db);
             return ray_error("type", "query: find arguments must be ?variables");
         }
-        find_vars[n_find_vars++] = find_elems[i]->i64;
+        find_var_syms[n_find_vars++] = find_elems[i]->i64;
     }
 
     /* Parse where clause */
@@ -12314,72 +11665,218 @@ static ray_t* ray_query_fn(ray_t** args, int64_t n) {
         return ray_error("type", "query: expected (where ...) as third argument");
     }
 
-    /* Compile the body clauses */
-    ray_t* result = dl_compile_body(db, where_elems + 1, where_len - 1, 0);
-    ray_release(db);
-    if (RAY_IS_ERR(result)) return result;
+    /* Build variable map for the query */
+    dl_var_map_t vars;
+    memset(&vars, 0, sizeof(vars));
 
-    /* If body returned 0-column table (ground-clause short-circuit),
-     * validate that find variables appear in at least one body clause,
-     * then build an empty result with the correct schema. */
-    int64_t ncols = ray_table_ncols(result);
-    if (ncols == 0 && n_find_vars > 0) {
-        /* Check each find var appears in a binding clause (triple or rule),
-         * not just in a filter which doesn't produce bindings. */
-        for (int fi = 0; fi < n_find_vars; fi++) {
-            bool found = false;
-            for (int64_t ci = 1; ci < where_len && !found; ci++) {
-                ray_t* clause = where_elems[ci];
-                if (!is_list(clause)) continue;
-                int kind = dl_classify_clause(clause);
-                if (kind != 0 && kind != 1) continue; /* skip filters */
-                ray_t** ce = (ray_t**)ray_data(clause);
-                int64_t clen = ray_len(clause);
-                for (int64_t j = 0; j < clen && !found; j++) {
-                    if (is_dl_var(ce[j]) && ce[j]->i64 == find_vars[fi])
-                        found = true;
+    /* Pre-populate the variable map with find variables so they get
+     * the lowest indices (0, 1, 2, ...) — makes projection trivial */
+    for (int i = 0; i < n_find_vars; i++)
+        dl_var_get_or_create(&vars, find_var_syms[i]);
+
+    /* Build synthetic query rule: __query(?find_vars...) :- body_clauses... */
+    dl_rule_t qrule;
+    dl_rule_init(&qrule, "__query", n_find_vars);
+    for (int i = 0; i < n_find_vars; i++)
+        dl_rule_head_var(&qrule, i, i);
+
+    /* Parse body clauses into the query rule */
+    for (int64_t i = 1; i < where_len; i++) {
+        ray_t* err = dl_parse_body_clause(&qrule, where_elems[i], &vars);
+        if (err) { ray_release(db); return err; }
+    }
+    qrule.n_vars = vars.n;
+
+    /* Create temporary program */
+    dl_program_t* prog = dl_program_new();
+    if (!prog) { ray_release(db); return ray_error("oom", "query: cannot create program"); }
+
+    /* Register the EAV table as a 3-arity "eav" relation.
+     * The 'a' column is RAY_SYM with adaptive width — the Datalog engine
+     * operates on I64 data only, so convert SYM columns to I64 first. */
+    {
+        int64_t nrows_db = ray_table_nrows(db);
+        ray_t* eav_tbl = ray_table_new(3);
+        for (int c = 0; c < 3; c++) {
+            ray_t* col = ray_table_get_col_idx(db, c);
+            if (!col) continue;
+            if (col->type == RAY_SYM) {
+                /* Convert SYM -> I64: read sym IDs via ray_read_sym */
+                ray_t* i64col = ray_vec_new(RAY_I64, nrows_db);
+                if (i64col && !RAY_IS_ERR(i64col)) {
+                    i64col->len = nrows_db;
+                    int64_t* d = (int64_t*)ray_data(i64col);
+                    for (int64_t r = 0; r < nrows_db; r++)
+                        d[r] = ray_read_sym(ray_data(col), r, col->type, col->attrs);
+                    eav_tbl = ray_table_add_col(eav_tbl, ray_table_col_name(db, c), i64col);
+                    ray_release(i64col);
                 }
-            }
-            if (!found) {
-                ray_release(result);
-                return ray_error("domain", "query: find variable not bound by any body clause");
+            } else {
+                eav_tbl = ray_table_add_col(eav_tbl, ray_table_col_name(db, c), col);
             }
         }
-        /* All find vars validated — build empty schema */
+        dl_add_edb(prog, "eav", eav_tbl, 3);
+        ray_release(eav_tbl);
+    }
+
+    /* Copy all global rules into the program */
+    for (int i = 0; i < g_dl_n_rules; i++)
+        dl_add_rule(prog, &g_dl_rules[i]);
+
+    /* Add the synthetic query rule */
+    dl_add_rule(prog, &qrule);
+
+    /* Stratify and evaluate */
+    if (dl_stratify(prog) != 0) {
+        dl_program_free(prog);
+        ray_release(db);
+        return ray_error("domain", "query: unstratifiable negation cycle");
+    }
+
+    if (dl_eval(prog) != 0) {
+        dl_program_free(prog);
+        ray_release(db);
+        return ray_error("domain", "query: evaluation failed");
+    }
+
+    /* Get the result */
+    ray_t* raw = dl_query(prog, "__query");
+    if (!raw || RAY_IS_ERR(raw)) {
+        dl_program_free(prog);
+        ray_release(db);
+        return raw ? raw : ray_error("domain", "query: no result");
+    }
+
+    /* Build result table with user-friendly column names (the ?variable names) */
+    int64_t nrows = ray_table_nrows(raw);
+    int64_t ncols = ray_table_ncols(raw);
+    ray_t* result = ray_table_new(n_find_vars);
+    for (int i = 0; i < n_find_vars && i < (int)ncols; i++) {
+        ray_t* col = ray_table_get_col_idx(raw, i);
+        if (col)
+            result = ray_table_add_col(result, find_var_syms[i], col);
+    }
+
+    /* Handle empty result: ensure schema is correct */
+    if (nrows == 0 && n_find_vars > 0 && ray_table_ncols(result) == 0) {
         ray_release(result);
         result = ray_table_new(n_find_vars);
-        if (!RAY_IS_ERR(result)) {
-            for (int i = 0; i < n_find_vars; i++) {
-                ray_t* ev = ray_vec_new(RAY_I64, 0);
-                if (!RAY_IS_ERR(ev)) {
-                    result = ray_table_add_col(result, find_vars[i], ev);
-                    ray_release(ev);
-                }
-            }
-        }
-        return result;
-    }
-
-    /* Project to find variables only */
-    if (n_find_vars > 0 && n_find_vars < ncols) {
-        ray_t* projected = ray_table_new(n_find_vars);
-        if (RAY_IS_ERR(projected)) { ray_release(result); return projected; }
-
         for (int i = 0; i < n_find_vars; i++) {
-            /* Find column matching this find var */
-            ray_t* col = ray_table_get_col(result, find_vars[i]);
-            if (!col) {
-                ray_release(projected); ray_release(result);
-                return ray_error("domain", "query: find variable not found in result");
+            ray_t* ev = ray_vec_new(RAY_I64, 0);
+            if (!RAY_IS_ERR(ev)) {
+                result = ray_table_add_col(result, find_var_syms[i], ev);
+                ray_release(ev);
             }
-            projected = ray_table_add_col(projected, find_vars[i], col);
-            if (RAY_IS_ERR(projected)) { ray_release(result); return projected; }
         }
-        ray_release(result);
-        result = projected;
     }
 
+    dl_program_free(prog);
+    ray_release(db);
     return result;
+}
+
+/* ══════════════════════════════════════════
+ * Programmatic Datalog API builtins
+ * ══════════════════════════════════════════ */
+
+/* Opaque handle for dl_program_t stored in a ray_t atom.
+ * We store the pointer in the i64 field. */
+static ray_t* dl_wrap_program(dl_program_t* prog) {
+    ray_t* obj = ray_alloc(0);
+    if (!obj || RAY_IS_ERR(obj)) return ray_error("oom", NULL);
+    obj->type = -RAY_I64;
+    obj->i64 = (int64_t)(uintptr_t)prog;
+    return obj;
+}
+
+static dl_program_t* dl_unwrap_program(ray_t* obj) {
+    if (!obj || obj->type != -RAY_I64) return NULL;
+    return (dl_program_t*)(uintptr_t)obj->i64;
+}
+
+/* (dl-program) — create a new empty dl_program_t */
+static ray_t* ray_dl_program_fn(ray_t** args, int64_t n) {
+    (void)args;
+    if (n != 0) return ray_error("arity", "dl-program takes no arguments");
+    dl_program_t* prog = dl_program_new();
+    if (!prog) return ray_error("oom", "dl-program: cannot allocate");
+    return dl_wrap_program(prog);
+}
+
+/* (dl-add-edb prog "name" table arity) — register EDB */
+static ray_t* ray_dl_add_edb_fn(ray_t** args, int64_t n) {
+    if (n != 4) return ray_error("arity", "dl-add-edb expects: prog name table arity");
+    dl_program_t* prog = dl_unwrap_program(args[0]);
+    if (!prog) return ray_error("type", "dl-add-edb: first arg must be a dl-program");
+
+    /* Name can be a symbol or string */
+    const char* name = NULL;
+    ray_t* name_str = NULL;
+    if (args[1]->type == -RAY_SYM) {
+        name_str = ray_sym_str(args[1]->i64);
+        name = name_str ? ray_str_ptr(name_str) : NULL;
+    }
+    if (!name) return ray_error("type", "dl-add-edb: name must be a symbol");
+
+    if (args[2]->type != RAY_TABLE)
+        return ray_error("type", "dl-add-edb: third arg must be a table");
+    if (args[3]->type != -RAY_I64)
+        return ray_error("type", "dl-add-edb: arity must be an integer");
+
+    int rc = dl_add_edb(prog, name, args[2], (int)args[3]->i64);
+    return (rc >= 0) ? ray_bool(true) : ray_error("domain", "dl-add-edb: failed");
+}
+
+/* (dl-stratify prog) — compute strata */
+static ray_t* ray_dl_stratify_fn(ray_t* x) {
+    dl_program_t* prog = dl_unwrap_program(x);
+    if (!prog) return ray_error("type", "dl-stratify: arg must be a dl-program");
+    int rc = dl_stratify(prog);
+    return (rc == 0) ? ray_bool(true) : ray_error("domain", "dl-stratify: unstratifiable");
+}
+
+/* (dl-eval prog) — evaluate to fixpoint */
+static ray_t* ray_dl_eval_fn(ray_t* x) {
+    dl_program_t* prog = dl_unwrap_program(x);
+    if (!prog) return ray_error("type", "dl-eval: arg must be a dl-program");
+    int rc = dl_eval(prog);
+    return (rc == 0) ? ray_bool(true) : ray_error("domain", "dl-eval: evaluation failed");
+}
+
+/* (dl-query prog "pred") — get result table */
+static ray_t* ray_dl_query_fn(ray_t* prog_obj, ray_t* pred_obj) {
+    dl_program_t* prog = dl_unwrap_program(prog_obj);
+    if (!prog) return ray_error("type", "dl-query: first arg must be a dl-program");
+
+    const char* pred = NULL;
+    if (pred_obj->type == -RAY_SYM) {
+        ray_t* s = ray_sym_str(pred_obj->i64);
+        pred = s ? ray_str_ptr(s) : NULL;
+    }
+    if (!pred) return ray_error("type", "dl-query: pred must be a symbol");
+
+    ray_t* result = dl_query(prog, pred);
+    if (!result) return ray_error("domain", "dl-query: predicate not found");
+    ray_retain(result);
+    return result;
+}
+
+/* (dl-provenance prog "pred") — get provenance column */
+static ray_t* ray_dl_provenance_fn(ray_t* prog_obj, ray_t* pred_obj) {
+    dl_program_t* prog = dl_unwrap_program(prog_obj);
+    if (!prog) return ray_error("type", "dl-provenance: first arg must be a dl-program");
+
+    const char* pred = NULL;
+    if (pred_obj->type == -RAY_SYM) {
+        ray_t* s = ray_sym_str(pred_obj->i64);
+        pred = s ? ray_str_ptr(s) : NULL;
+    }
+    if (!pred) return ray_error("type", "dl-provenance: pred must be a symbol");
+
+    ray_t* prov = dl_get_provenance(prog, pred);
+    if (!prov) return ray_error("domain", "dl-provenance: not available");
+    ray_retain(prov);
+    return prov;
 }
 
 /* ══════════════════════════════════════════
@@ -12633,6 +12130,14 @@ static void ray_register_builtins(void) {
     /* Datalog */
     register_vary("rule",         RAY_FN_SPECIAL_FORM, ray_rule_fn);
     register_vary("query",        RAY_FN_SPECIAL_FORM, ray_query_fn);
+
+    /* Programmatic Datalog API */
+    register_vary("dl-program",    RAY_FN_NONE, ray_dl_program_fn);
+    register_vary("dl-add-edb",    RAY_FN_NONE, ray_dl_add_edb_fn);
+    register_unary("dl-stratify",  RAY_FN_NONE, ray_dl_stratify_fn);
+    register_unary("dl-eval",      RAY_FN_NONE, ray_dl_eval_fn);
+    register_binary("dl-query",    RAY_FN_NONE, ray_dl_query_fn);
+    register_binary("dl-provenance", RAY_FN_NONE, ray_dl_provenance_fn);
 }
 
 /* ══════════════════════════════════════════
@@ -12648,11 +12153,8 @@ ray_err_t ray_lang_init(void) {
 
 void ray_lang_destroy(void) {
     if (__raise_val) { ray_release(__raise_val); __raise_val = NULL; }
-    /* Release Datalog rule bodies */
-    for (int i = 0; i < dl_n_rules; i++) {
-        if (dl_rules[i].body) { ray_release(dl_rules[i].body); dl_rules[i].body = NULL; }
-    }
-    dl_n_rules = 0;
+    /* Reset global Datalog rule storage */
+    g_dl_n_rules = 0;
     ray_env_destroy();
     ray_compile_reset();
 }
