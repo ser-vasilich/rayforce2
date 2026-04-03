@@ -108,7 +108,7 @@
       <h2>Build from Source</h2>
       <p>Clone the repository and build:</p>
       <pre><code>git clone https://github.com/RayforceDB/rayforce2.git
-cd rayforce</code></pre>
+cd rayforce2</code></pre>
 
       <h3>Debug Build (default)</h3>
       <p>The default build enables AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan) for maximum safety during development:</p>
@@ -119,7 +119,7 @@ cd rayforce</code></pre>
       <pre><code>make release</code></pre>
 
       <h3>Run Tests</h3>
-      <p>Rayforce ships with 563 tests across 32 suites covering every subsystem:</p>
+      <p>Rayforce ships with 564 tests across 43 suites covering every subsystem:</p>
       <pre><code><span class="hl-comment"># Run all tests</span>
 make test
 
@@ -132,47 +132,67 @@ make test
       <h2>Start the REPL</h2>
       <p>The Rayfall REPL provides an interactive environment with syntax highlighting, bracket matching, tab completion, and multi-line input:</p>
       <pre><code>./rayforce</code></pre>
-      <p>You will see a prompt like:</p>
-      <pre><code><span class="hl-comment">ray&gt;</span></code></pre>
+      <p>You will see the <code>‣</code> prompt (a green triangle bullet):</p>
+      <pre><code><span class="hl-comment">‣</span></code></pre>
 
       <h2>Your First Table</h2>
       <p>Create a table with two columns using the <code>table</code> function. Column names are symbols (quoted identifiers), and column data are vectors:</p>
-      <pre><code><span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-str">A</span> <span class="hl-str">B</span> <span class="hl-str">C</span>])))
-x y
------
-1 A
-2 B
-3 C</code></pre>
+      <pre><code><span class="hl-comment">‣</span> (<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-str">A</span> <span class="hl-str">B</span> <span class="hl-str">C</span>])))
+┌─────┬───────────────────────────────┐
+│  x  │               y               │
+│ i64 │              sym              │
+├─────┼───────────────────────────────┤
+│ 1   │ A                             │
+│ 2   │ B                             │
+│ 3   │ C                             │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h2>Your First Query</h2>
       <p>Use <code>select</code> to query the table. The <code>where:</code> clause filters rows, and you can project specific columns:</p>
-      <pre><code><span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> <span class="hl-sym">x</span> <span class="hl-num">1</span>)})
-x y
------
-2 B
-3 C</code></pre>
+      <pre><code><span class="hl-comment">‣</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> <span class="hl-sym">x</span> <span class="hl-num">1</span>)})
+┌─────┬───────────────────────────────┐
+│  x  │               y               │
+│ i64 │              sym              │
+├─────┼───────────────────────────────┤
+│ 2   │ B                             │
+│ 3   │ C                             │
+├─────┴───────────────────────────────┤
+│ 2 rows (2 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <p>Add computed columns and aggregations:</p>
       <pre><code><span class="hl-comment">; Select with a computed column</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">x:</span>x <span class="hl-sym">x2:</span> (<span class="hl-fn">*</span> x x)}})
-x  x2
--------
-1   1
-2   4
-3   9
+<span class="hl-comment">‣</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">x:</span>x <span class="hl-sym">x2:</span> (<span class="hl-fn">*</span> x x)})
+┌─────┬───────────────────────────────┐
+│  x  │              x2               │
+│ i64 │              i64              │
+├─────┼───────────────────────────────┤
+│ 1   │ 1                             │
+│ 2   │ 4                             │
+│ 3   │ 9                             │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘
 
 <span class="hl-comment">; Group by and aggregate</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">by:</span> {<span class="hl-sym">y:</span>y} <span class="hl-sym">cols:</span> {<span class="hl-sym">total:</span> (<span class="hl-fn">sum</span> x)}})
-y  total
----------
-A      1
-B      2
-C      3</code></pre>
+<span class="hl-comment">‣</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">by:</span> y <span class="hl-sym">total:</span> (<span class="hl-fn">sum</span> x)})
+┌─────┬───────────────────────────────┐
+│  y  │             total             │
+│ sym │              i64              │
+├─────┼───────────────────────────────┤
+│ A   │ 1                             │
+│ B   │ 2                             │
+│ C   │ 3                             │
+├─────┴───────────────────────────────┤
+│ 3 rows (3 shown) 2 columns (2 shown)│
+└─────────────────────────────────────┘</code></pre>
 
       <h2>Load a CSV File</h2>
       <p>Load data from CSV files with automatic type inference, parallel parsing, and null handling:</p>
-      <pre><code><span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> data (<span class="hl-fn">read-csv</span> <span class="hl-str">"trades.csv"</span>))
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>data <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> price <span class="hl-num">100</span>)})</code></pre>
+      <pre><code><span class="hl-comment">‣</span> (<span class="hl-kw">set</span> data (<span class="hl-fn">read-csv</span> <span class="hl-str">"trades.csv"</span>))
+<span class="hl-comment">‣</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>data <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> price <span class="hl-num">100</span>)})</code></pre>
 
       <h2>Run a Script</h2>
       <p>Rayfall scripts use the <code>.rfl</code> extension. Run them directly from the command line:</p>
