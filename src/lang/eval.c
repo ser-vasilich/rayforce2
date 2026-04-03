@@ -11306,20 +11306,23 @@ static dl_expr_t* dl_build_expr(ray_t* node, dl_var_map_t* vars) {
  * A triple pattern has exactly 3 elements and the first element is a
  * ?variable (distinguishing it from rule invocations where the first
  * element is a predicate name symbol). */
+static bool dl_is_wildcard(ray_t* node) {
+    if (node->type != -RAY_SYM) return false;
+    ray_t* s = ray_sym_str(node->i64);
+    return s && ray_str_len(s) == 1 && ray_str_ptr(s)[0] == '_';
+}
+
 static bool dl_is_triple_pattern(ray_t* clause) {
     if (!is_list(clause) || ray_len(clause) != 3) return false;
     ray_t** ce = (ray_t**)ray_data(clause);
-    /* Position 0 must be a ?variable or constant (not a plain name symbol
-     * that could be a rule predicate). Triple patterns start with ?e or a
-     * literal entity, never with a bare predicate name. */
+    /* Position 0 must be a ?variable, wildcard _, integer constant,
+     * or quoted symbol (not a bare name that could be a rule predicate).
+     * Triple patterns: (?e :attr ?v), (_ :attr ?v), (1 :attr ?v) */
     if (is_dl_var(ce[0])) return true;
     if (ce[0]->type == -RAY_I64) return true;
-    /* If position 0 is a symbol with RAY_ATTR_NAME it's a name reference
-     * (could be a rule invocation), not a triple pattern. If it's a plain
-     * symbol (e.g., from quote), it could be an entity constant. We check
-     * that position 1 is a non-variable symbol to confirm EAV shape. */
+    if (dl_is_wildcard(ce[0])) return true;
+    /* Quoted symbol (no RAY_ATTR_NAME) in position 0 + non-var symbol in position 1 */
     if (ce[0]->type == -RAY_SYM && !(ce[0]->attrs & RAY_ATTR_NAME)) {
-        /* Position 1 must be a non-variable symbol (the attribute) */
         if (ce[1]->type == -RAY_SYM && !is_dl_var(ce[1]))
             return true;
     }
