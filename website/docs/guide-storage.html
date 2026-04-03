@@ -157,6 +157,9 @@ ray_err_t ray_sym_load(<span class="hl-kw">const</span> <span class="hl-kw">char
 
       <!-- 3. Columnar files -->
       <h2 id="columnar-files">3. Columnar Files</h2>
+      <div class="info-box">
+        <strong>C API only.</strong> The functions below are in internal headers (<code>src/store/col.h</code>, <code>src/store/splay.h</code>, <code>src/store/part.h</code>). Compile with <code>-Isrc</code> and include the specific header. These are not yet exposed as Rayfall builtins.
+      </div>
       <p>A <strong>.col file</strong> stores a single vector (column) in Rayforce&rsquo;s native binary format. This is the building block for all higher-level storage.</p>
       <pre><code><span class="hl-comment">// Save a vector to a .col file</span>
 ray_err_t ray_col_save(ray_t* vec, <span class="hl-kw">const</span> <span class="hl-kw">char</span>* path);
