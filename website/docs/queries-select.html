@@ -139,7 +139,7 @@
 <span class="hl-comment">; GOOG   280    400</span></code></pre>
 
       <h3 id="select-groupby">Group-by Aggregation</h3>
-      <p>The <code>by:</code> clause groups rows by one or more key columns. Aggregation functions in <code>cols:</code> operate within each group:</p>
+      <p>The <code>by:</code> clause groups rows by one or more key columns. Aggregation functions are specified as additional key-value pairs in the query dict:</p>
       <pre><code>(<span class="hl-kw">set</span> trades (<span class="hl-fn">table</span> [<span class="hl-sym">sym</span> <span class="hl-sym">side</span> <span class="hl-sym">price</span> <span class="hl-sym">qty</span>]
     (<span class="hl-fn">list</span> [<span class="hl-str">AAPL</span> <span class="hl-str">AAPL</span> <span class="hl-str">GOOG</span> <span class="hl-str">GOOG</span> <span class="hl-str">AAPL</span>]
           [<span class="hl-str">Buy</span> <span class="hl-str">Sell</span> <span class="hl-str">Buy</span> <span class="hl-str">Buy</span> <span class="hl-str">Buy</span>]

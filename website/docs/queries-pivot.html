@@ -133,10 +133,10 @@
       <h3>Different Aggregations</h3>
       <pre><code><span class="hl-comment">; Average Price by Symbol and Side</span>
 (<span class="hl-fn">pivot</span> trades <span class="hl-str">'Symbol</span> <span class="hl-str">'Side</span> <span class="hl-str">'Price</span> avg)
-<span class="hl-comment">; Symbol     Buy   Sell</span>
-<span class="hl-comment">; ------  ------  -----</span>
-<span class="hl-comment">; AAPL     149.5    152</span>
-<span class="hl-comment">; GOOG       279    282</span>
+<span class="hl-comment">; Symbol   Buy   Sell</span>
+<span class="hl-comment">; ------  -----  -----</span>
+<span class="hl-comment">; AAPL    149.5  152.0</span>
+<span class="hl-comment">; GOOG    279.0  282.0</span>
 
 <span class="hl-comment">; Trade Count by Symbol and Side</span>
 (<span class="hl-fn">pivot</span> trades <span class="hl-str">'Symbol</span> <span class="hl-str">'Side</span> <span class="hl-str">'Quantity</span> count)
@@ -233,13 +233,16 @@
 (<span class="hl-fn">iasc</span> (<span class="hl-fn">iasc</span> prices))
 <span class="hl-comment">; [2 0 1]</span></code></pre>
 
-      <h3>Grouped Window</h3>
-      <p>Combine <code>by:</code> with windowed expressions to compute per-group running totals:</p>
+      <h3>Grouped Aggregation</h3>
+      <p>Use <code>by:</code> with aggregate expressions for per-group computations:</p>
       <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">by:</span> {<span class="hl-sym">Sym:</span> Sym}
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">total_price:</span> (<span class="hl-fn">sum</span> Price)
-                <span class="hl-sym">min_price:</span> (<span class="hl-fn">min</span> Price)
-                <span class="hl-sym">max_price:</span> (<span class="hl-fn">max</span> Price)}})</code></pre>
+         <span class="hl-sym">by:</span> Sym
+         <span class="hl-sym">total_price:</span> (<span class="hl-fn">sum</span> Price)
+         <span class="hl-sym">min_price:</span> (<span class="hl-fn">min</span> Price)
+         <span class="hl-sym">max_price:</span> (<span class="hl-fn">max</span> Price)})
+<span class="hl-comment">; Sym  total_price min_price max_price</span>
+<span class="hl-comment">; ---  ----------- --------- ---------</span>
+<span class="hl-comment">; x         240.21      70.5     89.17</span></code></pre>
 
       <!-- Prev/Next -->
       <div class="docs-nav-footer">

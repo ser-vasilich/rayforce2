@@ -134,131 +134,28 @@
       <p>All string operations in Rayforce follow strict null propagation semantics:</p>
       <ul>
         <li><strong>Null input produces null output</strong> &mdash; if any required input row is null, the output row is null</li>
-        <li><strong>CONCAT is null if any argument is null</strong> &mdash; <code>concat("hello", NULL, "world")</code> returns NULL, not <code>"helloworld"</code></li>
+        <li><strong>CONCAT is null if any argument is null</strong></li>
         <li>Null propagation applies uniformly to both RAY_SYM and RAY_STR columns</li>
         <li>Null bitmaps are carried through the execution pipeline per morsel (1024 elements)</li>
       </ul>
-      <pre><code><span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">name</span>] (<span class="hl-fn">list</span> [<span class="hl-str">"Alice"</span> <span class="hl-num">0N</span> <span class="hl-str">"Charlie"</span>])))
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">upper_name:</span> (<span class="hl-fn">upper</span> name)}})
-upper_name
-----------
-ALICE
-0N
-CHARLIE</code></pre>
+      <p>In the C API DAG, null propagation is handled automatically per morsel. String transformation opcodes (STRLEN, UPPER/LOWER/TRIM, SUBSTR, REPLACE, CONCAT) propagate nulls: null input rows produce null output rows. CONCAT is null if any argument is null.</p>
 
       <h2 id="string-functions">String Functions</h2>
 
-      <h3 id="upper">upper</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(upper x)</span>
-          <span class="fn-type">unary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Converts every character in each string element to uppercase. Works on both RAY_SYM and RAY_STR columns. Null inputs produce null outputs.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">upper</span> <span class="hl-str">"hello world"</span>)
-"HELLO WORLD"
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">name:</span> (<span class="hl-fn">upper</span> name)}})
-        </div>
-      </div>
-
-      <h3 id="lower">lower</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(lower x)</span>
-          <span class="fn-type">unary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Converts every character in each string element to lowercase. Works on both RAY_SYM and RAY_STR columns. Null inputs produce null outputs.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">lower</span> <span class="hl-str">"HELLO WORLD"</span>)
-"hello world"
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">email:</span> (<span class="hl-fn">lower</span> email)}})
-        </div>
-      </div>
-
-      <h3 id="strlen">strlen</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(strlen x)</span>
-          <span class="fn-type">unary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Returns the byte length of each string element as an I64 vector. Null inputs produce null outputs.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">strlen</span> <span class="hl-str">"hello"</span>)
-5
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">name:</span>name <span class="hl-sym">len:</span> (<span class="hl-fn">strlen</span> name)}})
-name     len
------------
-Alice      5
-Bob        3
-Charlie    7
-        </div>
-      </div>
-
-      <h3 id="trim">trim</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(trim x)</span>
-          <span class="fn-type">unary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Removes leading and trailing whitespace (spaces, tabs, newlines) from each string element. Works on both RAY_SYM and RAY_STR. Null inputs produce null outputs.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">trim</span> <span class="hl-str">"  hello  "</span>)
-"hello"
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">clean:</span> (<span class="hl-fn">trim</span> raw_name)}})
-        </div>
+      <div class="info-box">
+        <strong>DAG-only operations.</strong> The following string operations are available in the C API DAG but are <strong>not</strong> currently exposed as Rayfall builtins: <code>upper</code>, <code>lower</code>, <code>strlen</code>, <code>trim</code>, <code>substr</code>, <code>replace</code>, <code>ilike</code>. They can be used through the C API's DAG opcodes (see table below).
       </div>
 
       <h3 id="concat">concat</h3>
       <div class="fn-card">
         <div class="fn-card-header">
-          <span class="fn-name">(concat a b ...)</span>
-          <span class="fn-type">variadic &middot; element-wise</span>
+          <span class="fn-name">(concat a b)</span>
+          <span class="fn-type">binary</span>
         </div>
-        <div class="fn-desc">Concatenates two or more string arguments element-wise. Accepts any number of arguments. <strong>Returns null if any argument is null</strong> &mdash; this follows SQL CONCAT semantics with strict null propagation.</div>
+        <div class="fn-desc">Concatenates two string arguments. Works on string atoms and vectors element-wise.</div>
         <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">concat</span> <span class="hl-str">"hello"</span> <span class="hl-str">" "</span> <span class="hl-str">"world"</span>)
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">concat</span> <span class="hl-str">"hello"</span> <span class="hl-str">" world"</span>)
 "hello world"
-
-<span class="hl-comment">; Null propagation: any null argument makes the result null</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">concat</span> <span class="hl-str">"hi"</span> <span class="hl-num">0N</span> <span class="hl-str">"there"</span>)
-0N
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">full:</span> (<span class="hl-fn">concat</span> first <span class="hl-str">" "</span> last)}})
-        </div>
-      </div>
-
-      <h3 id="substr">substr</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(substr str start len)</span>
-          <span class="fn-type">ternary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Extracts a substring starting at byte position <code>start</code> (0-based) with length <code>len</code>. If <code>start</code> is beyond the string length, returns an empty string. If <code>start + len</code> exceeds the string, returns everything from <code>start</code> to the end. Null input produces null output.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">substr</span> <span class="hl-str">"hello world"</span> <span class="hl-num">6</span> <span class="hl-num">5</span>)
-"world"
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">prefix:</span> (<span class="hl-fn">substr</span> code <span class="hl-num">0</span> <span class="hl-num">3</span>)}})
-        </div>
-      </div>
-
-      <h3 id="replace">replace</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(replace str from to)</span>
-          <span class="fn-type">ternary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Replaces all occurrences of substring <code>from</code> with <code>to</code> in each string element. If <code>from</code> is not found, the original string is returned unchanged. Null input produces null output.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">replace</span> <span class="hl-str">"hello world"</span> <span class="hl-str">"world"</span> <span class="hl-str">"rayforce"</span>)
-"hello rayforce"
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">cols:</span> {<span class="hl-sym">clean:</span> (<span class="hl-fn">replace</span> path <span class="hl-str">"/"</span> <span class="hl-str">"-"</span>)}})
         </div>
       </div>
 
@@ -268,28 +165,16 @@ Charlie    7
           <span class="fn-name">(like str pattern)</span>
           <span class="fn-type">binary &middot; element-wise</span>
         </div>
-        <div class="fn-desc">Case-sensitive SQL LIKE pattern matching. Returns a BOOL vector. Supports <code>%</code> (match any sequence of characters) and <code>_</code> (match any single character). Works on both RAY_SYM and RAY_STR columns.</div>
+        <div class="fn-desc">Case-sensitive glob pattern matching. Returns a boolean (or boolean vector for vector input). Supports <code>*</code> (match any sequence of characters) and <code>?</code> (match any single character). Works on both RAY_SYM and RAY_STR columns.</div>
         <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">like</span> <span class="hl-str">"hello world"</span> <span class="hl-str">"%world"</span>)
-1b
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">like</span> <span class="hl-str">"hello world"</span> <span class="hl-str">"*world"</span>)
+true
 
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">where:</span> (<span class="hl-fn">like</span> name <span class="hl-str">"A%"</span>)})
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">like</span> <span class="hl-str">"hello world"</span> <span class="hl-str">"hello*"</span>)
+true
+
+<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">where:</span> (<span class="hl-fn">like</span> name <span class="hl-str">"A*"</span>)})
 <span class="hl-comment">; Returns all rows where name starts with "A"</span>
-        </div>
-      </div>
-
-      <h3 id="ilike">ilike</h3>
-      <div class="fn-card">
-        <div class="fn-card-header">
-          <span class="fn-name">(ilike str pattern)</span>
-          <span class="fn-type">binary &middot; element-wise</span>
-        </div>
-        <div class="fn-desc">Case-insensitive SQL LIKE pattern matching. Returns a BOOL vector. Same wildcard syntax as <code>like</code> (<code>%</code> and <code>_</code>) but ignores character case during comparison.</div>
-        <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">ilike</span> <span class="hl-str">"Hello World"</span> <span class="hl-str">"%hello%"</span>)
-1b
-
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>t <span class="hl-sym">where:</span> (<span class="hl-fn">ilike</span> email <span class="hl-str">"%@gmail.com"</span>)})
         </div>
       </div>
 
@@ -315,12 +200,12 @@ Charlie    7
           <span class="fn-name">(format fmt ...args)</span>
           <span class="fn-type">variadic</span>
         </div>
-        <div class="fn-desc">Formats values into a string using a format template. Placeholders <code>{}</code> are replaced with stringified arguments in order. Useful for building display strings or log messages.</div>
+        <div class="fn-desc">Formats values into a string using a format template. Each <code>%</code> placeholder is replaced with the next stringified argument in order. Useful for building display strings or log messages.</div>
         <div class="fn-example">
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">format</span> <span class="hl-str">"Hello, {}!"</span> <span class="hl-str">"world"</span>)
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">format</span> <span class="hl-str">"Hello, %!"</span> <span class="hl-str">"world"</span>)
 "Hello, world!"
 
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">format</span> <span class="hl-str">"{} + {} = {}"</span> <span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>)
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">format</span> <span class="hl-str">"% + % = %"</span> <span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>)
 "1 + 2 = 3"
         </div>
       </div>
@@ -344,18 +229,18 @@ Charlie    7
           <tr><td><code>OP_SUBSTR</code></td><td><code>ray_substr(g, str, start, len)</code></td><td>Extract substring by position</td></tr>
           <tr><td><code>OP_REPLACE</code></td><td><code>ray_replace(g, str, from, to)</code></td><td>Replace all occurrences</td></tr>
           <tr><td><code>OP_CONCAT</code></td><td><code>ray_concat(g, args, n)</code></td><td>Concatenate N strings</td></tr>
-          <tr><td><code>OP_LIKE</code></td><td><code>ray_like(g, input, pattern)</code></td><td>Case-sensitive pattern match</td></tr>
-          <tr><td><code>OP_ILIKE</code></td><td><code>ray_ilike(g, input, pattern)</code></td><td>Case-insensitive pattern match</td></tr>
+          <tr><td><code>OP_LIKE</code></td><td><code>ray_like(g, input, pattern)</code></td><td>Case-sensitive glob pattern match (<code>*</code>/<code>?</code> wildcards)</td></tr>
+          <tr><td><code>OP_ILIKE</code></td><td><code>ray_ilike(g, input, pattern)</code></td><td>Case-insensitive glob pattern match</td></tr>
         </tbody>
       </table>
 
       <h3>C API Example</h3>
-      <pre><code><span class="hl-comment">/* Filter rows where upper(name) LIKE "A%" and compute strlen */</span>
+      <pre><code><span class="hl-comment">/* Filter rows where upper(name) LIKE "A*" and compute strlen */</span>
 <span class="hl-type">ray_graph_t</span>* g = <span class="hl-fn">ray_graph_new</span>(table);
 
 <span class="hl-type">ray_op_t</span>* name    = <span class="hl-fn">ray_scan</span>(g, <span class="hl-str">"name"</span>);
 <span class="hl-type">ray_op_t</span>* up_name = <span class="hl-fn">ray_upper</span>(g, name);
-<span class="hl-type">ray_op_t</span>* pattern = <span class="hl-fn">ray_const_str</span>(g, <span class="hl-str">"A%"</span>, <span class="hl-num">2</span>);
+<span class="hl-type">ray_op_t</span>* pattern = <span class="hl-fn">ray_const_str</span>(g, <span class="hl-str">"A*"</span>, <span class="hl-num">2</span>);
 <span class="hl-type">ray_op_t</span>* pred    = <span class="hl-fn">ray_like</span>(g, up_name, pattern);
 
 <span class="hl-type">ray_op_t</span>* filt_name = <span class="hl-fn">ray_filter</span>(g, name, pred);
