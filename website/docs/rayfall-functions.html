@@ -335,14 +335,14 @@
         <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
         <tbody>
           <tr><td><code>pivot</code></td><td>variadic</td><td>Pivot table &mdash; reshape long to wide format</td><td><code>(pivot trades 'sym 'date 'price)</code></td></tr>
-          <tr><td><code>xbar</code></td><td>binary, atomic</td><td>Bucket values (time bucketing for OHLC bars)</td><td><code>(xbar 5 [3 7 12])</code> &rarr; <code>[0 5 10]</code></td></tr>
+          <tr><td><code>xbar</code></td><td>binary, atomic</td><td>Bucket values (time bucketing for OHLC bars)</td><td><code>(xbar [3 7 12] 5)</code> &rarr; <code>[0 5 10]</code></td></tr>
           <tr><td><code>xrank</code></td><td>binary</td><td>Assign N rank buckets (quantile ranking)</td><td><code>(xrank 4 [10 20 30 40])</code></td></tr>
         </tbody>
       </table>
 
       <pre><code><span class="hl-comment">; OHLC bars: bucket trades by 5-minute intervals</span>
 (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">by:</span>   {<span class="hl-sym">sym:</span> sym  <span class="hl-sym">bucket:</span> (<span class="hl-fn">xbar</span> <span class="hl-num">300000</span> time)}
+         <span class="hl-sym">by:</span>   {<span class="hl-sym">sym:</span> sym  <span class="hl-sym">bucket:</span> (<span class="hl-fn">xbar</span> time <span class="hl-num">300000</span>)}
          <span class="hl-sym">cols:</span> {<span class="hl-sym">open:</span> (<span class="hl-fn">first</span> price)
                 <span class="hl-sym">high:</span> (<span class="hl-fn">max</span> price)
                 <span class="hl-sym">low:</span>  (<span class="hl-fn">min</span> price)
@@ -358,7 +358,7 @@
           <tr><td><code>split</code></td><td>binary</td><td>Split string by delimiter</td><td><code>(split "a,b,c" ",")</code> &rarr; <code>["a" "b" "c"]</code></td></tr>
           <tr><td><code>like</code></td><td>binary</td><td>Pattern match (glob-style with * and ?)</td><td><code>(like "hello" "hel*")</code> &rarr; <code>true</code></td></tr>
           <tr><td><code>concat</code></td><td>binary</td><td>Concatenate two strings or vectors</td><td><code>(concat "hello" " world")</code> &rarr; <code>"hello world"</code></td></tr>
-          <tr><td><code>format</code></td><td>variadic</td><td>Format values as string</td><td><code>(format "x=%d" 42)</code></td></tr>
+          <tr><td><code>format</code></td><td>variadic</td><td>Format values as string (% is placeholder)</td><td><code>(format "x=%" 42)</code> &rarr; <code>"x=42"</code></td></tr>
         </tbody>
       </table>
 
@@ -387,7 +387,7 @@
         <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
         <tbody>
           <tr><td><code>type</code></td><td>unary</td><td>Get type name of a value</td><td><code>(type 42)</code> &rarr; <code>i64</code></td></tr>
-          <tr><td><code>as</code></td><td>binary</td><td>Cast value to another type</td><td><code>(as "42" 'i64)</code> &rarr; <code>42</code></td></tr>
+          <tr><td><code>as</code></td><td>binary</td><td>Cast value to another type</td><td><code>(as 'i64 "42")</code> &rarr; <code>42</code></td></tr>
           <tr><td><code>nil?</code></td><td>unary</td><td>Test if value is null</td><td><code>(nil? x)</code></td></tr>
           <tr><td><code>rc</code></td><td>unary</td><td>Reference count of an object</td><td><code>(rc x)</code> &rarr; <code>1</code></td></tr>
           <tr><td><code>guid</code></td><td>unary</td><td>Generate N GUIDs (0 for one)</td><td><code>(guid 0)</code></td></tr>
@@ -403,7 +403,7 @@
           <tr><td><code>println</code></td><td>variadic</td><td>Print values with newline</td><td><code>(println "hello" 42)</code></td></tr>
           <tr><td><code>print</code></td><td>unary</td><td>Print value without newline</td><td><code>(print "hello")</code></td></tr>
           <tr><td><code>show</code></td><td>variadic</td><td>Pretty-print a value (tables formatted)</td><td><code>(show trades)</code></td></tr>
-          <tr><td><code>format</code></td><td>variadic</td><td>Format value to string</td><td><code>(format "val=%d" 42)</code></td></tr>
+          <tr><td><code>format</code></td><td>variadic</td><td>Format value to string (% is placeholder)</td><td><code>(format "val=%" 42)</code> &rarr; <code>"val=42"</code></td></tr>
           <tr><td><code>read-csv</code></td><td>variadic</td><td>Load CSV file into table</td><td><code>(read-csv "data.csv")</code></td></tr>
           <tr><td><code>write-csv</code></td><td>variadic</td><td>Write table to CSV file</td><td><code>(write-csv trades "out.csv")</code></td></tr>
           <tr><td><code>read</code></td><td>unary</td><td>Read file contents as string</td><td><code>(read "file.txt")</code></td></tr>
@@ -466,6 +466,95 @@
           <tr><td><code>de</code></td><td>unary</td><td>Deserialize from binary format</td><td><code>(de bytes)</code></td></tr>
         </tbody>
       </table>
+
+      <!-- ════════════════════════════════════════ -->
+      <h2 id="eav">EAV (Entity-Attribute-Value)</h2>
+      <p>Built-in support for triple stores. The EAV table has three columns: <code>e</code> (entity, i64), <code>a</code> (attribute, sym), <code>v</code> (value, i64).</p>
+
+      <table>
+        <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td><code>datoms</code></td><td>nullary</td><td>Create empty EAV table</td><td><code>(datoms)</code></td></tr>
+          <tr><td><code>assert-fact</code></td><td>variadic</td><td>Append triple to datoms</td><td><code>(assert-fact db 1 'name 100)</code></td></tr>
+          <tr><td><code>retract-fact</code></td><td>variadic</td><td>Remove triple from datoms</td><td><code>(retract-fact db 1 'name 100)</code></td></tr>
+          <tr><td><code>scan-eav</code></td><td>binary</td><td>Query EAV by attribute</td><td><code>(scan-eav db 'name)</code></td></tr>
+          <tr><td><code>pull</code></td><td>binary</td><td>Entity-centric retrieval (returns dict)</td><td><code>(pull db 1)</code> &rarr; <code>{name:100 age:30}</code></td></tr>
+          <tr><td><code>sym-name</code></td><td>unary</td><td>Convert sym intern ID to symbol string</td><td><code>(sym-name 0)</code></td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="hl-comment">; Build an EAV store</span>
+(<span class="hl-kw">set</span> db (<span class="hl-fn">datoms</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">1</span> <span class="hl-sym">'name</span> <span class="hl-num">100</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">1</span> <span class="hl-sym">'age</span> <span class="hl-num">30</span>))
+(<span class="hl-fn">pull</span> db <span class="hl-num">1</span>)              <span class="hl-comment">; {name:100 age:30}</span>
+(<span class="hl-fn">scan-eav</span> db <span class="hl-sym">'name</span>)     <span class="hl-comment">; table of (e, v) pairs where a='name</span></code></pre>
+
+      <!-- ════════════════════════════════════════ -->
+      <h2 id="table-set-ops">Table Set Operations</h2>
+
+      <table>
+        <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td><code>union-all</code></td><td>binary</td><td>Concatenate two tables (all rows)</td><td><code>(union-all t1 t2)</code></td></tr>
+          <tr><td><code>table-distinct</code></td><td>unary</td><td>Remove duplicate rows from table</td><td><code>(table-distinct t)</code></td></tr>
+          <tr><td><code>antijoin</code></td><td>variadic</td><td>Anti-semi-join: rows in left not in right</td><td><code>(antijoin t1 t2 [x])</code></td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="hl-comment">; Table concatenation and deduplication</span>
+(<span class="hl-kw">set</span> t1 (<span class="hl-fn">table</span> [<span class="hl-sym">x</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span>])))
+(<span class="hl-kw">set</span> t2 (<span class="hl-fn">table</span> [<span class="hl-sym">x</span>] (<span class="hl-fn">list</span> [<span class="hl-num">2</span> <span class="hl-num">3</span>])))
+(<span class="hl-fn">union-all</span> t1 t2)          <span class="hl-comment">; 4 rows: 1 2 2 3</span>
+(<span class="hl-fn">table-distinct</span> (<span class="hl-fn">union-all</span> t1 t2))  <span class="hl-comment">; 3 rows: 1 2 3</span>
+(<span class="hl-fn">antijoin</span> t1 t2 [<span class="hl-sym">x</span>])     <span class="hl-comment">; 1 row: 1</span></code></pre>
+
+      <!-- ════════════════════════════════════════ -->
+      <h2 id="datalog">Datalog</h2>
+      <p>Datalog rules and queries integrate with the EAV store. Rules use the <code>(?entity :attribute ?value)</code> pattern to match triples.</p>
+
+      <table>
+        <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td><code>rule</code></td><td>variadic, special</td><td>Define Datalog rule</td><td><code>(rule (path ?x ?y) (?x :edge ?y))</code></td></tr>
+          <tr><td><code>query</code></td><td>variadic, special</td><td>Compile and execute Datalog query</td><td><code>(query db (find ?x ?y) (where (path ?x ?y)))</code></td></tr>
+          <tr><td><code>not</code></td><td>special (in Datalog WHERE)</td><td>Stratified negation in WHERE clause</td><td><code>(not (?y :edge 3))</code></td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="hl-comment">; Define rules and query</span>
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?y) (?x :edge ?y))
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?z) (?x :edge ?y) (path ?y ?z))
+
+(<span class="hl-kw">set</span> db (<span class="hl-fn">datoms</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">1</span> <span class="hl-sym">'edge</span> <span class="hl-num">2</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">2</span> <span class="hl-sym">'edge</span> <span class="hl-num">3</span>))
+(<span class="hl-kw">query</span> db (<span class="hl-fn">find</span> ?x ?y) (<span class="hl-fn">where</span> (path ?x ?y)))
+<span class="hl-comment">; returns table: (1,2) (1,3) (2,3)</span></code></pre>
+
+      <!-- ════════════════════════════════════════ -->
+      <h2 id="datalog-program">Datalog Program API</h2>
+      <p>Low-level API for building and evaluating Datalog programs directly, bypassing the EAV store.</p>
+
+      <table>
+        <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td><code>dl-program</code></td><td>nullary</td><td>Create Datalog program</td><td><code>(dl-program)</code></td></tr>
+          <tr><td><code>dl-add-edb</code></td><td>variadic</td><td>Register base relation (table + arity)</td><td><code>(dl-add-edb prog 'edge tbl 2)</code></td></tr>
+          <tr><td><code>dl-stratify</code></td><td>unary</td><td>Compute strata for the program</td><td><code>(dl-stratify prog)</code></td></tr>
+          <tr><td><code>dl-eval</code></td><td>unary</td><td>Evaluate program to fixpoint</td><td><code>(dl-eval prog)</code></td></tr>
+          <tr><td><code>dl-query</code></td><td>binary</td><td>Query a derived or base relation</td><td><code>(dl-query prog 'edge)</code></td></tr>
+          <tr><td><code>dl-provenance</code></td><td>binary</td><td>Get derivation tracking (if available)</td><td><code>(dl-provenance prog 'rel)</code></td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="hl-comment">; Low-level Datalog program</span>
+(<span class="hl-kw">set</span> prog (<span class="hl-fn">dl-program</span>))
+(<span class="hl-kw">set</span> edges (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-num">2</span> <span class="hl-num">3</span> <span class="hl-num">4</span>])))
+(<span class="hl-fn">dl-add-edb</span> prog <span class="hl-sym">'edge</span> edges <span class="hl-num">2</span>)
+(<span class="hl-fn">dl-stratify</span> prog)
+(<span class="hl-fn">dl-eval</span> prog)
+(<span class="hl-fn">dl-query</span> prog <span class="hl-sym">'edge</span>)  <span class="hl-comment">; returns the edge table</span></code></pre>
 
       <!-- Prev/Next -->
       <div class="docs-nav-footer">
