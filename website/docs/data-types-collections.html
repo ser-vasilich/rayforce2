@@ -121,7 +121,7 @@
 
 <span class="hl-comment">; BOOL vector</span>
 <span class="hl-comment">ray&gt;</span> [<span class="hl-bool">true false true</span>]
-[1b 0b 1b]</code></pre>
+[true false true]</code></pre>
 
       <h3 id="morsel-iteration">Morsel Iteration</h3>
       <p>All vector processing in Rayforce happens in <strong>morsels</strong> &mdash; fixed-size chunks of 1024 elements. The executor never processes an entire column at once. Instead, it iterates morsel by morsel, which keeps data in L1/L2 cache and enables pipeline parallelism.</p>
@@ -349,12 +349,11 @@ MSFT 380.0   50</code></pre>
       <h3>MAPCOMMON</h3>
       <p>When loading a date-partitioned table, Rayforce creates a virtual <code>RAY_MAPCOMMON</code> column. This column does not store actual data &mdash; it derives values from the partition directory names (e.g., <code>2024.01.15/</code>). Each row in a partition shares the same date value, so the MAPCOMMON column can represent millions of rows with zero per-row storage.</p>
 
-      <pre><code><span class="hl-comment">; Load a date-partitioned table</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> trades (<span class="hl-fn">part-load</span> <span class="hl-str">"db"</span> <span class="hl-str">"trades"</span>))
+      <pre><code><span class="hl-comment">// C API: load a date-partitioned table</span>
+<span class="hl-type">ray_t</span>* trades = <span class="hl-fn">ray_part_load</span>(<span class="hl-str">"db"</span>, <span class="hl-str">"trades"</span>);
 
-<span class="hl-comment">; The 'date' column is MAPCOMMON — derived from directory names</span>
-<span class="hl-comment">; Queries that filter on date trigger partition pruning</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>trades <span class="hl-sym">where:</span> (<span class="hl-fn">=</span> date <span class="hl-num">2024.01.15</span>)})</code></pre>
+<span class="hl-comment">// The 'date' column is MAPCOMMON — derived from directory names</span>
+<span class="hl-comment">// Queries that filter on date trigger partition pruning</span></code></pre>
 
       <div class="info-box">
         <strong>Partition pruning:</strong> The optimizer recognizes filters on MAPCOMMON columns and eliminates entire partitions from the scan &mdash; skipping their memory-mapped segments entirely. A query filtering on a single date in a year of data reads only 1/365th of the files.

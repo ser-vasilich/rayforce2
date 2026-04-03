@@ -160,6 +160,14 @@
             <td><code><span class="hl-num">42</span></code></td>
           </tr>
           <tr>
+            <td><strong>Single float</strong></td>
+            <td><code>RAY_F32</code></td>
+            <td>6</td>
+            <td>4 bytes</td>
+            <td><code>NaN</code></td>
+            <td>&mdash;</td>
+          </tr>
+          <tr>
             <td><strong>Double float</strong></td>
             <td><code>RAY_F64</code></td>
             <td>7</td>
@@ -239,11 +247,11 @@
 <span class="hl-comment">ray&gt;</span> [<span class="hl-num">1 2 3</span>]
 [1 2 3]
 
-<span class="hl-comment">; Check with type-of</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">type-of</span> <span class="hl-num">42</span>)
-'I64
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">type-of</span> [<span class="hl-num">1 2 3</span>])
-'I64</code></pre>
+<span class="hl-comment">; Check with meta</span>
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">meta</span> <span class="hl-num">42</span>)
+{type:i64}
+<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">meta</span> [<span class="hl-num">1 2 3</span>])
+{type:I64 len:3}</code></pre>
 
       <h2 id="ray-t-header">The ray_t Header</h2>
       <p>Every Rayforce object begins with a 32-byte <code>ray_t</code> header. This is the fundamental building block &mdash; atoms, vectors, lists, tables, and functions all start with this structure.</p>

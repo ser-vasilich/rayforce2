@@ -193,9 +193,9 @@
 <span class="hl-comment">// Load table (columns are mmap'd)</span>
 <span class="hl-type">ray_t</span>* trades = <span class="hl-fn">ray_splay_load</span>(<span class="hl-str">"db/trades"</span>, <span class="hl-str">"db/sym"</span>);</code></pre>
 
-      <pre><code><span class="hl-comment">; Rayfall: save and load splayed tables</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-fn">splay-save</span> t <span class="hl-str">"db/trades"</span>)
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> trades (<span class="hl-fn">splay-load</span> <span class="hl-str">"db/trades"</span>))</code></pre>
+      <div class="info-box">
+        <strong>Note:</strong> Splayed table I/O is currently available only through the C API. There are no <code>splay-save</code> / <code>splay-load</code> Rayfall builtins yet.
+      </div>
 
       <h2 id="partitioned-tables">Date-Partitioned Tables</h2>
       <p>For large time-series datasets, Rayforce supports date-partitioned storage. Data is split into directories named by date, each containing a splayed table for that day's data.</p>
@@ -227,14 +227,9 @@
 <span class="hl-comment">// - Parted columns (RAY_PARTED_BASE + base_type) for each data column</span>
 <span class="hl-comment">// - All segments are memory-mapped — no data copy</span></code></pre>
 
-      <pre><code><span class="hl-comment">; Rayfall: load partitioned table</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">set</span> trades (<span class="hl-fn">part-load</span> <span class="hl-str">"db"</span> <span class="hl-str">"trades"</span>))
-
-<span class="hl-comment">; Filter on date — optimizer prunes partitions</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>trades <span class="hl-sym">where:</span> (<span class="hl-fn">=</span> date <span class="hl-num">2024.01.15</span>)})
-
-<span class="hl-comment">; Range filter — only relevant partitions are scanned</span>
-<span class="hl-comment">ray&gt;</span> (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>trades <span class="hl-sym">where:</span> (<span class="hl-fn">and</span> (<span class="hl-fn">&gt;=</span> date <span class="hl-num">2024.01.15</span>) (<span class="hl-fn">&lt;=</span> date <span class="hl-num">2024.01.17</span>))})</code></pre>
+      <div class="info-box">
+        <strong>Note:</strong> Partitioned table loading is currently available only through the C API (<code>ray_part_load</code>). There is no <code>part-load</code> Rayfall builtin yet. Once loaded via the C API, the resulting table supports normal <code>select</code> queries with partition pruning.
+      </div>
 
       <h3>Partition Pruning</h3>
       <p>The query optimizer recognizes predicates on the <code>MAPCOMMON</code> column and eliminates entire partitions from the scan plan. This means a query filtering on a single date in a year of data only touches 1/365th of the files on disk &mdash; with zero per-row cost for the pruned partitions.</p>
@@ -313,11 +308,11 @@ MSFT 380.00   50  2024.01.15</code></pre>
         <tbody>
           <tr>
             <td><code>ray_read_csv(path)</code></td>
-            <td>Load a CSV file with default options: comma delimiter, first row as header, automatic type inference, <code>""</code> as null.</td>
+            <td>Load a CSV file with default options: comma delimiter, first row as header, and automatic type inference. Empty fields are treated as null.</td>
           </tr>
           <tr>
-            <td><code>ray_read_csv_opts(path, delim, header, null_str)</code></td>
-            <td>Load with custom options: delimiter character, whether first row is a header, and null string representation.</td>
+            <td><code>ray_read_csv_opts(path, delim, header, col_types, n_types)</code></td>
+            <td>Load with custom options: delimiter character, whether first row is a header, explicit column type array (<code>int8_t*</code>), and number of type entries. Pass <code>NULL, 0</code> for automatic type inference.</td>
           </tr>
           <tr>
             <td><code>ray_write_csv(table, path)</code></td>
@@ -329,8 +324,8 @@ MSFT 380.00   50  2024.01.15</code></pre>
       <pre><code><span class="hl-comment">// Default options</span>
 <span class="hl-type">ray_t</span>* data = <span class="hl-fn">ray_read_csv</span>(<span class="hl-str">"trades.csv"</span>);
 
-<span class="hl-comment">// Tab-delimited, no header, "NA" as null</span>
-<span class="hl-type">ray_t</span>* tsv = <span class="hl-fn">ray_read_csv_opts</span>(<span class="hl-str">"data.tsv"</span>, <span class="hl-str">'\t'</span>, <span class="hl-bool">false</span>, <span class="hl-str">"NA"</span>);
+<span class="hl-comment">// Tab-delimited, no header, auto type inference</span>
+<span class="hl-type">ray_t</span>* tsv = <span class="hl-fn">ray_read_csv_opts</span>(<span class="hl-str">"data.tsv"</span>, <span class="hl-str">'\t'</span>, <span class="hl-bool">false</span>, NULL, <span class="hl-num">0</span>);
 
 <span class="hl-comment">// Write results back</span>
 <span class="hl-fn">ray_write_csv</span>(result, <span class="hl-str">"output.csv"</span>);</code></pre>
@@ -341,7 +336,7 @@ MSFT 380.00   50  2024.01.15</code></pre>
         <li><strong>BOOL</strong> &mdash; <code>true</code>/<code>false</code>, <code>1</code>/<code>0</code></li>
         <li><strong>I64</strong> &mdash; integer values within 64-bit range</li>
         <li><strong>F64</strong> &mdash; floating-point values</li>
-        <li><strong>DATE</strong> &mdash; <code>YYYY.MM.DD</code> or <code>YYYY-MM-DD</code> format</li>
+        <li><strong>DATE</strong> &mdash; <code>YYYY-MM-DD</code> format (hyphen-separated)</li>
         <li><strong>TIMESTAMP</strong> &mdash; date + time with nanosecond precision</li>
         <li><strong>SYM</strong> &mdash; short repeated strings (auto-interned as symbols)</li>
         <li><strong>STR</strong> &mdash; fallback for everything else</li>
