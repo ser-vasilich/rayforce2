@@ -102,7 +102,7 @@
       </div>
 
       <h1>DAG &amp; Execution C API</h1>
-      <p class="page-subtitle">Build lazy operation DAGs, optimize with 10 rewrite passes, and execute as fused morsel-driven bytecode. Plus graph traversal, CSR storage, and columnar I/O.</p>
+      <p class="page-subtitle">Build lazy operation DAGs, optimize with multi-pass rewriting, and execute as fused morsel-driven bytecode. Plus graph traversal, CSR storage, and columnar I/O.</p>
 
       <div class="info-box">
         <strong>Lazy evaluation.</strong> All <code>ray_*</code> DAG functions return <code>ray_op_t*</code> nodes. Nothing executes until you call <code>ray_execute(g, root)</code>. This allows the optimizer to rewrite the entire plan before any data flows.
@@ -507,7 +507,7 @@
         <div class="fn-card-header">
           <span class="fn-name">ray_optimize</span>
         </div>
-        <div class="fn-desc">Runs the 10-pass optimizer on the DAG rooted at <code>root</code>: type inference, constant folding, sideways information passing, factorize, predicate pushdown, filter reorder, projection pushdown, partition pruning, fusion, dead code elimination. Returns the optimized root node (may differ from input).</div>
+        <div class="fn-desc">Runs the multi-pass optimizer on the DAG rooted at <code>root</code>: type inference, constant folding, sideways information passing, factorize, predicate pushdown, filter reorder, projection pushdown, partition pruning, fusion, dead code elimination. Returns the optimized root node (may differ from input).</div>
         <div class="fn-example">
 <span class="hl-type">ray_op_t</span>* <span class="hl-fn">ray_optimize</span>(<span class="hl-type">ray_graph_t</span>* g, <span class="hl-type">ray_op_t</span>* root);
         </div>
@@ -651,7 +651,7 @@
         <div class="fn-card-header">
           <span class="fn-name">dl_add_edb</span>
         </div>
-        <div class="fn-desc">Register an extensional (base fact) relation backed by an existing columnar table. Column names are auto-generated as <code>"c0"</code>, <code>"c1"</code>, &hellip; unless the table already has named columns. Returns the relation index.</div>
+        <div class="fn-desc">Register an extensional (base fact) relation backed by an existing columnar table. Column names are auto-generated as <code>"{name}__c0"</code>, <code>"{name}__c1"</code>, &hellip; (prefixed with the relation name to avoid collisions in joins). Returns the relation index.</div>
         <div class="fn-example">
 <span class="hl-type">int</span> <span class="hl-fn">dl_add_edb</span>(<span class="hl-type">dl_program_t</span>* prog, <span class="hl-kw">const</span> <span class="hl-type">char</span>* name,
               <span class="hl-type">ray_t</span>* table, <span class="hl-type">int</span> arity);
