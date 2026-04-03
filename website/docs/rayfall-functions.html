@@ -111,14 +111,14 @@
           <tr><td><code>+</code></td><td>binary</td><td>Addition</td><td><code>(+ 3 4)</code> &rarr; <code>7</code></td></tr>
           <tr><td><code>-</code></td><td>binary</td><td>Subtraction</td><td><code>(- 10 3)</code> &rarr; <code>7</code></td></tr>
           <tr><td><code>*</code></td><td>binary</td><td>Multiplication</td><td><code>(* 3 4)</code> &rarr; <code>12</code></td></tr>
-          <tr><td><code>/</code></td><td>binary</td><td>Division (float result)</td><td><code>(/ 7 2)</code> &rarr; <code>3.5</code></td></tr>
+          <tr><td><code>/</code></td><td>binary</td><td>Integer division (floor)</td><td><code>(/ 7 2)</code> &rarr; <code>3</code></td></tr>
           <tr><td><code>%</code></td><td>binary</td><td>Modulo</td><td><code>(% 7 3)</code> &rarr; <code>1</code></td></tr>
-          <tr><td><code>div</code></td><td>binary</td><td>Integer division (floor)</td><td><code>(div 7 2)</code> &rarr; <code>3</code></td></tr>
+          <tr><td><code>div</code></td><td>binary</td><td>Float division (always f64)</td><td><code>(div 7 2)</code> &rarr; <code>3.5</code></td></tr>
           <tr><td><code>neg</code></td><td>unary</td><td>Negate</td><td><code>(neg 5)</code> &rarr; <code>-5</code></td></tr>
           <tr><td><code>round</code></td><td>unary</td><td>Round to nearest integer</td><td><code>(round 3.7)</code> &rarr; <code>4.0</code></td></tr>
           <tr><td><code>floor</code></td><td>unary</td><td>Floor (round down)</td><td><code>(floor 3.7)</code> &rarr; <code>3.0</code></td></tr>
           <tr><td><code>ceil</code></td><td>unary</td><td>Ceiling (round up)</td><td><code>(ceil 3.2)</code> &rarr; <code>4.0</code></td></tr>
-          <tr><td><code>xbar</code></td><td>binary</td><td>Round down to nearest multiple (bucketing)</td><td><code>(xbar 5 [3 7 12])</code> &rarr; <code>[0 5 10]</code></td></tr>
+          <tr><td><code>xbar</code></td><td>binary</td><td>Round down to nearest multiple (bucketing)</td><td><code>(xbar [3 7 12] 5)</code> &rarr; <code>[0 5 10]</code></td></tr>
         </tbody>
       </table>
 
@@ -126,7 +126,7 @@
       <pre><code>(<span class="hl-fn">+</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-num">10</span> <span class="hl-num">20</span> <span class="hl-num">30</span>])   <span class="hl-comment">; [11 22 33]</span>
 (<span class="hl-fn">*</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] <span class="hl-num">10</span>)            <span class="hl-comment">; [10 20 30]  scalar broadcast</span>
 (<span class="hl-fn">neg</span> [<span class="hl-num">1</span> <span class="hl-num">-2</span> <span class="hl-num">3</span>])             <span class="hl-comment">; [-1 2 -3]</span>
-(<span class="hl-fn">xbar</span> <span class="hl-num">10</span> [<span class="hl-num">3</span> <span class="hl-num">15</span> <span class="hl-num">27</span>])      <span class="hl-comment">; [0 10 20]</span></code></pre>
+(<span class="hl-fn">xbar</span> [<span class="hl-num">3</span> <span class="hl-num">15</span> <span class="hl-num">27</span>] <span class="hl-num">10</span>)      <span class="hl-comment">; [0 10 20]</span></code></pre>
 
       <!-- ════════════════════════════════════════ -->
       <h2 id="comparison">Comparison</h2>
@@ -141,7 +141,7 @@
           <tr><td><code>&lt;=</code></td><td>binary</td><td>Less than or equal</td><td><code>(&lt;= 3 5)</code> &rarr; <code>true</code></td></tr>
           <tr><td><code>==</code></td><td>binary</td><td>Equal</td><td><code>(== 3 3)</code> &rarr; <code>true</code></td></tr>
           <tr><td><code>!=</code></td><td>binary</td><td>Not equal</td><td><code>(!= 3 4)</code> &rarr; <code>true</code></td></tr>
-          <tr><td><code>within</code></td><td>binary</td><td>Check if value falls within a range</td><td><code>(within 5 [3 7])</code> &rarr; <code>true</code></td></tr>
+          <tr><td><code>within</code></td><td>binary</td><td>Check which vector elements fall within a range</td><td><code>(within [1 5 10] [3 7])</code> &rarr; <code>[false true false]</code></td></tr>
         </tbody>
       </table>
 
@@ -190,14 +190,14 @@
         <tbody>
           <tr><td><code>map</code></td><td>variadic</td><td>Apply function to each element</td><td><code>(map (fn [x] (* x 2)) [1 2 3])</code> &rarr; <code>[2 4 6]</code></td></tr>
           <tr><td><code>pmap</code></td><td>variadic</td><td>Parallel map (multi-threaded)</td><td><code>(pmap (fn [x] (* x x)) [1 2 3])</code> &rarr; <code>[1 4 9]</code></td></tr>
-          <tr><td><code>filter</code></td><td>binary</td><td>Keep elements matching predicate</td><td><code>(filter (fn [x] (&gt; x 2)) [1 2 3 4])</code> &rarr; <code>[3 4]</code></td></tr>
+          <tr><td><code>filter</code></td><td>binary</td><td>Keep elements where boolean mask is true</td><td><code>(filter [1 2 3 4] (&gt; [1 2 3 4] 2))</code> &rarr; <code>[3 4]</code></td></tr>
           <tr><td><code>fold</code></td><td>variadic</td><td>Reduce with function and initial value</td><td><code>(fold + 0 [1 2 3])</code> &rarr; <code>6</code></td></tr>
           <tr><td><code>fold-left</code></td><td>variadic</td><td>Left-associative fold</td><td><code>(fold-left - 10 [1 2 3])</code> &rarr; <code>4</code></td></tr>
           <tr><td><code>fold-right</code></td><td>variadic</td><td>Right-associative fold</td><td><code>(fold-right - 10 [1 2 3])</code> &rarr; <code>-8</code></td></tr>
-          <tr><td><code>scan</code></td><td>variadic</td><td>Running fold (returns all intermediate results)</td><td><code>(scan + 0 [1 2 3])</code> &rarr; <code>[1 3 6]</code></td></tr>
-          <tr><td><code>scan-left</code></td><td>variadic</td><td>Left-to-right running fold</td><td><code>(scan-left + 0 [1 2 3])</code> &rarr; <code>[1 3 6]</code></td></tr>
-          <tr><td><code>scan-right</code></td><td>variadic</td><td>Right-to-left running fold</td><td><code>(scan-right + 0 [1 2 3])</code> &rarr; <code>[6 5 3]</code></td></tr>
-          <tr><td><code>apply</code></td><td>variadic</td><td>Apply function with list of arguments</td><td><code>(apply + [1 2 3])</code> &rarr; <code>6</code></td></tr>
+          <tr><td><code>scan</code></td><td>variadic</td><td>Running fold (returns all intermediate results)</td><td><code>(scan + (enlist 1 2 3))</code> &rarr; <code>[1 3 6]</code></td></tr>
+          <tr><td><code>scan-left</code></td><td>variadic</td><td>Left-to-right running fold</td><td><code>(scan-left + (enlist 1 2 3))</code> &rarr; <code>[1 3 6]</code></td></tr>
+          <tr><td><code>scan-right</code></td><td>variadic</td><td>Right-to-left running fold</td><td><code>(scan-right + (enlist 1 2 3))</code> &rarr; <code>[6 5 3]</code></td></tr>
+          <tr><td><code>apply</code></td><td>variadic</td><td>Zip-apply function pairwise over two lists</td><td><code>(apply + (enlist 1 2) (enlist 3 4))</code> &rarr; <code>[4 6]</code></td></tr>
           <tr><td><code>map-left</code></td><td>variadic</td><td>Map with left argument fixed</td><td><code>(map-left + 10 [1 2 3])</code> &rarr; <code>[11 12 13]</code></td></tr>
           <tr><td><code>map-right</code></td><td>variadic</td><td>Map with right argument fixed</td><td><code>(map-right - [10 20 30] 5)</code> &rarr; <code>[5 15 25]</code></td></tr>
         </tbody>
@@ -215,12 +215,12 @@
           <tr><td><code>except</code></td><td>binary</td><td>Set difference</td><td><code>(except [1 2 3] [2])</code> &rarr; <code>[1 3]</code></td></tr>
           <tr><td><code>union</code></td><td>binary</td><td>Set union</td><td><code>(union [1 2] [2 3])</code> &rarr; <code>[1 2 3]</code></td></tr>
           <tr><td><code>sect</code></td><td>binary</td><td>Set intersection</td><td><code>(sect [1 2 3] [2 3 4])</code> &rarr; <code>[2 3]</code></td></tr>
-          <tr><td><code>take</code></td><td>binary</td><td>Take first/last N elements</td><td><code>(take 2 [10 20 30])</code> &rarr; <code>[10 20]</code></td></tr>
+          <tr><td><code>take</code></td><td>binary</td><td>Take first/last N elements</td><td><code>(take [10 20 30] 2)</code> &rarr; <code>[10 20]</code></td></tr>
           <tr><td><code>at</code></td><td>binary</td><td>Index into vector</td><td><code>(at [10 20 30] 1)</code> &rarr; <code>20</code></td></tr>
           <tr><td><code>find</code></td><td>binary</td><td>Find index of value</td><td><code>(find [10 20 30] 20)</code> &rarr; <code>1</code></td></tr>
           <tr><td><code>reverse</code></td><td>unary</td><td>Reverse order</td><td><code>(reverse [1 2 3])</code> &rarr; <code>[3 2 1]</code></td></tr>
           <tr><td><code>til</code></td><td>unary</td><td>Range [0..n)</td><td><code>(til 5)</code> &rarr; <code>[0 1 2 3 4]</code></td></tr>
-          <tr><td><code>enlist</code></td><td>variadic</td><td>Wrap value(s) in a list</td><td><code>(enlist 1 2 3)</code> &rarr; <code>(1 2 3)</code></td></tr>
+          <tr><td><code>enlist</code></td><td>variadic</td><td>Wrap value(s) in a vector</td><td><code>(enlist 1 2 3)</code> &rarr; <code>[1 2 3]</code></td></tr>
           <tr><td><code>concat</code></td><td>binary</td><td>Concatenate two vectors</td><td><code>(concat [1 2] [3 4])</code> &rarr; <code>[1 2 3 4]</code></td></tr>
           <tr><td><code>raze</code></td><td>unary</td><td>Flatten a list of vectors into one</td><td><code>(raze (list [1 2] [3 4]))</code> &rarr; <code>[1 2 3 4]</code></td></tr>
           <tr><td><code>where</code></td><td>unary</td><td>Indices where boolean vector is true</td><td><code>(where [true false true])</code> &rarr; <code>[0 2]</code></td></tr>
@@ -386,7 +386,7 @@
       <table>
         <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
         <tbody>
-          <tr><td><code>type</code></td><td>unary</td><td>Get type name of a value</td><td><code>(type 42)</code> &rarr; <code>"i64"</code></td></tr>
+          <tr><td><code>type</code></td><td>unary</td><td>Get type name of a value</td><td><code>(type 42)</code> &rarr; <code>i64</code></td></tr>
           <tr><td><code>as</code></td><td>binary</td><td>Cast value to another type</td><td><code>(as "42" 'i64)</code> &rarr; <code>42</code></td></tr>
           <tr><td><code>nil?</code></td><td>unary</td><td>Test if value is null</td><td><code>(nil? x)</code></td></tr>
           <tr><td><code>rc</code></td><td>unary</td><td>Reference count of an object</td><td><code>(rc x)</code> &rarr; <code>1</code></td></tr>

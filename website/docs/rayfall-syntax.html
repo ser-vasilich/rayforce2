@@ -269,8 +269,8 @@
 
       <h3>Error Handling: <code>try</code> / <code>raise</code></h3>
       <pre><code>(<span class="hl-kw">try</span>
-  (<span class="hl-fn">/</span> <span class="hl-num">1</span> <span class="hl-num">0</span>)           <span class="hl-comment">; might error</span>
-  (<span class="hl-kw">fn</span> [e] <span class="hl-str">"caught"</span>)) <span class="hl-comment">; handler receives error</span>
+  (<span class="hl-fn">raise</span> <span class="hl-str">"oops"</span>)     <span class="hl-comment">; throws an error</span>
+  (<span class="hl-kw">fn</span> [e] <span class="hl-str">"caught"</span>)) <span class="hl-comment">; handler receives error → "caught"</span>
 
 (<span class="hl-fn">raise</span> <span class="hl-str">"custom error"</span>) <span class="hl-comment">; throw an error</span></code></pre>
 

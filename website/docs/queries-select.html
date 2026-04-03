@@ -116,7 +116,7 @@
 <span class="hl-comment">; MSFT   420    900</span></code></pre>
 
       <p>Select specific columns with computed expressions:</p>
-      <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">cols:</span> {<span class="hl-sym">sym:</span> sym <span class="hl-sym">notional:</span> (<span class="hl-fn">*</span> price volume)}})
+      <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">sym:</span> sym <span class="hl-sym">notional:</span> (<span class="hl-fn">*</span> price volume)})
 <span class="hl-comment">; sym  notional</span>
 <span class="hl-comment">; ---  --------</span>
 <span class="hl-comment">; AAPL    75000</span>
@@ -147,18 +147,18 @@
           [<span class="hl-num">100</span> <span class="hl-num">200</span> <span class="hl-num">50</span> <span class="hl-num">75</span> <span class="hl-num">300</span>])))
 
 <span class="hl-comment">; Group by sym, aggregate price and qty</span>
-(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> {<span class="hl-sym">sym:</span> sym}
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">avg_price:</span> (<span class="hl-fn">avg</span> price)
-                <span class="hl-sym">total_qty:</span> (<span class="hl-fn">sum</span> qty)
-                <span class="hl-sym">n:</span> (<span class="hl-fn">count</span> price)}})
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> sym
+         <span class="hl-sym">avg_price:</span> (<span class="hl-fn">avg</span> price)
+         <span class="hl-sym">total_qty:</span> (<span class="hl-fn">sum</span> qty)
+         <span class="hl-sym">n:</span> (<span class="hl-fn">count</span> price)})
 <span class="hl-comment">; sym  avg_price total_qty  n</span>
 <span class="hl-comment">; ---  --------- ---------  -</span>
-<span class="hl-comment">; AAPL     150.3       600  3</span>
-<span class="hl-comment">; GOOG       281       125  2</span></code></pre>
+<span class="hl-comment">; AAPL    150.33       600  3</span>
+<span class="hl-comment">; GOOG     281.0       125  2</span></code></pre>
 
       <p>Group by multiple keys:</p>
-      <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> {<span class="hl-sym">sym:</span> sym <span class="hl-sym">side:</span> side}
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">total:</span> (<span class="hl-fn">sum</span> qty)}})
+      <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> [sym side]
+         <span class="hl-sym">total:</span> (<span class="hl-fn">sum</span> qty)})
 <span class="hl-comment">; sym  side total</span>
 <span class="hl-comment">; ---  ---- -----</span>
 <span class="hl-comment">; AAPL Buy    400</span>
@@ -166,11 +166,13 @@
 <span class="hl-comment">; GOOG Buy    125</span></code></pre>
 
       <h3 id="select-where-by">Filter + Group-by</h3>
-      <p>Combine <code>where:</code> and <code>by:</code> in the same query. The filter is applied before grouping:</p>
-      <pre><code>(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">where:</span> (<span class="hl-fn">==</span> side <span class="hl-str">'Buy</span>)
-         <span class="hl-sym">by:</span> {<span class="hl-sym">sym:</span> sym}
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">buy_qty:</span> (<span class="hl-fn">sum</span> qty)}})
+      <p>Filter first, then group by. Chain two <code>select</code> calls for correct results:</p>
+      <pre><code><span class="hl-comment">; Step 1: filter to Buy rows only</span>
+(<span class="hl-kw">set</span> buys (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (<span class="hl-fn">==</span> side <span class="hl-str">"Buy"</span>)}))
+
+<span class="hl-comment">; Step 2: group and aggregate</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> buys <span class="hl-sym">by:</span> sym
+         <span class="hl-sym">buy_qty:</span> (<span class="hl-fn">sum</span> qty)})
 <span class="hl-comment">; sym  buy_qty</span>
 <span class="hl-comment">; ---  -------</span>
 <span class="hl-comment">; AAPL     400</span>
@@ -208,7 +210,7 @@
 
       <h3 id="update-by">Update with Group-by</h3>
       <p>Combine <code>where:</code> and <code>by:</code> for grouped conditional updates:</p>
-      <pre><code>(<span class="hl-kw">update</span> {<span class="hl-sym">price:</span> <span class="hl-num">0</span> <span class="hl-sym">from:</span> <span class="hl-str">'tab</span> <span class="hl-sym">by:</span> sym <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> volume <span class="hl-num">400</span>)})</code></pre>
+      <pre><code>(<span class="hl-kw">update</span> {<span class="hl-sym">price:</span> <span class="hl-num">0</span> <span class="hl-sym">from:</span> <span class="hl-str">'tab</span> <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> volume <span class="hl-num">400</span>)})</code></pre>
 
       <!-- ============================================================ -->
       <h2 id="insert">Insert</h2>
@@ -276,12 +278,12 @@
       <pre><code>(<span class="hl-fn">upsert</span> <span class="hl-str">'t</span> <span class="hl-num">1</span> (<span class="hl-fn">dict</span> [<span class="hl-sym">Value</span> <span class="hl-sym">Name</span> <span class="hl-sym">ID</span>] (<span class="hl-fn">list</span> <span class="hl-num">170.0</span> <span class="hl-str">'Quinn</span> <span class="hl-num">17</span>)))</code></pre>
 
       <!-- ============================================================ -->
-      <h2 id="delete">Delete</h2>
-      <p>The <code>delete</code> function removes rows matching a predicate. It returns a new table without the matched rows.</p>
+      <h2 id="delete">Delete Rows</h2>
+      <p>To remove rows matching a predicate, use <code>select</code> with the inverse condition:</p>
       <pre><code>(<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span> <span class="hl-num">4</span>] [<span class="hl-str">A</span> <span class="hl-str">B</span> <span class="hl-str">C</span> <span class="hl-str">D</span>])))
 
-<span class="hl-comment">; Delete rows where x > 2</span>
-(<span class="hl-kw">set</span> t (<span class="hl-fn">delete</span> t (<span class="hl-fn">&gt;</span> x <span class="hl-num">2</span>)))
+<span class="hl-comment">; Remove rows where x &gt; 2 by keeping rows where x &lt;= 2</span>
+(<span class="hl-kw">set</span> t (<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">where:</span> (<span class="hl-fn">&lt;=</span> x <span class="hl-num">2</span>)}))
 <span class="hl-comment">; x y</span>
 <span class="hl-comment">; - -</span>
 <span class="hl-comment">; 1 A</span>
@@ -300,7 +302,7 @@
         <tbody>
           <tr>
             <td><code>select</code></td>
-            <td><code>(select {from: t cols: {...} where: pred by: {...}})</code></td>
+            <td><code>(select {from: t col: expr where: pred by: key})</code></td>
             <td>Query with projection, filtering, and grouping</td>
           </tr>
           <tr>
@@ -319,9 +321,9 @@
             <td>Insert or update by key column</td>
           </tr>
           <tr>
-            <td><code>delete</code></td>
-            <td><code>(delete t pred)</code></td>
-            <td>Remove matching rows</td>
+            <td><em>delete rows</em></td>
+            <td><code>(select {from: t where: (not pred)})</code></td>
+            <td>Remove matching rows via inverse filter</td>
           </tr>
         </tbody>
       </table>

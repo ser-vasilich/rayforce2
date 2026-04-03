@@ -217,27 +217,21 @@
       <p>Window functions compute values across a set of related rows without collapsing the result. In Rayfall, windowed computations are expressed through <code>select</code> with rolling or cumulative expressions.</p>
 
       <h3>Rolling Computations</h3>
+      <p>Running computations like cumulative sums and moving averages can be computed using <code>scan</code> directly on column vectors:</p>
       <pre><code>(<span class="hl-kw">set</span> trades (<span class="hl-fn">table</span> [<span class="hl-sym">Sym</span> <span class="hl-sym">Time</span> <span class="hl-sym">Price</span>]
     (<span class="hl-fn">list</span> [<span class="hl-str">x</span> <span class="hl-str">x</span> <span class="hl-str">x</span>]
           [<span class="hl-num">12:00:01</span> <span class="hl-num">12:00:04</span> <span class="hl-num">12:00:06</span>]
           [<span class="hl-num">89.17</span> <span class="hl-num">70.5</span> <span class="hl-num">80.54</span>])))
 
-<span class="hl-comment">; Cumulative sum</span>
-(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">Sym:</span> Sym <span class="hl-sym">Time:</span> Time <span class="hl-sym">Price:</span> Price
-                <span class="hl-sym">cum_price:</span> (<span class="hl-fn">scan</span> <span class="hl-fn">+</span> Price)}})</code></pre>
-
-      <h3>Moving Averages</h3>
-      <pre><code><span class="hl-comment">; Moving average with scan and division</span>
-(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">Sym:</span> Sym <span class="hl-sym">Time:</span> Time <span class="hl-sym">Price:</span> Price
-                <span class="hl-sym">running_avg:</span> (<span class="hl-fn">/</span> (<span class="hl-fn">scan</span> <span class="hl-fn">+</span> Price) (<span class="hl-fn">+</span> <span class="hl-num">1</span> (<span class="hl-fn">til</span> (<span class="hl-fn">count</span> Price))))}})</code></pre>
+<span class="hl-comment">; Cumulative sum on the Price column</span>
+(<span class="hl-fn">scan</span> <span class="hl-fn">+</span> (<span class="hl-fn">at</span> trades <span class="hl-str">'Price</span>))
+<span class="hl-comment">; [89.17 159.67 240.21]</span></code></pre>
 
       <h3>Rank and Order</h3>
-      <pre><code><span class="hl-comment">; Rank prices within the table</span>
-(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades
-         <span class="hl-sym">cols:</span> {<span class="hl-sym">Sym:</span> Sym <span class="hl-sym">Price:</span> Price
-                <span class="hl-sym">rank:</span> (<span class="hl-fn">iasc</span> (<span class="hl-fn">iasc</span> Price))}})</code></pre>
+      <pre><code><span class="hl-comment">; Rank prices — double iasc gives dense rank</span>
+(<span class="hl-kw">set</span> prices [<span class="hl-num">89.17</span> <span class="hl-num">70.5</span> <span class="hl-num">80.54</span>])
+(<span class="hl-fn">iasc</span> (<span class="hl-fn">iasc</span> prices))
+<span class="hl-comment">; [2 0 1]</span></code></pre>
 
       <h3>Grouped Window</h3>
       <p>Combine <code>by:</code> with windowed expressions to compute per-group running totals:</p>
