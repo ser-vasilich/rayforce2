@@ -29,6 +29,7 @@
 #include "store/fileio.h"
 #include "store/splay.h"
 #include "store/part.h"
+#include "store/serde.h"
 #include "table/sym.h"
 #include "table/table.h"
 #include <stdatomic.h>
@@ -1390,6 +1391,57 @@ static MunitResult test_read_splayed_bad_sym_fatal(const void* params, void* fix
 
 /* ---- Suite definition -------------------------------------------------- */
 
+/* ---- test_serde_long_str_roundtrip --------------------------------------- */
+
+static MunitResult test_serde_long_str_roundtrip(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* Long string (>7 bytes) exercises the non-SSO path in serde.
+     * Before the fix, the serializer used obj->slen <= 7 which could
+     * misidentify a heap pointer's low byte as an SSO length, producing
+     * an empty string on deserialization. */
+    const char* long_str = "hello world, this is a long string for serde testing";
+    size_t long_len = strlen(long_str);
+    ray_t* orig = ray_str(long_str, long_len);
+    munit_assert_ptr_not_null(orig);
+    munit_assert_false(RAY_IS_ERR(orig));
+
+    /* Serialize */
+    ray_t* wire = ray_ser(orig);
+    munit_assert_ptr_not_null(wire);
+    munit_assert_false(RAY_IS_ERR(wire));
+
+    /* Deserialize */
+    ray_t* back = ray_de(wire);
+    munit_assert_ptr_not_null(back);
+    munit_assert_false(RAY_IS_ERR(back));
+    munit_assert_int(back->type, ==, -RAY_STR);
+
+    /* Verify content matches */
+    size_t back_len = ray_str_len(back);
+    munit_assert_size(back_len, ==, long_len);
+    const char* back_ptr = ray_str_ptr(back);
+    munit_assert_ptr_not_null(back_ptr);
+    munit_assert_memory_equal(long_len, back_ptr, long_str);
+
+    /* Also test a short string (SSO) round-trips correctly */
+    ray_t* short_orig = ray_str("hi", 2);
+    ray_t* short_wire = ray_ser(short_orig);
+    ray_t* short_back = ray_de(short_wire);
+    munit_assert_false(RAY_IS_ERR(short_back));
+    munit_assert_size(ray_str_len(short_back), ==, 2);
+    munit_assert_memory_equal(2, ray_str_ptr(short_back), "hi");
+
+    ray_release(short_back);
+    ray_release(short_wire);
+    ray_release(short_orig);
+    ray_release(back);
+    ray_release(wire);
+    ray_release(orig);
+
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1418,6 +1470,7 @@ static MunitTest store_tests[] = {
     { "/splay_load_with_sym",    test_splay_load_with_sym,    store_setup, store_teardown, 0, NULL },
     { "/splay_load_sym_missing", test_splay_load_sym_missing_corrupt, store_setup, store_teardown, 0, NULL },
     { "/read_splayed_bad_sym",   test_read_splayed_bad_sym_fatal, store_setup, store_teardown, 0, NULL },
+    { "/serde_long_str_roundtrip", test_serde_long_str_roundtrip, store_setup, store_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
