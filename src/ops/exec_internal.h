@@ -596,6 +596,12 @@ ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
 ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
                        ray_t* src_val, ray_t* dst_val);
 
+/* ── embedding_exec.c ── */
+ray_t* exec_cosine_sim(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec);
+ray_t* exec_euclidean_dist(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec);
+ray_t* exec_knn(ray_graph_t* g, ray_op_t* op, ray_t* emb_vec);
+ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op);
+
 /* ── temporal_exec.c ── */
 ray_t* exec_extract(ray_graph_t* g, ray_op_t* op);
 ray_t* exec_date_trunc(ray_graph_t* g, ray_op_t* op);
