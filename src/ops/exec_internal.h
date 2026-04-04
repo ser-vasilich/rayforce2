@@ -277,9 +277,84 @@ static inline void sym_elem(const ray_t* input, int64_t i,
 }
 
 /* ══════════════════════════════════════════
+ * Shared types — used by expr.c and exec.c
+ * ══════════════════════════════════════════ */
+
+typedef struct {
+    bool    enabled;
+    double  bias_f64;
+    int64_t bias_i64;
+} agg_affine_t;
+
+#define AGG_LINEAR_MAX_TERMS 8
+
+typedef struct {
+    bool    enabled;
+    uint8_t n_terms;
+    void*   term_ptrs[AGG_LINEAR_MAX_TERMS];
+    int8_t  term_types[AGG_LINEAR_MAX_TERMS];
+    int64_t coeff_i64[AGG_LINEAR_MAX_TERMS];
+    int64_t bias_i64;
+} agg_linear_t;
+
+typedef struct {
+    uint8_t n_terms;
+    int64_t syms[AGG_LINEAR_MAX_TERMS];
+    int64_t coeff_i64[AGG_LINEAR_MAX_TERMS];
+    int64_t bias_i64;
+} linear_expr_i64_t;
+
+/* ── Expression compiler types ── */
+
+#define EXPR_MAX_REGS 16
+#define EXPR_MAX_INS  48
+#define EXPR_MORSEL   RAY_MORSEL_ELEMS
+
+typedef struct {
+    uint8_t opcode;     /* OP_ADD, OP_NEG, OP_CAST, etc. */
+    uint8_t dst;        /* destination register */
+    uint8_t src1;       /* source 1 register */
+    uint8_t src2;       /* source 2 register (0xFF for unary) */
+} expr_ins_t;
+
+enum { REG_SCAN = 0, REG_CONST = 1, REG_SCRATCH = 2 };
+
+typedef struct {
+    uint8_t n_ins;
+    uint8_t n_regs;
+    uint8_t n_scratch;      /* scratch registers needed */
+    uint8_t out_reg;
+    int8_t  out_type;       /* RAY_F64, RAY_I64, or RAY_BOOL */
+    bool    has_parted;     /* true if any REG_SCAN refs a parted column */
+    struct {
+        uint8_t     kind;       /* REG_SCAN / REG_CONST / REG_SCRATCH */
+        int8_t      type;       /* computational type: RAY_F64 / RAY_I64 / RAY_BOOL */
+        int8_t      col_type;   /* original column type (REG_SCAN only) */
+        uint8_t     col_attrs;  /* column attrs — RAY_SYM width (REG_SCAN only) */
+        bool        is_parted;  /* true if this SCAN refs a parted column */
+        const void* data;       /* column data pointer (REG_SCAN only) */
+        ray_t*       parted_col; /* parted wrapper (is_parted only) */
+        double      const_f64;  /* scalar value (REG_CONST) */
+        int64_t     const_i64;  /* scalar value (REG_CONST) */
+    } regs[EXPR_MAX_REGS];
+    expr_ins_t ins[EXPR_MAX_INS];
+} ray_expr_t;
+
+/* ══════════════════════════════════════════
  * Extern forward declarations — larger functions in exec.c
  * ══════════════════════════════════════════ */
 
+/* ── expr.c ── */
+bool try_affine_sumavg_input(ray_graph_t* g, ray_t* tbl, ray_op_t* input_op,
+                             ray_t** out_vec, agg_affine_t* out_affine);
+bool try_linear_sumavg_input_i64(ray_graph_t* g, ray_t* tbl, ray_op_t* input_op,
+                                 agg_linear_t* out_plan);
+bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t* out);
+ray_t* expr_eval_full(const ray_expr_t* expr, int64_t nrows);
+ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input);
+ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* rhs);
+
+/* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
 ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
 ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_count);
