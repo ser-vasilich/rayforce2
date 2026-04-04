@@ -22,6 +22,7 @@
  */
 
 #include "lang/eval.h"
+#include "lang/eval_internal.h"
 #include "lang/env.h"
 #include "lang/nfo.h"
 #include "lang/parse.h"
@@ -82,151 +83,6 @@ void   ray_clear_error_trace(void) {
 /* ══════════════════════════════════════════
  * Arithmetic builtins
  * ══════════════════════════════════════════ */
-
-static ray_t* make_i64(int64_t v) {
-    ray_t* obj = ray_alloc(0);
-    if (!obj) return ray_error("oom", NULL);
-    obj->type = -RAY_I64;
-    obj->i64 = v;
-    return obj;
-}
-
-static ray_t* make_f64(double v) {
-    ray_t* obj = ray_alloc(0);
-    if (!obj) return ray_error("oom", NULL);
-    obj->type = -RAY_F64;
-    obj->f64 = v;
-    return obj;
-}
-
-static ray_t* make_i16(int16_t v) {
-    return ray_i16(v);
-}
-
-static ray_t* make_i32(int32_t v) {
-    return ray_i32(v);
-}
-
-static ray_t* make_u8(uint8_t v) {
-    return ray_u8(v);
-}
-
-static ray_t* make_bool(uint8_t v) {
-    ray_t* obj = ray_alloc(0);
-    if (!obj) return ray_error("oom", NULL);
-    obj->type = -RAY_BOOL;
-    obj->b8 = v;
-    return obj;
-}
-
-/* Helpers to extract numeric value as double */
-static int is_numeric(ray_t* x) {
-    return x->type == -RAY_I64 || x->type == -RAY_F64 ||
-           x->type == -RAY_I16 || x->type == -RAY_I32 ||
-           x->type == -RAY_U8  || x->type == -RAY_BOOL;
-}
-
-/* Check if an atom is a temporal type */
-static int is_temporal(ray_t* x) {
-    return x->type == -RAY_DATE || x->type == -RAY_TIME || x->type == -RAY_TIMESTAMP;
-}
-
-/* Convert temporal atom to nanoseconds for cross-temporal comparison.
- * DATE = days since epoch → ns, TIME = ms since midnight → ns, TIMESTAMP = ns */
-static int64_t temporal_as_ns(ray_t* x) {
-    if (x->type == -RAY_TIMESTAMP) return x->i64;
-    if (x->type == -RAY_DATE)      return (int64_t)x->i32 * 86400000000000LL;
-    if (x->type == -RAY_TIME)      return (int64_t)x->i32 * 1000000LL;
-    return 0;
-}
-
-/* Extract integer value from any integer atom as int64_t */
-static int64_t as_i64(ray_t* x) {
-    if (x->type == -RAY_I64)  return x->i64;
-    if (x->type == -RAY_I32)  return (int64_t)x->i32;
-    if (x->type == -RAY_I16)  return (int64_t)x->i16;
-    if (x->type == -RAY_U8)   return (int64_t)x->u8;
-    return x->i64; /* fallback */
-}
-
-static double as_f64(ray_t* x) {
-    if (x->type == -RAY_F64) return x->f64;
-    if (x->type == -RAY_I64) return (double)x->i64;
-    if (x->type == -RAY_I32) return (double)x->i32;
-    if (x->type == -RAY_I16) return (double)x->i16;
-    if (x->type == -RAY_U8)  return (double)x->u8;
-    if (x->type == -RAY_STR && ray_str_len(x) == 1) return (double)(unsigned char)x->sdata[0];
-    if (x->type == -RAY_BOOL) return (double)x->b8;
-    if (x->type == -RAY_DATE || x->type == -RAY_TIME) return (double)x->i32;
-    if (x->type == -RAY_TIMESTAMP) return (double)x->i64;
-    return (double)x->i64;
-}
-
-static int is_float_op(ray_t* a, ray_t* b) {
-    return a->type == -RAY_F64 || b->type == -RAY_F64;
-}
-
-/* Null sentinel checks */
-static int is_null_atom(ray_t* x) {
-    if (x->type == -RAY_I64)  return x->i64 == INT64_MIN;
-    if (x->type == -RAY_I32)  return x->i32 == INT32_MIN;
-    if (x->type == -RAY_I16)  return x->i16 == INT16_MIN;
-    if (x->type == -RAY_F64)  return isnan(x->f64);
-    return 0;
-}
-
-/* Return the null value for the promoted result type of two operands */
-static ray_t* null_for_promoted(ray_t* a, ray_t* b) {
-    /* If either is f64, or one is f64 and other is int, result is f64 null */
-    if (a->type == -RAY_F64 || b->type == -RAY_F64)
-        return make_f64(NAN);
-    /* Promote: i16 < i32 < i64.  Result type is the wider of the two */
-    if (a->type == -RAY_I64 || b->type == -RAY_I64)
-        return make_i64(INT64_MIN);
-    if (a->type == -RAY_I32 || b->type == -RAY_I32)
-        return make_i32(INT32_MIN);
-    if (a->type == -RAY_I16 || b->type == -RAY_I16)
-        return make_i16(INT16_MIN);
-    if (a->type == -RAY_U8 || b->type == -RAY_U8)
-        return make_i64(INT64_MIN);
-    return make_i64(INT64_MIN);
-}
-
-/* Determine the promoted integer result type for two numeric operands.
- * Returns atom type code (negative). */
-static int8_t promote_int_type(ray_t* a, ray_t* b) {
-    if (a->type == -RAY_I64 || b->type == -RAY_I64) return -RAY_I64;
-    if (a->type == -RAY_I32 || b->type == -RAY_I32) return -RAY_I32;
-    if (a->type == -RAY_U8 || b->type == -RAY_U8) {
-        /* u8 op u8 → u8, but u8 op i16 → i16 etc */
-        if (a->type == -RAY_U8 && b->type == -RAY_U8) return -RAY_U8;
-        return (a->type == -RAY_I16 || b->type == -RAY_I16) ? -RAY_I16 : -RAY_I64;
-    }
-    if (a->type == -RAY_I16 || b->type == -RAY_I16) return -RAY_I16;
-    return -RAY_I64;
-}
-
-/* Promote integer type following right-operand's type (K/q semantics for sub) */
-static int8_t promote_int_type_right(ray_t* a, ray_t* b) {
-    (void)a;
-    int8_t bt = b->type;
-    if (bt == -RAY_I32 || bt == -RAY_I16 || bt == -RAY_U8 || bt == -RAY_I64)
-        return bt;
-    int8_t at = a->type;
-    if (at == -RAY_I32 || at == -RAY_I16 || at == -RAY_U8 || at == -RAY_I64)
-        return at;
-    return -RAY_I64;
-}
-
-/* Create a result atom of the given type from an int64_t value */
-static ray_t* make_typed_int(int8_t atom_type, int64_t val) {
-    switch (atom_type) {
-    case -RAY_I16: return make_i16((int16_t)val);
-    case -RAY_I32: return make_i32((int32_t)val);
-    case -RAY_U8:  return make_u8((uint8_t)val);
-    default:       return make_i64(val);
-    }
-}
 
 /* Binary arithmetic */
 ray_t* ray_add_fn(ray_t* a, ray_t* b) {
@@ -550,7 +406,7 @@ ray_t* ray_mod_fn(ray_t* a, ray_t* b) {
 
 /* Helper: compare char atom vs string atom.
  * Returns: -1 if no char/string pair, else memcmp-like result via *out. */
-static int char_str_cmp(ray_t* a, ray_t* b, int *out) {
+int char_str_cmp(ray_t* a, ray_t* b, int *out) {
     const char *ap, *bp;
     size_t al, bl;
     int a_cs = (a->type == -RAY_STR);
@@ -646,7 +502,7 @@ ray_t* ray_lte(ray_t* a, ray_t* b) {
 }
 
 /* Check if comparable (numeric or temporal) */
-static int is_comparable(ray_t* x) {
+int is_comparable(ray_t* x) {
     return is_numeric(x) || is_temporal(x);
 }
 
@@ -694,14 +550,6 @@ ray_t* ray_neq(ray_t* a, ray_t* b) {
     if (is_float_op(a, b))
         return make_bool(as_f64(a) != as_f64(b) ? 1 : 0);
     return make_bool(as_i64(a) != as_i64(b) ? 1 : 0);
-}
-
-/* Logical — coerce to truthiness (0/nil/false = falsy, else truthy) */
-static inline int is_truthy(ray_t* x) {
-    if (x->type == -RAY_BOOL) return x->b8;
-    if (x->type == -RAY_I64)  return x->i64 != 0;
-    if (x->type == -RAY_F64)  return x->f64 != 0.0;
-    return 1; /* non-null objects are truthy */
 }
 
 ray_t* ray_and_fn(ray_t* a, ray_t* b) {
@@ -857,9 +705,6 @@ ray_t* ray_raise(ray_t* val) {
     return ray_error("domain", NULL);
 }
 
-/* Forward declaration for call_lambda (used by ray_try) */
-static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc);
-
 /* (try expr handler) — evaluate expr, if error call handler with error value.
  * Special form: receives unevaluated args. */
 ray_t* ray_try(ray_t* expr, ray_t* handler_expr) {
@@ -899,53 +744,9 @@ ray_t* ray_try(ray_t* expr, ray_t* handler_expr) {
  * FN_ATOMIC auto-mapping helpers
  * ══════════════════════════════════════════ */
 
-static int is_list(ray_t* x) {
-    return x && !RAY_IS_ERR(x) && x->type == RAY_LIST;
-}
-
-/* Check if x is a collection: boxed list OR typed vector */
-static int is_collection(ray_t* x) {
-    return x && !RAY_IS_ERR(x) && (x->type == RAY_LIST || ray_is_vec(x));
-}
-
-/* Extract the i-th element of a collection as a ray_t* atom.
- * For boxed lists, returns the stored pointer (no alloc).
- * For typed vectors, allocates a new atom.  Caller must release
- * atoms obtained from typed vectors (allocated == 1). */
-static ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
-    if (coll->type == RAY_LIST) {
-        *allocated = 0;
-        return ((ray_t**)ray_data(coll))[i];
-    }
-    *allocated = 1;
-    switch (coll->type) {
-        case RAY_I64:       return ray_i64(((int64_t*)ray_data(coll))[i]);
-        case RAY_F64:       return ray_f64(((double*)ray_data(coll))[i]);
-        case RAY_I32:       return ray_i32(((int32_t*)ray_data(coll))[i]);
-        case RAY_I16:       return ray_i16(((int16_t*)ray_data(coll))[i]);
-        case RAY_BOOL:      return ray_bool(((bool*)ray_data(coll))[i]);
-        case RAY_SYM:       return ray_sym(((int64_t*)ray_data(coll))[i]);
-        case RAY_U8:        return ray_u8(((uint8_t*)ray_data(coll))[i]);
-        case RAY_DATE:      return ray_date((int64_t)((int32_t*)ray_data(coll))[i]);
-        case RAY_TIME:      return ray_time((int64_t)((int32_t*)ray_data(coll))[i]);
-        case RAY_TIMESTAMP: return ray_timestamp(((int64_t*)ray_data(coll))[i]);
-        case RAY_GUID: {
-            const uint8_t* gd = ((uint8_t*)ray_data(coll)) + i * 16;
-            return ray_guid(gd);
-        }
-        /* RAY_CHAR removed — char vectors no longer exist */
-        case RAY_STR: {
-            size_t slen = 0;
-            const char* sp = ray_str_vec_get(coll, i, &slen);
-            return ray_str(sp ? sp : "", sp ? slen : 0);
-        }
-        default:            *allocated = 0; return ray_error("type", NULL);
-    }
-}
-
 /* Convert a typed vector to a boxed list.  If already a list, retains
  * and returns it directly.  Caller owns the returned object. */
-static ray_t* to_boxed_list(ray_t* x) {
+ray_t* to_boxed_list(ray_t* x) {
     if (!x || RAY_IS_ERR(x)) return x;
     if (x->type == RAY_LIST) { ray_retain(x); return x; }
     if (!ray_is_vec(x)) return ray_error("type", NULL);
@@ -973,7 +774,7 @@ static ray_t* to_boxed_list(ray_t* x) {
 /* Unbox a typed vector argument to a boxed list for use in builtins.
  * Sets *_bx to the allocated boxed list (caller must release) or NULL.
  * Returns the (possibly converted) argument, or an error. */
-static ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
+ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
     *_bx = NULL;
     if (x && !RAY_IS_ERR(x) && ray_is_vec(x)) {
         *_bx = to_boxed_list(x);
@@ -982,49 +783,10 @@ static ray_t* unbox_vec_arg(ray_t* x, ray_t** _bx) {
     return x;
 }
 
-/* Store a scalar result into a typed vector at position i.
- * Returns 0 on success, -1 if the element type doesn't match. */
-/* Extract a value from an atom for storage, handling cross-type casting.
- * Returns the value as int64_t (for integer/temporal types). */
-static int64_t elem_as_i64(ray_t* elem) {
-    if (elem->type == -RAY_I64 || elem->type == -RAY_TIMESTAMP ||
-        elem->type == -RAY_DATE || elem->type == -RAY_TIME ||
-        elem->type == -RAY_SYM) return elem->i64;
-    if (elem->type == -RAY_I32)  return (int64_t)elem->i32;
-    if (elem->type == -RAY_I16)  return (int64_t)elem->i16;
-    if (elem->type == -RAY_U8)   return (int64_t)elem->u8;
-    if (elem->type == -RAY_F64)  return (int64_t)elem->f64;
-    return elem->i64;
-}
-
-static int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
-    switch (vec->type) {
-        case RAY_I64:       ((int64_t*)ray_data(vec))[i]  = elem_as_i64(elem); return 0;
-        case RAY_F64:       ((double*)ray_data(vec))[i]    = (elem->type == -RAY_F64) ? elem->f64 : (double)elem_as_i64(elem); return 0;
-        case RAY_I32:       ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
-        case RAY_I16:       ((int16_t*)ray_data(vec))[i]   = (int16_t)elem_as_i64(elem); return 0;
-        case RAY_BOOL:      ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
-        case RAY_U8:        ((uint8_t*)ray_data(vec))[i]   = (uint8_t)elem_as_i64(elem); return 0;
-        /* RAY_CHAR removed — char vectors no longer exist */
-        case RAY_DATE:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
-        case RAY_TIME:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
-        case RAY_TIMESTAMP: ((int64_t*)ray_data(vec))[i]   = elem_as_i64(elem); return 0;
-        case RAY_SYM:       ((int64_t*)ray_data(vec))[i]   = elem->i64; return 0;
-        case RAY_GUID:      if (elem->obj) memcpy(((uint8_t*)ray_data(vec)) + i * 16, ray_data(elem->obj), 16); return 0;
-        default: return -1;
-    }
-}
-
 /* Map a binary function element-wise over collections.
  * Both args can be collections (zip-map) or one scalar (broadcast).
  * Produces typed vectors when output is numeric/bool, boxed lists otherwise. */
-static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, ray_t* right);
-
-static ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
-    return atomic_map_binary_op(fn, 0, left, right);
-}
-
-static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, ray_t* right) {
+ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, ray_t* right) {
     int left_coll = is_collection(left);
     int right_coll = is_collection(right);
 
@@ -1387,7 +1149,7 @@ static ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t*
 
 /* Map a unary function element-wise over a collection.
  * Produces typed vectors when output is numeric/bool, boxed lists otherwise. */
-static ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
+ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
     if (!is_collection(arg)) return fn(arg);
 
     int64_t len = ray_len(arg);
@@ -2004,7 +1766,7 @@ ray_t* ray_dev(ray_t* x) {
 
 /* Helper: call a function object with 1 arg, returning result.
  * Handles UNARY, BINARY, LAMBDA types. Does not release fn or arg. */
-static ray_t* call_fn1(ray_t* fn, ray_t* arg) {
+ray_t* call_fn1(ray_t* fn, ray_t* arg) {
     if (fn->type == RAY_UNARY) {
         ray_unary_fn f = (ray_unary_fn)(uintptr_t)fn->i64;
         return f(arg);
@@ -2017,7 +1779,7 @@ static ray_t* call_fn1(ray_t* fn, ray_t* arg) {
 }
 
 /* Helper: call a function object with 2 args. Does not release fn or args. */
-static ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
+ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
     if (fn->type == RAY_BINARY) {
         ray_binary_fn f = (ray_binary_fn)(uintptr_t)fn->i64;
         if ((fn->attrs & RAY_FN_ATOMIC) && (is_collection(a) || is_collection(b)))
@@ -3373,7 +3135,7 @@ ray_t* ray_reverse(ray_t* x) {
  * ══════════════════════════════════════════ */
 
 /* Reorder vector elements by an index array */
-static ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
+ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
     int8_t type = vec->type;
 
     if (type == RAY_STR) {
@@ -7778,7 +7540,7 @@ static void add_eval_error_frame(ray_t* nfo, ray_t* node) {
 static ray_t* vm_exec(ray_t* lambda, ray_t** call_args, int64_t argc);
 
 /* Call a lambda: compile on first call, then execute bytecode. */
-static ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
+ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc) {
     /* Lazy compilation on first call */
     if (!LAMBDA_IS_COMPILED(lambda)) {
         ray_compile(lambda);
