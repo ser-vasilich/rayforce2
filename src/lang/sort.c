@@ -22,6 +22,8 @@
  */
 
 #include "lang/eval_internal.h"
+#include "ops/ops.h"
+#include "mem/sys.h"
 
 /* ══════════════════════════════════════════
  * Sort builtins
