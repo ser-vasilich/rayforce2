@@ -357,6 +357,22 @@ ray_t* ray_xasc_fn(ray_t* tbl, ray_t* keys);
 ray_t* ray_xdesc_fn(ray_t* tbl, ray_t* keys);
 ray_t* ray_xrank_fn(ray_t* n_obj, ray_t* vec);
 
+/* Datalog builtins (formerly static in eval.c, now in datalog_builtin.c) */
+ray_t* ray_datoms_fn(ray_t** args, int64_t n);
+ray_t* ray_assert_fact_fn(ray_t** args, int64_t n);
+ray_t* ray_retract_fact_fn(ray_t** args, int64_t n);
+ray_t* ray_scan_eav_fn(ray_t** args, int64_t n);
+ray_t* ray_pull_fn(ray_t** args, int64_t n);
+ray_t* ray_rule_fn(ray_t** args, int64_t n);
+ray_t* ray_query_fn(ray_t** args, int64_t n);
+ray_t* ray_dl_program_fn(ray_t** args, int64_t n);
+ray_t* ray_dl_add_edb_fn(ray_t** args, int64_t n);
+ray_t* ray_dl_stratify_fn(ray_t* x);
+ray_t* ray_dl_eval_fn(ray_t* x);
+ray_t* ray_dl_query_fn(ray_t* prog_obj, ray_t* pred_obj);
+ray_t* ray_dl_provenance_fn(ray_t* prog_obj, ray_t* pred_obj);
+void   ray_dl_reset_rules(void);
+
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return atomic_map_binary_op(fn, 0, left, right);
