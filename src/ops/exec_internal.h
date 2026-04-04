@@ -502,6 +502,13 @@ void mk_prescan_fn(void* arg, uint32_t wid, int64_t start, int64_t end);
 uint32_t* build_enum_rank(ray_t* col, int64_t nrows, ray_t** hdr_out);
 ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit);
 
+/* ── join.c ── */
+ray_t* exec_join(ray_graph_t* g, ray_op_t* op, ray_t* left_table, ray_t* right_table);
+ray_t* exec_antijoin(ray_graph_t* g, ray_op_t* op,
+                     ray_t* left_table, ray_t* right_table);
+ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
+                        ray_t* left_table, ray_t* right_table);
+
 /* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
 ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
