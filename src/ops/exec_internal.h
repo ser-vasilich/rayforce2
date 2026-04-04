@@ -341,8 +341,39 @@ typedef struct {
 } ray_expr_t;
 
 /* ══════════════════════════════════════════
+ * Shared gather types — used by filter.c, exec.c (sort, join)
+ * ══════════════════════════════════════════ */
+
+#define MGATHER_MAX_COLS 16
+
+typedef struct {
+    const int64_t* idx;
+    char*          srcs[MGATHER_MAX_COLS];
+    char*          dsts[MGATHER_MAX_COLS];
+    uint8_t        esz[MGATHER_MAX_COLS];
+    int64_t        ncols;
+} multi_gather_ctx_t;
+
+typedef struct {
+    int64_t*     idx;
+    ray_t*        src_col;
+    ray_t*        dst_col;
+    uint8_t      esz;
+    bool         nullable;  /* true = idx may contain -1 (LEFT JOIN nulls) */
+} gather_ctx_t;
+
+/* ══════════════════════════════════════════
  * Extern forward declarations — larger functions in exec.c
  * ══════════════════════════════════════════ */
+
+/* ── exec.c (gather helpers) ── */
+void multi_gather_fn(void* raw, uint32_t wid, int64_t start, int64_t end);
+void gather_fn(void* raw, uint32_t wid, int64_t start, int64_t end);
+
+/* ── filter.c ── */
+ray_t* exec_filter(ray_graph_t* g, ray_op_t* op, ray_t* input, ray_t* pred);
+ray_t* exec_filter_head(ray_t* input, ray_t* pred, int64_t limit);
+ray_t* sel_compact(ray_graph_t* g, ray_t* tbl, ray_t* sel);
 
 /* ── expr.c ── */
 bool try_affine_sumavg_input(ray_graph_t* g, ray_t* tbl, ray_op_t* input_op,
