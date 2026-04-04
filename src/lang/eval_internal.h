@@ -341,6 +341,11 @@ ray_t* ray_unify_fn(ray_t* a, ray_t* b);
 /* Concat (formerly static in eval.c, now extern for table_builtin.c) */
 ray_t* ray_concat_fn(ray_t* a, ray_t* b);
 
+/* Temporal builtins (formerly static in eval.c, now in temporal.c) */
+ray_t* ray_date_clock(ray_t* arg);
+ray_t* ray_time_clock(ray_t* arg);
+ray_t* ray_timestamp_clock(ray_t* arg);
+
 /* Sort builtins (formerly static in eval.c, now in sort.c) */
 ray_t* ray_asc_fn(ray_t* x);
 ray_t* ray_desc_fn(ray_t* x);
