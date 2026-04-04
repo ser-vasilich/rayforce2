@@ -596,6 +596,10 @@ ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
 ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
                        ray_t* src_val, ray_t* dst_val);
 
+/* ── temporal_exec.c ── */
+ray_t* exec_extract(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_date_trunc(ray_graph_t* g, ray_op_t* op);
+
 /* ── string_exec.c ── */
 ray_t* exec_like(ray_graph_t* g, ray_op_t* op);
 ray_t* exec_ilike(ray_graph_t* g, ray_op_t* op);
