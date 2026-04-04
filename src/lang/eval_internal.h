@@ -322,6 +322,17 @@ ray_t* ray_scan_left(ray_t** args, int64_t n);
 ray_t* ray_scan_right(ray_t** args, int64_t n);
 ray_t* ray_enlist(ray_t** args, int64_t n);
 
+/* Sort builtins (formerly static in eval.c, now in sort.c) */
+ray_t* ray_asc_fn(ray_t* x);
+ray_t* ray_desc_fn(ray_t* x);
+ray_t* ray_iasc_fn(ray_t* x);
+ray_t* ray_idesc_fn(ray_t* x);
+ray_t* ray_rank_fn(ray_t* x);
+ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending);
+ray_t* ray_xasc_fn(ray_t* tbl, ray_t* keys);
+ray_t* ray_xdesc_fn(ray_t* tbl, ray_t* keys);
+ray_t* ray_xrank_fn(ray_t* n_obj, ray_t* vec);
+
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return atomic_map_binary_op(fn, 0, left, right);
