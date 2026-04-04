@@ -596,6 +596,15 @@ ray_t* exec_astar(ray_graph_t* g, ray_op_t* op,
 ray_t* exec_k_shortest(ray_graph_t* g, ray_op_t* op,
                        ray_t* src_val, ray_t* dst_val);
 
+/* ── string_exec.c ── */
+ray_t* exec_like(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_ilike(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_string_unary(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_strlen(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_substr(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_replace(ray_graph_t* g, ray_op_t* op);
+ray_t* exec_concat(ray_graph_t* g, ray_op_t* op);
+
 /* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
 ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
