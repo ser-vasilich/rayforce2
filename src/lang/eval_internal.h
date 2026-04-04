@@ -178,6 +178,32 @@ static inline ray_t* make_typed_int(int8_t atom_type, int64_t val) {
 }
 
 /* ══════════════════════════════════════════
+ * Type name helper
+ * ══════════════════════════════════════════ */
+
+static inline const char* type_sym_name(int8_t type) {
+    switch (type < 0 ? -type : type) {
+    case RAY_BOOL:      return type < 0 ? "b8" : "B8";
+    case RAY_U8:        return type < 0 ? "u8" : "U8";
+    case RAY_I16:       return type < 0 ? "i16" : "I16";
+    case RAY_I32:       return type < 0 ? "i32" : "I32";
+    case RAY_I64:       return type < 0 ? "i64" : "I64";
+    case RAY_F32:       return type < 0 ? "f32" : "F32";
+    case RAY_F64:       return type < 0 ? "f64" : "F64";
+    case RAY_DATE:      return type < 0 ? "date" : "DATE";
+    case RAY_TIME:      return type < 0 ? "time" : "TIME";
+    case RAY_TIMESTAMP: return type < 0 ? "timestamp" : "TIMESTAMP";
+    case RAY_SYM:       return type < 0 ? "symbol" : "SYMBOL";
+    case RAY_STR:       return type < 0 ? "str" : "STR";
+    case RAY_GUID:      return type < 0 ? "guid" : "GUID";
+    case RAY_TABLE:     return "TABLE";
+    case RAY_DICT:      return "DICT";
+    case RAY_LIST:      return "LIST";
+    default:            return "?";
+    }
+}
+
+/* ══════════════════════════════════════════
  * Truthiness
  * ══════════════════════════════════════════ */
 
@@ -372,6 +398,34 @@ ray_t* ray_dl_eval_fn(ray_t* x);
 ray_t* ray_dl_query_fn(ray_t* prog_obj, ray_t* pred_obj);
 ray_t* ray_dl_provenance_fn(ray_t* prog_obj, ray_t* pred_obj);
 void   ray_dl_reset_rules(void);
+
+/* System builtins (formerly static in eval.c, now in system.c) */
+ray_t* ray_eval_builtin(ray_t* x);
+ray_t* ray_parse_builtin(ray_t* x);
+ray_t* ray_print_fn(ray_t* x);
+ray_t* ray_meta_fn(ray_t* x);
+ray_t* ray_gc_fn(ray_t* x);
+ray_t* ray_system_fn(ray_t* x);
+ray_t* ray_getenv_fn(ray_t* x);
+ray_t* ray_setenv_fn(ray_t* name, ray_t* val);
+ray_t* ray_quote_fn(ray_t** args, int64_t n);
+ray_t* ray_return_fn(ray_t* x);
+ray_t* ray_args_fn(ray_t* x);
+ray_t* ray_rc_fn(ray_t* x);
+ray_t* ray_diverse_fn(ray_t* x);
+ray_t* ray_get_fn(ray_t* dict, ray_t* key);
+ray_t* ray_remove_fn(ray_t* dict, ray_t* key);
+ray_t* ray_timer_fn(ray_t* x);
+ray_t* ray_env_fn(ray_t* x);
+ray_t* ray_internals_fn(ray_t* x);
+ray_t* ray_memstat_fn(ray_t* x);
+ray_t* ray_sysinfo_fn(ray_t* x);
+ray_t* ray_ser_fn(ray_t* val);
+ray_t* ray_de_fn(ray_t* val);
+ray_t* ray_set_splayed_fn(ray_t** args, int64_t n);
+ray_t* ray_get_splayed_fn(ray_t** args, int64_t n);
+ray_t* ray_get_parted_fn(ray_t** args, int64_t n);
+ray_t* ray_guid_fn(ray_t* n_arg);
 
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
