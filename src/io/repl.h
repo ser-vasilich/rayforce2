@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef RAY_APP_REPL_H
-#define RAY_APP_REPL_H
+#ifndef RAY_IO_REPL_H
+#define RAY_IO_REPL_H
 
 #include <rayforce.h>
 
@@ -39,4 +39,4 @@ void       ray_repl_destroy(ray_repl_t* repl);
 void       ray_repl_run(ray_repl_t* repl);
 int        ray_repl_run_file(const char* path);
 
-#endif /* RAY_APP_REPL_H */
+#endif /* RAY_IO_REPL_H */
