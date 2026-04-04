@@ -569,6 +569,9 @@ void group_rows_range(group_ht_t* ht, void** key_data, int8_t* key_types,
                       uint8_t* key_attrs, ray_t** agg_vecs,
                       int64_t start, int64_t end);
 
+/* ── window.c ── */
+ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl);
+
 /* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
 ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
