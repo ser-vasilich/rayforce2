@@ -147,8 +147,7 @@ int64_t ray_serde_size(ray_t* obj) {
             return 1 + (s ? (int64_t)ray_str_len(s) : 0) + 1; /* +1 for null terminator */
         }
         case RAY_STR: {
-            size_t slen = (obj->slen <= 7) ? obj->slen : (obj->obj ? (size_t)obj->obj->len : 0);
-            return 1 + 8 + (int64_t)slen;
+            return 1 + 8 + (int64_t)ray_str_len(obj);
         }
         default: return 0;
         }
@@ -287,18 +286,9 @@ int64_t ray_ser_raw(uint8_t* buf, ray_t* obj) {
             return 2;
         }
         case RAY_STR: {
-            const char* p;
-            size_t slen;
-            if (obj->slen <= 7) {
-                p = obj->sdata;
-                slen = obj->slen;
-            } else if (obj->obj) {
-                p = (const char*)ray_data(obj->obj);
-                slen = (size_t)obj->obj->len;
-            } else {
-                p = "";
-                slen = 0;
-            }
+            size_t slen = ray_str_len(obj);
+            const char* p = ray_str_ptr(obj);
+            if (!p) { p = ""; slen = 0; }
             int64_t n = (int64_t)slen;
             memcpy(buf, &n, 8);
             memcpy(buf + 8, p, slen);
