@@ -11,7 +11,9 @@
 #define RAY_EVAL_INTERNAL_H
 
 #include "lang/eval.h"
+#include "lang/format.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ══════════════════════════════════════════
@@ -282,6 +284,11 @@ ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b);
 ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n);
 int    char_str_cmp(ray_t* a, ray_t* b, int *out);
 int    is_comparable(ray_t* x);
+
+/* Arithmetic builtins (formerly static in eval.c, now in arith.c) */
+ray_t* ray_round_fn(ray_t* x);
+ray_t* ray_floor_fn(ray_t* x);
+ray_t* ray_ceil_fn(ray_t* x);
 
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
