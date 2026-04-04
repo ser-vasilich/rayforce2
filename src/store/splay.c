@@ -63,14 +63,14 @@ ray_err_t ray_splay_save(ray_t* tbl, const char* dir, const char* sym_path) {
     if (!tbl || RAY_IS_ERR(tbl)) return RAY_ERR_TYPE;
     if (!dir) return RAY_ERR_IO;
 
+    /* Create directory (before sym save, since sym_path may be inside dir) */
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return RAY_ERR_IO;
+
     /* Save symbol table if sym_path provided */
     if (sym_path) {
         ray_err_t sym_err = ray_sym_save(sym_path);
         if (sym_err != RAY_OK) return sym_err;
     }
-
-    /* Create directory */
-    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return RAY_ERR_IO;
 
     int64_t ncols = ray_table_ncols(tbl);
 
