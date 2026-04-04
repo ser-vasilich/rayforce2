@@ -322,6 +322,11 @@ ray_t* ray_scan_left(ray_t** args, int64_t n);
 ray_t* ray_scan_right(ray_t** args, int64_t n);
 ray_t* ray_enlist(ray_t** args, int64_t n);
 
+/* String builtins (formerly static in eval.c, now in str_builtin.c) */
+ray_t* ray_split_fn(ray_t* str, ray_t* delim);
+ray_t* ray_like_fn(ray_t* x, ray_t* pattern);
+ray_t* ray_sym_name_fn(ray_t* x);
+
 /* Sort builtins (formerly static in eval.c, now in sort.c) */
 ray_t* ray_asc_fn(ray_t* x);
 ray_t* ray_desc_fn(ray_t* x);
