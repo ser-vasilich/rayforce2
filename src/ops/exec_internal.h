@@ -363,6 +363,97 @@ typedef struct {
 } gather_ctx_t;
 
 /* ══════════════════════════════════════════
+ * Shared sort types and constants — used by sort_exec.c, exec.c (window)
+ * ══════════════════════════════════════════ */
+
+#define RADIX_SORT_THRESHOLD 4096  /* switch from comparison to radix sort */
+#define SMALL_POOL_THRESHOLD 8192  /* skip pool dispatch below this size */
+#define NEARLY_SORTED_FRAC   0.05  /* threshold for nearly-sorted detection */
+#define MK_PRESCAN_MAX_KEYS  8     /* max sort keys for stack allocation */
+
+typedef struct {
+    ray_t**       vecs;
+    uint8_t*     desc;
+    uint8_t*     nulls_first;
+    uint8_t      n_sort;
+} sort_cmp_ctx_t;
+
+/* Radix pass context (shared across histogram + scatter phases) */
+typedef struct {
+    const uint64_t*  keys;
+    const int64_t*   idx;
+    uint64_t*        keys_out;
+    int64_t*         idx_out;
+    int64_t          n;
+    uint8_t          shift;
+    uint32_t         n_tasks;
+    uint32_t*        hist;       /* flat [n_tasks * 256] */
+    int64_t*         offsets;    /* flat [n_tasks * 256] */
+} radix_pass_ctx_t;
+
+/* Key-encoding context for parallel encode phase */
+typedef struct {
+    uint64_t*       keys;      /* output */
+    int64_t*        indices;   /* if non-NULL, initialize indices[i]=i (fused iota) */
+    /* Single-key fields: */
+    const void*     data;      /* raw column data */
+    int8_t          type;      /* column type */
+    uint8_t         col_attrs; /* RAY_SYM width attrs */
+    bool            desc;
+    bool            nulls_first; /* for single-key F64: 1=nulls first */
+    /* SYM rank mapping (NULL if not sym): */
+    const uint32_t* enum_rank; /* intern_id → sort rank */
+    /* Composite-key fields (n_keys > 1): */
+    uint8_t         n_keys;
+    ray_t**          vecs;
+    int64_t         mins[16];
+    int64_t         ranges[16];
+    uint8_t         bit_shifts[16]; /* bit offset for key k in composite */
+    uint8_t         descs[16];
+    const uint32_t* enum_ranks[16]; /* per-key rank mappings */
+} radix_encode_ctx_t;
+
+/* Parallel multi-key min/max prescan context */
+typedef struct {
+    ray_t*     const* vecs;
+    uint32_t* const* enum_ranks;
+    uint8_t          n_keys;
+    int64_t          nrows;
+    uint32_t         n_workers;
+    int64_t*         pw_mins;
+    int64_t*         pw_maxs;
+} mk_prescan_ctx_t;
+
+/* Parallel sort phase 1 context */
+typedef struct {
+    const sort_cmp_ctx_t* cmp_ctx;
+    int64_t*  indices;
+    int64_t*  tmp;
+    int64_t   nrows;
+    uint32_t  n_chunks;
+} sort_phase1_ctx_t;
+
+/* Parallel merge pass context */
+typedef struct {
+    const sort_cmp_ctx_t* cmp_ctx;
+    const int64_t*  src;
+    int64_t*        dst;
+    int64_t         nrows;
+    int64_t         run_size;
+} sort_merge_ctx_t;
+
+/* Compute the number of significant bytes for radix sort based on type.
+ * Returns 1..8: the number of byte passes radix_sort_run needs. */
+static inline uint8_t radix_key_bytes(int8_t type) {
+    switch (type) {
+    case RAY_BOOL: case RAY_U8:   return 1;
+    case RAY_I16:                return 2;
+    case RAY_I32: case RAY_DATE: case RAY_TIME: return 4;
+    default:                    return 8;  /* I64, F64, TIMESTAMP, SYM */
+    }
+}
+
+/* ══════════════════════════════════════════
  * Extern forward declarations — larger functions in exec.c
  * ══════════════════════════════════════════ */
 
@@ -384,6 +475,32 @@ bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t* out);
 ray_t* expr_eval_full(const ray_expr_t* expr, int64_t nrows);
 ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input);
 ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* rhs);
+
+/* ── sort_exec.c ── */
+int sort_cmp(const sort_cmp_ctx_t* ctx, int64_t a, int64_t b);
+void sort_insertion(const sort_cmp_ctx_t* ctx, int64_t* arr, int64_t n);
+void sort_merge_recursive(const sort_cmp_ctx_t* ctx,
+                          int64_t* arr, int64_t* tmp, int64_t n);
+void sort_phase1_fn(void* arg, uint32_t worker_id, int64_t start, int64_t end);
+void sort_merge_fn(void* arg, uint32_t worker_id, int64_t start, int64_t end);
+void key_introsort(uint64_t* keys, int64_t* idx, int64_t n);
+double detect_sortedness(ray_pool_t* pool, const uint64_t* keys, int64_t n);
+uint8_t compute_key_nbytes(ray_pool_t* pool, const uint64_t* keys,
+                            int64_t n, uint8_t type_max);
+int64_t* radix_sort_run(ray_pool_t* pool, uint64_t* keys, int64_t* indices,
+                         uint64_t* keys_tmp, int64_t* idx_tmp,
+                         int64_t n, uint8_t n_bytes,
+                         uint64_t** sorted_keys_out);
+uint64_t* packed_radix_sort_run(ray_pool_t* pool, uint64_t* data,
+                                 uint64_t* tmp, int64_t n, uint8_t n_bytes);
+int64_t* msd_radix_sort_run(ray_pool_t* pool, uint64_t* keys, int64_t* indices,
+                              uint64_t* keys_tmp, int64_t* idx_tmp,
+                              int64_t n, uint8_t n_bytes,
+                              uint64_t** sorted_keys_out);
+void radix_encode_fn(void* arg, uint32_t wid, int64_t start, int64_t end);
+void mk_prescan_fn(void* arg, uint32_t wid, int64_t start, int64_t end);
+uint32_t* build_enum_rank(ray_t* col, int64_t nrows, ray_t** hdr_out);
+ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit);
 
 /* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
