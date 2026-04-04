@@ -36,9 +36,9 @@ LDFLAGS = $(DEBUG_LDFLAGS)
 
 # Sources
 LIB_SRC  = $(wildcard src/*/*.c)
-LIB_SRC := $(filter-out src/lang/repl.c, $(LIB_SRC))
+LIB_SRC := $(filter-out src/app/main.c, $(LIB_SRC))
 LIB_OBJ  = $(LIB_SRC:.c=.o)
-MAIN_SRC = src/lang/repl.c
+MAIN_SRC = src/app/main.c
 MAIN_OBJ = $(MAIN_SRC:.c=.o)
 TEST_SRC = $(wildcard test/*.c)
 TEST_OBJ = $(TEST_SRC:.c=.o)
