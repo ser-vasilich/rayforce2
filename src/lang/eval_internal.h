@@ -290,6 +290,38 @@ ray_t* ray_round_fn(ray_t* x);
 ray_t* ray_floor_fn(ray_t* x);
 ray_t* ray_ceil_fn(ray_t* x);
 
+/* Collection helpers (formerly static in eval.c, now in collection.c) */
+int    atom_eq(ray_t* a, ray_t* b);
+ray_t* list_to_typed_vec(ray_t* list, int8_t orig_vec_type);
+
+/* Collection builtins (formerly static in eval.c, now in collection.c) */
+ray_t* ray_map(ray_t** args, int64_t n);
+ray_t* ray_pmap(ray_t** args, int64_t n);
+ray_t* ray_fold(ray_t** args, int64_t n);
+ray_t* ray_scan_fn(ray_t** args, int64_t n);
+ray_t* ray_filter_fn(ray_t* vec, ray_t* mask);
+ray_t* ray_apply(ray_t** args, int64_t n);
+ray_t* ray_distinct_fn(ray_t* x);
+ray_t* ray_in(ray_t* val, ray_t* vec);
+ray_t* ray_except(ray_t* vec1, ray_t* vec2);
+ray_t* ray_union(ray_t* vec1, ray_t* vec2);
+ray_t* ray_sect(ray_t* vec1, ray_t* vec2);
+ray_t* ray_take(ray_t* vec, ray_t* n_obj);
+ray_t* ray_at(ray_t* vec, ray_t* idx);
+ray_t* ray_find(ray_t* vec, ray_t* val);
+ray_t* ray_til(ray_t* x);
+ray_t* ray_reverse(ray_t* x);
+ray_t* ray_rand_fn(ray_t* a, ray_t* b);
+ray_t* ray_bin_fn(ray_t* sorted, ray_t* val);
+ray_t* ray_binr_fn(ray_t* sorted, ray_t* val);
+ray_t* ray_map_left(ray_t** args, int64_t n);
+ray_t* ray_map_right(ray_t** args, int64_t n);
+ray_t* ray_fold_left(ray_t** args, int64_t n);
+ray_t* ray_fold_right(ray_t** args, int64_t n);
+ray_t* ray_scan_left(ray_t** args, int64_t n);
+ray_t* ray_scan_right(ray_t** args, int64_t n);
+ray_t* ray_enlist(ray_t** args, int64_t n);
+
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return atomic_map_binary_op(fn, 0, left, right);
