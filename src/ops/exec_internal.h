@@ -509,6 +509,66 @@ ray_t* exec_antijoin(ray_graph_t* g, ray_op_t* op,
 ray_t* exec_window_join(ray_graph_t* g, ray_op_t* op,
                         ray_t* left_table, ray_t* right_table);
 
+/* ── group.c ── */
+ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input);
+ray_t* exec_count_distinct(ray_graph_t* g, ray_op_t* op, ray_t* input);
+ray_t* exec_group(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t group_limit);
+
+/* Group HT types and helpers — shared with pivot (exec.c) */
+#define GHT_NEED_SUM   0x01
+#define GHT_NEED_MIN   0x02
+#define GHT_NEED_MAX   0x04
+#define GHT_NEED_SUMSQ 0x08
+
+typedef struct {
+    uint16_t entry_stride;
+    uint16_t row_stride;
+    uint8_t  n_keys;
+    uint8_t  n_aggs;
+    uint8_t  n_agg_vals;
+    uint8_t  need_flags;
+    uint8_t  agg_is_f64;
+    uint8_t  agg_is_first;
+    uint8_t  agg_is_last;
+    int8_t   agg_val_slot[8];
+    uint16_t off_sum;
+    uint16_t off_min;
+    uint16_t off_max;
+    uint16_t off_sumsq;
+} ght_layout_t;
+
+typedef struct {
+    uint32_t*    slots;
+    uint32_t     ht_cap;
+    char*        rows;
+    uint32_t     grp_count;
+    uint32_t     grp_cap;
+    ght_layout_t layout;
+    ray_t*        _h_slots;
+    ray_t*        _h_rows;
+} group_ht_t;
+
+/* Row-level accessors for group HT rows */
+#define HT_SALT(h)  ((uint8_t)((h) >> 56))
+#define HT_EMPTY    UINT32_MAX
+#define HT_PACK(salt, gid)  (((uint32_t)(uint8_t)(salt) << 24) | ((gid) & 0xFFFFFF))
+#define HT_GID(s)   ((s) & 0xFFFFFF)
+#define HT_SALT_V(s) ((uint8_t)((s) >> 24))
+
+#define ROW_RD_F64(row, off, slot) (((const double*)((const void*)((row) + (off))))[(slot)])
+#define ROW_RD_I64(row, off, slot) (((const int64_t*)((const void*)((row) + (off))))[(slot)])
+#define ROW_WR_F64(row, off, slot) (((double*)((void*)((row) + (off))))[(slot)])
+#define ROW_WR_I64(row, off, slot) (((int64_t*)((void*)((row) + (off))))[(slot)])
+
+ght_layout_t ght_compute_layout(uint8_t n_keys, uint8_t n_aggs,
+                                ray_t** agg_vecs, uint8_t need_flags,
+                                const uint16_t* agg_ops);
+bool group_ht_init(group_ht_t* ht, uint32_t cap, const ght_layout_t* ly);
+void group_ht_free(group_ht_t* ht);
+void group_rows_range(group_ht_t* ht, void** key_data, int8_t* key_types,
+                      uint8_t* key_attrs, ray_t** agg_vecs,
+                      int64_t start, int64_t end);
+
 /* ── exec.c ── */
 ray_t* materialize_mapcommon(ray_t* mc);
 ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
