@@ -21,217 +21,16 @@
  *   SOFTWARE.
  */
 
-#if !defined(_WIN32) && !defined(_GNU_SOURCE)
-#define _GNU_SOURCE
-#endif
-
-#include "exec.h"
-#include "hash.h"
-#include "pool.h"
-#include "profile.h"
-#include "store/csr.h"
-#include "store/hnsw.h"
-#include "lftj.h"
-#include "mem/heap.h"
-#include "table/sym.h"
-#include "table/table.h"
-#include "vec/str.h"
-#include <string.h>
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <float.h>
-#include <ctype.h>
+#include "ops/exec_internal.h"
 
 /* Global profiler instance (zero-initialized = inactive) */
 ray_profile_t g_ray_profile;
 
 /* --------------------------------------------------------------------------
- * Arena-based scratch allocation helpers
- *
- * All temporary buffers use the buddy allocator instead of malloc/free.
- * ray_alloc() returns a ray_t* header; data starts at ray_data(hdr).
- * -------------------------------------------------------------------------- */
-
-/* Allocate zero-initialized scratch buffer, returns data pointer.
- * *hdr_out receives the ray_t* header for later ray_free(). */
-static inline void* scratch_calloc(ray_t** hdr_out, size_t nbytes) {
-    ray_t* h = ray_alloc(nbytes);
-    if (!h) { *hdr_out = NULL; return NULL; }
-    void* p = ray_data(h);
-    memset(p, 0, nbytes);
-    *hdr_out = h;
-    return p;
-}
-
-/* Allocate uninitialized scratch buffer. */
-static inline void* scratch_alloc(ray_t** hdr_out, size_t nbytes) {
-    ray_t* h = ray_alloc(nbytes);
-    if (!h) { *hdr_out = NULL; return NULL; }
-    *hdr_out = h;
-    return ray_data(h);
-}
-
-/* Reallocate: alloc new, copy old, free old. Returns new data pointer. */
-static inline void* scratch_realloc(ray_t** hdr_out, size_t old_bytes, size_t new_bytes) {
-    ray_t* old_h = *hdr_out;
-    ray_t* new_h = ray_alloc(new_bytes);
-    if (!new_h) return NULL;
-    void* new_p = ray_data(new_h);
-    if (old_h) {
-        memcpy(new_p, ray_data(old_h), old_bytes < new_bytes ? old_bytes : new_bytes);
-        ray_free(old_h);
-    }
-    *hdr_out = new_h;
-    return new_p;
-}
-
-/* Free a scratch buffer (NULL-safe). */
-static inline void scratch_free(ray_t* hdr) {
-    if (!hdr) return;
-    ray_free(hdr);
-}
-
-/* Safe sym intern for constant column names in graph algorithm result tables.
- * Falls back to 0 on failure (column name interning should never fail for
- * short constant strings unless ray_sym_init failed). */
-static inline int64_t sym_intern_safe(const char* s, size_t len) {
-    int64_t id = ray_sym_intern(s, len);
-    return id >= 0 ? id : 0;
-}
-
-/* --------------------------------------------------------------------------
- * Unified column read/write helpers
- *
- * Read any integer-representable column value as int64_t.
- * RAY_SYM dispatches on attrs for adaptive width (W8/W16/W32/W64).
- * F64 is NOT handled — caller must check for F64 separately.
- * -------------------------------------------------------------------------- */
-
-static inline int64_t read_col_i64(const void* data, int64_t row,
-                                    int8_t type, uint8_t attrs) {
-    switch (type) {
-    case RAY_I64: case RAY_TIMESTAMP:
-        return ((const int64_t*)data)[row];
-    case RAY_SYM:
-        switch (attrs & RAY_SYM_W_MASK) {
-        case RAY_SYM_W8:  return (int64_t)((const uint8_t*)data)[row];
-        case RAY_SYM_W16: return (int64_t)((const uint16_t*)data)[row];
-        case RAY_SYM_W32: return (int64_t)((const uint32_t*)data)[row];
-        default:         return ((const int64_t*)data)[row];
-        }
-    case RAY_I32: case RAY_DATE: case RAY_TIME:
-        return (int64_t)((const int32_t*)data)[row];
-    case RAY_I16:
-        return (int64_t)((const int16_t*)data)[row];
-    default: /* RAY_BOOL, RAY_U8 */
-        return (int64_t)((const uint8_t*)data)[row];
-    }
-}
-
-static inline void write_col_i64(void* data, int64_t row, int64_t val,
-                                  int8_t type, uint8_t attrs) {
-    switch (type) {
-    case RAY_I64: case RAY_TIMESTAMP:
-        ((int64_t*)data)[row] = val; return;
-    case RAY_SYM:
-        ray_write_sym(data, row, (uint64_t)val, type, attrs); return;
-    case RAY_I32: case RAY_DATE: case RAY_TIME:
-        ((int32_t*)data)[row] = (int32_t)val; return;
-    case RAY_I16:
-        ((int16_t*)data)[row] = (int16_t)val; return;
-    default: /* RAY_BOOL, RAY_U8 */
-        ((uint8_t*)data)[row] = (uint8_t)val; return;
-    }
-}
-
-/* --------------------------------------------------------------------------
- * RAY_SYM-aware column helpers
- *
- * col_esz():      element size respecting RAY_SYM adaptive width
- * col_vec_new():  create vector matching source column's type + width
- * -------------------------------------------------------------------------- */
-
-static inline uint8_t col_esz(const ray_t* col) {
-    return ray_sym_elem_size(col->type, col->attrs);
-}
-
-/* Fast key reader for DA/sort hot loops: elem_size is pre-computed and
- * loop-invariant, so the switch is always perfectly predicted.  Avoids the
- * ray_read_sym → type dispatch chain (3+ branches per element). */
-static inline int64_t read_by_esz(const void* data, int64_t row, uint8_t esz) {
-    switch (esz) {
-    case 1:  return (int64_t)((const uint8_t*)data)[row];
-    case 2:  return (int64_t)((const uint16_t*)data)[row];
-    case 4:  return (int64_t)((const uint32_t*)data)[row];
-    default: return ((const int64_t*)data)[row];
-    }
-}
-
-static inline ray_t* col_vec_new(const ray_t* src, int64_t cap) {
-    if (src->type == RAY_SYM)
-        return ray_sym_vec_new(src->attrs & RAY_SYM_W_MASK, cap);
-    return ray_vec_new(src->type, cap);
-}
-
-/* Propagate str_pool from source to gathered result.
- * Source may be a slice — resolve to owner's pool. */
-static inline void col_propagate_str_pool(ray_t* dst, const ray_t* src) {
-    if (src->type != RAY_STR || dst->type != RAY_STR) return;
-    const ray_t* owner = (src->attrs & RAY_ATTR_SLICE) ? src->slice_parent : src;
-    if (owner->str_pool) {
-        if (dst->str_pool) ray_release(dst->str_pool);
-        ray_retain(owner->str_pool);
-        dst->str_pool = owner->str_pool;
-    }
-}
-
-/* Same but from explicit type + attrs (for parted base type, etc.) */
-static inline ray_t* typed_vec_new(int8_t type, uint8_t attrs, int64_t cap) {
-    if (type == RAY_SYM)
-        return ray_sym_vec_new(attrs & RAY_SYM_W_MASK, cap);
-    return ray_vec_new(type, cap);
-}
-
-/* --------------------------------------------------------------------------
- * Cancellation check: returns true if the current query was cancelled.
- * Uses relaxed load — zero cost on x86 (piggybacks on existing cache line).
- * -------------------------------------------------------------------------- */
-
-static inline bool pool_cancelled(ray_pool_t* pool) {
-    return pool && RAY_UNLIKELY(atomic_load_explicit(&pool->cancelled,
-                                                     memory_order_relaxed));
-}
-
-#define CHECK_CANCEL(pool)                                \
-    do { if (pool_cancelled(pool))                        \
-             return ray_error("cancel", NULL); } while(0)
-
-#define CHECK_CANCEL_GOTO(pool, lbl)                      \
-    do { if (pool_cancelled(pool)) {                      \
-             result = ray_error("cancel", NULL);          \
-             goto lbl;                                    \
-         }                                                \
-    } while(0)
-
-/* --------------------------------------------------------------------------
- * Helper: find the extended node for a given base node ID.
- * O(ext_count) linear scan; acceptable for typical graph sizes (<100 ext nodes).
- * -------------------------------------------------------------------------- */
-
-static ray_op_ext_t* find_ext(ray_graph_t* g, uint32_t node_id) {
-    for (uint32_t i = 0; i < g->ext_count; i++) {
-        if (g->ext_nodes[i] && g->ext_nodes[i]->base.id == node_id)
-            return g->ext_nodes[i];
-    }
-    return NULL;
-}
-
-/* --------------------------------------------------------------------------
  * Materialize a MAPCOMMON column into a flat RAY_SYM vector.
  * Expands key_values × row_counts into one SYM ID per row.
  * -------------------------------------------------------------------------- */
-static ray_t* materialize_mapcommon(ray_t* mc) {
+ray_t* materialize_mapcommon(ray_t* mc) {
     ray_t** mc_ptrs = (ray_t**)ray_data(mc);
     ray_t* kv = mc_ptrs[0];   /* key_values: typed vec (DATE/I64/SYM) */
     ray_t* rc = mc_ptrs[1];   /* row_counts: RAY_I64 vec of n_parts */
@@ -274,7 +73,7 @@ static ray_t* materialize_mapcommon(ray_t* mc) {
 }
 
 /* Materialize first N rows of a MAPCOMMON column into a flat typed vector. */
-static ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n) {
+ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n) {
     ray_t** mc_ptrs = (ray_t**)ray_data(mc);
     ray_t* kv = mc_ptrs[0];
     ray_t* rc = mc_ptrs[1];
@@ -313,7 +112,7 @@ static ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n) {
 }
 
 /* Materialize MAPCOMMON through a boolean filter predicate. */
-static ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_count) {
+ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_count) {
     ray_t** mc_ptrs = (ray_t**)ray_data(mc);
     ray_t* kv = mc_ptrs[0];
     ray_t* rc = mc_ptrs[1];
@@ -1417,57 +1216,6 @@ static ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input)
     }
 
     return result;
-}
-
-/* Convert an atom (-RAY_STR or RAY_SYM scalar) to ray_str_t for comparison */
-static void atom_to_str_t(ray_t* atom, ray_str_t* out, const char** out_pool) {
-    const char* sp;
-    size_t sl;
-    if (atom->type == -RAY_STR) {
-        sp = ray_str_ptr(atom);
-        sl = ray_str_len(atom);
-    } else if (atom->type == RAY_STR) {
-        /* Length-1 RAY_STR vector used as scalar */
-        if (atom->len < 1) {
-            memset(out, 0, sizeof(ray_str_t));
-            *out_pool = NULL;
-            return;
-        }
-        const ray_str_t* elems = (const ray_str_t*)ray_data(atom);
-        *out = elems[0];
-        *out_pool = atom->str_pool ? (const char*)ray_data(atom->str_pool) : NULL;
-        return;
-    } else if (RAY_IS_SYM(atom->type) && ray_is_atom(atom)) {
-        /* SAFETY: ray_sym_str returns a borrowed pointer into the append-only
-         * sym table.  The pointer is valid for the lifetime of the sym table
-         * (i.e., the entire query execution).  If the sym table ever gains
-         * eviction, this must retain the returned atom. */
-        ray_t* s = ray_sym_str(atom->i64);
-        sp = s ? ray_str_ptr(s) : "";
-        sl = s ? ray_str_len(s) : 0;
-    } else {
-        sp = ""; sl = 0;
-    }
-    memset(out, 0, sizeof(ray_str_t));
-    out->len = (uint32_t)sl;
-    if (sl <= RAY_STR_INLINE_MAX) {
-        if (sl > 0) memcpy(out->data, sp, sl);
-        *out_pool = NULL;
-    } else {
-        memcpy(out->prefix, sp, 4);
-        out->pool_off = 0;
-        *out_pool = sp; /* point directly at atom's string data */
-    }
-}
-
-/* Resolve RAY_STR vec to data owner, accounting for slices.
- * Returns element pointer (already offset for slices) and pool pointer. */
-static inline void str_resolve(const ray_t* v, const ray_str_t** elems,
-                               const char** pool) {
-    const ray_t* owner = (v->attrs & RAY_ATTR_SLICE) ? v->slice_parent : v;
-    int64_t base = (v->attrs & RAY_ATTR_SLICE) ? v->slice_offset : 0;
-    *elems = (const ray_str_t*)ray_data((ray_t*)owner) + base;
-    *pool = owner->str_pool ? (const char*)ray_data(owner->str_pool) : NULL;
 }
 
 /* Inner loop for binary element-wise string comparison over [start, end) */
@@ -2803,7 +2551,7 @@ static ray_t* sel_compact(ray_graph_t* g, ray_t* tbl, ray_t* sel) {
  * ============================================================================ */
 
 /* Forward declarations — exec_node wraps exec_node_inner with profiling */
-static ray_t* exec_node(ray_graph_t* g, ray_op_t* op);
+/* exec_node declared extern in exec_internal.h */
 static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op);
 
 /* --------------------------------------------------------------------------
@@ -10772,16 +10520,6 @@ static ray_t* exec_ilike(ray_graph_t* g, ray_op_t* op) {
  * could be optimized with batch interning if profiling shows a bottleneck.
  * ============================================================================ */
 
-/* Helper: resolve sym/enum element to string */
-static inline void sym_elem(const ray_t* input, int64_t i,
-                            const char** out_str, size_t* out_len) {
-    int64_t sym_id = ray_read_sym(ray_data((ray_t*)input), i, input->type, input->attrs);
-    ray_t* atom = ray_sym_str(sym_id);
-    if (!atom) { *out_str = ""; *out_len = 0; return; }
-    *out_str = ray_str_ptr(atom);
-    *out_len = ray_str_len(atom);
-}
-
 /* UPPER / LOWER / TRIM — unary SYM/STR → SYM/STR */
 static ray_t* exec_string_unary(ray_graph_t* g, ray_op_t* op) {
     ray_t* input = exec_node(g, op->inputs[0]);
@@ -15471,7 +15209,7 @@ static ray_t* exec_hnsw_knn(ray_graph_t* g, ray_op_t* op) {
 
 /* Broadcast a scalar atom to a column vector of nrows elements.
  * Returns a new vector (caller owns).  On failure returns ray_error(). */
-static ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
+ray_t* broadcast_scalar(ray_t* atom, int64_t nrows) {
     if (!atom) return ray_error("domain", NULL);
     if (nrows <= 0) {
         /* Empty table: return an empty vector of the matching type */
@@ -15842,7 +15580,7 @@ static inline bool op_is_heavy(uint16_t opc) {
            (opc >= OP_EXPAND && opc <= OP_HNSW_KNN);
 }
 
-static ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
+ray_t* exec_node(ray_graph_t* g, ray_op_t* op) {
     if (!op) return ray_error("nyi", NULL);
 
     bool profiling = g_ray_profile.active && op_is_heavy(op->opcode);
