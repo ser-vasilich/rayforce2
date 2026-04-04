@@ -1442,6 +1442,115 @@ static MunitResult test_serde_long_str_roundtrip(const void* params, void* fixtu
     return MUNIT_OK;
 }
 
+/* ---- test_serde_null_roundtrip ------------------------------------------ */
+
+static MunitResult test_serde_null_roundtrip(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* 1. C NULL pointer → RAY_SERDE_NULL → C NULL */
+    {
+        ray_t* wire = ray_ser(NULL);
+        munit_assert_ptr_not_null(wire);
+        munit_assert_false(RAY_IS_ERR(wire));
+        ray_t* back = ray_de(wire);
+        munit_assert_null(back);
+        ray_release(wire);
+    }
+
+    /* 2. I64 vector with null bitmap: [10, NULL, 30] */
+    {
+        ray_t* vec = ray_vec_new(RAY_I64, 3);
+        vec->len = 3;
+        int64_t* data = (int64_t*)ray_data(vec);
+        data[0] = 10;
+        data[1] = INT64_MIN; /* null sentinel */
+        data[2] = 30;
+        ray_vec_set_null(vec, 1, true);
+
+        ray_t* wire = ray_ser(vec);
+        munit_assert_ptr_not_null(wire);
+        munit_assert_false(RAY_IS_ERR(wire));
+
+        ray_t* back = ray_de(wire);
+        munit_assert_ptr_not_null(back);
+        munit_assert_false(RAY_IS_ERR(back));
+        munit_assert_int(back->type, ==, RAY_I64);
+        munit_assert_int(back->len, ==, 3);
+
+        int64_t* bd = (int64_t*)ray_data(back);
+        munit_assert_true(bd[0] == 10);
+        munit_assert_true(bd[2] == 30);
+
+        /* Null bitmap must survive roundtrip */
+        munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+
+        ray_release(back);
+        ray_release(wire);
+        ray_release(vec);
+    }
+
+    /* 3. F64 vector with NaN null: [1.5, NULL, 3.5] */
+    {
+        ray_t* vec = ray_vec_new(RAY_F64, 3);
+        vec->len = 3;
+        double* data = (double*)ray_data(vec);
+        data[0] = 1.5;
+        data[1] = NAN;
+        data[2] = 3.5;
+        ray_vec_set_null(vec, 1, true);
+
+        ray_t* wire = ray_ser(vec);
+        ray_t* back = ray_de(wire);
+        munit_assert_false(RAY_IS_ERR(back));
+        munit_assert_int(back->type, ==, RAY_F64);
+
+        double* bd = (double*)ray_data(back);
+        munit_assert_double(bd[0], ==, 1.5);
+        munit_assert_double(bd[2], ==, 3.5);
+        munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+
+        ray_release(back);
+        ray_release(wire);
+        ray_release(vec);
+    }
+
+    /* 4. STR vector with null element: ["hello", NULL, "world"] */
+    {
+        ray_t* vec = ray_vec_new(RAY_STR, 3);
+        vec = ray_str_vec_append(vec, "hello", 5);
+        vec = ray_str_vec_append(vec, "", 0);  /* placeholder for null */
+        vec = ray_str_vec_append(vec, "world", 5);
+        ray_vec_set_null(vec, 1, true);
+
+        ray_t* wire = ray_ser(vec);
+        munit_assert_ptr_not_null(wire);
+        munit_assert_false(RAY_IS_ERR(wire));
+
+        ray_t* back = ray_de(wire);
+        munit_assert_ptr_not_null(back);
+        munit_assert_false(RAY_IS_ERR(back));
+        munit_assert_int(back->type, ==, RAY_STR);
+        munit_assert_int(back->len, ==, 3);
+        munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+
+        /* Non-null elements must survive */
+        size_t slen = 0;
+        const char* s0 = ray_str_vec_get(back, 0, &slen);
+        munit_assert_size(slen, ==, 5);
+        munit_assert_memory_equal(5, s0, "hello");
+
+        const char* s2 = ray_str_vec_get(back, 2, &slen);
+        munit_assert_size(slen, ==, 5);
+        munit_assert_memory_equal(5, s2, "world");
+
+        ray_release(back);
+        ray_release(wire);
+        ray_release(vec);
+    }
+
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1471,6 +1580,7 @@ static MunitTest store_tests[] = {
     { "/splay_load_sym_missing", test_splay_load_sym_missing_corrupt, store_setup, store_teardown, 0, NULL },
     { "/read_splayed_bad_sym",   test_read_splayed_bad_sym_fatal, store_setup, store_teardown, 0, NULL },
     { "/serde_long_str_roundtrip", test_serde_long_str_roundtrip, store_setup, store_teardown, 0, NULL },
+    { "/serde_null_roundtrip", test_serde_null_roundtrip, store_setup, store_teardown, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
