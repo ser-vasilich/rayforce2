@@ -327,6 +327,20 @@ ray_t* ray_split_fn(ray_t* str, ray_t* delim);
 ray_t* ray_like_fn(ray_t* x, ray_t* pattern);
 ray_t* ray_sym_name_fn(ray_t* x);
 
+/* Table builtins (formerly static in eval.c, now in table_builtin.c) */
+uint16_t pivot_fn_to_agg_op(ray_t* fn);
+ray_t* ray_pivot_fn(ray_t** args, int64_t n);
+ray_t* ray_modify_fn(ray_t** args, int64_t n);
+ray_t* ray_alter_fn(ray_t** args, int64_t n);
+ray_t* ray_del_fn(ray_t** args, int64_t n);
+ray_t* ray_row_fn(ray_t* tbl, ray_t* idx);
+ray_t* ray_union_all_fn(ray_t* t1, ray_t* t2);
+ray_t* ray_table_distinct_fn(ray_t* tbl);
+ray_t* ray_unify_fn(ray_t* a, ray_t* b);
+
+/* Concat (formerly static in eval.c, now extern for table_builtin.c) */
+ray_t* ray_concat_fn(ray_t* a, ray_t* b);
+
 /* Sort builtins (formerly static in eval.c, now in sort.c) */
 ray_t* ray_asc_fn(ray_t* x);
 ray_t* ray_desc_fn(ray_t* x);
