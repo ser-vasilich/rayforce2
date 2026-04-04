@@ -1481,8 +1481,11 @@ static MunitResult test_serde_null_roundtrip(const void* params, void* fixture) 
         munit_assert_true(bd[0] == 10);
         munit_assert_true(bd[2] == 30);
 
-        /* Null bitmap must survive roundtrip */
+        /* Verify actual null bitmap contents, not just the flag */
         munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+        munit_assert_false(ray_vec_is_null(back, 0));
+        munit_assert_true(ray_vec_is_null(back, 1));
+        munit_assert_false(ray_vec_is_null(back, 2));
 
         ray_release(back);
         ray_release(wire);
@@ -1508,6 +1511,9 @@ static MunitResult test_serde_null_roundtrip(const void* params, void* fixture) 
         munit_assert_double(bd[0], ==, 1.5);
         munit_assert_double(bd[2], ==, 3.5);
         munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+        munit_assert_false(ray_vec_is_null(back, 0));
+        munit_assert_true(ray_vec_is_null(back, 1));
+        munit_assert_false(ray_vec_is_null(back, 2));
 
         ray_release(back);
         ray_release(wire);
@@ -1532,6 +1538,9 @@ static MunitResult test_serde_null_roundtrip(const void* params, void* fixture) 
         munit_assert_int(back->type, ==, RAY_STR);
         munit_assert_int(back->len, ==, 3);
         munit_assert_true(back->attrs & RAY_ATTR_HAS_NULLS);
+        munit_assert_false(ray_vec_is_null(back, 0));
+        munit_assert_true(ray_vec_is_null(back, 1));
+        munit_assert_false(ray_vec_is_null(back, 2));
 
         /* Non-null elements must survive */
         size_t slen = 0;
