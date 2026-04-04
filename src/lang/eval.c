@@ -34,7 +34,10 @@
 #include "table/sym.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
-#include "app/format.h"
+#include "lang/format.h"
+#include "store/serde.h"
+#include "store/splay.h"
+#include "store/part.h"
 /* ray_error() is declared in <rayforce.h> (included via eval.h) */
 
 #include <string.h>
@@ -9449,27 +9452,97 @@ static ray_t* ray_split_fn(ray_t* str, ray_t* delim) {
     return result;
 }
 
-/* (ser val) → serialize to bytes (stub: just returns the value) */
-static ray_t* ray_ser_fn(ray_t* val) {
-    if (!val) {
-        /* null → empty bytes marker */
-        ray_t* r = ray_alloc(1);
-        if (!r) return ray_error("oom", NULL);
-        r->type = -RAY_U8;
-        r->u8 = 0;
-        r->attrs |= 0x80; /* marker: serialized null */
-        return r;
-    }
-    ray_retain(val);
-    return val;
+/* Helper: extract null-terminated path from a STR atom into a stack buffer.
+ * Returns pointer to buf on success, NULL on failure. */
+static const char* str_to_cpath(ray_t* s, char* buf, size_t bufsz) {
+    if (!s || s->type != -RAY_STR) return NULL;
+    const char* p = ray_str_ptr(s);
+    size_t len = ray_str_len(s);
+    if (!p || len == 0 || len >= bufsz) return NULL;
+    memcpy(buf, p, len);
+    buf[len] = '\0';
+    return buf;
 }
 
-/* (de val) → deserialize (stub: returns the value, or null for serialized null) */
+/* (ser val) → serialize to U8 vector with IPC header */
+static ray_t* ray_ser_fn(ray_t* val) {
+    return ray_ser(val);
+}
+
+/* (de bytes) → deserialize from U8 vector */
 static ray_t* ray_de_fn(ray_t* val) {
-    if (!val) return NULL;
-    if (val->type == -RAY_U8 && (val->attrs & 0x80)) return NULL;
-    ray_retain(val);
-    return val;
+    return ray_de(val);
+}
+
+/* Build default sym path: dir/sym. Returns NULL if file does not exist. */
+static const char* splay_default_sym(const char* dir, char* buf, size_t bufsz,
+                                     bool must_exist) {
+    int n = snprintf(buf, bufsz, "%s/sym", dir);
+    if (n < 0 || (size_t)n >= bufsz) return NULL;
+    if (must_exist && access(buf, F_OK) != 0) return NULL;
+    return buf;
+}
+
+/* (set-splayed "dir" table) or (set-splayed "dir" table "sym_path") */
+static ray_t* ray_set_splayed_fn(ray_t** args, int64_t n) {
+    if (n < 2 || n > 3) return ray_error("domain", NULL);
+
+    char dir[1024];
+    if (!str_to_cpath(args[0], dir, sizeof(dir))) return ray_error("type", NULL);
+
+    ray_t* tbl = args[1];
+    if (!tbl || tbl->type != RAY_TABLE) return ray_error("type", NULL);
+
+    char sym[1024];
+    const char* sym_path = NULL;
+    if (n == 3 && args[2] && args[2]->type == -RAY_STR)
+        sym_path = str_to_cpath(args[2], sym, sizeof(sym));
+    else
+        sym_path = splay_default_sym(dir, sym, sizeof(sym), false);
+
+    ray_err_t err = ray_splay_save(tbl, dir, sym_path);
+    if (err != RAY_OK) return ray_error(ray_err_code_str(err), NULL);
+
+    ray_retain(tbl);
+    return tbl;
+}
+
+/* (get-splayed "dir") or (get-splayed "dir" "sym_path") */
+static ray_t* ray_get_splayed_fn(ray_t** args, int64_t n) {
+    if (n < 1 || n > 2) return ray_error("domain", NULL);
+
+    char dir[1024];
+    if (!str_to_cpath(args[0], dir, sizeof(dir))) return ray_error("type", NULL);
+
+    char sym[1024];
+    const char* sym_path = NULL;
+    if (n == 2 && args[1] && args[1]->type == -RAY_STR)
+        sym_path = str_to_cpath(args[1], sym, sizeof(sym));
+    else
+        sym_path = splay_default_sym(dir, sym, sizeof(sym), true);
+
+    return ray_splay_load(dir, sym_path);
+}
+
+/* (get-parted "db_root" `table_name) — load partitioned table */
+static ray_t* ray_get_parted_fn(ray_t** args, int64_t n) {
+    if (n != 2) return ray_error("domain", NULL);
+
+    char root[1024];
+    if (!str_to_cpath(args[0], root, sizeof(root))) return ray_error("type", NULL);
+
+    /* Table name as symbol atom */
+    if (!args[1] || args[1]->type != -RAY_SYM) return ray_error("type", NULL);
+    ray_t* name_atom = ray_sym_str(args[1]->i64);
+    if (!name_atom) return ray_error("name", NULL);
+
+    char name[256];
+    size_t nlen = ray_str_len(name_atom);
+    if (nlen == 0 || nlen >= sizeof(name)) return ray_error("domain", NULL);
+    memcpy(name, ray_str_ptr(name_atom), nlen);
+    name[nlen] = '\0';
+
+    return ray_read_parted(root, name);
 }
 
 /* (guid n) → generate n random GUIDs as GUID vector */
@@ -12051,9 +12124,14 @@ static void ray_register_builtins(void) {
     /* String operations */
     register_binary("split",     RAY_FN_NONE, ray_split_fn);
 
-    /* Serialization stubs */
+    /* Serialization */
     register_unary("ser",        RAY_FN_NONE, ray_ser_fn);
     register_unary("de",         RAY_FN_NONE, ray_de_fn);
+
+    /* Splayed / partitioned table I/O */
+    register_vary("set-splayed", RAY_FN_NONE, ray_set_splayed_fn);
+    register_vary("get-splayed", RAY_FN_NONE, ray_get_splayed_fn);
+    register_vary("get-parted",  RAY_FN_NONE, ray_get_parted_fn);
 
     /* GUID generation */
     register_unary("guid",       RAY_FN_NONE, ray_guid_fn);

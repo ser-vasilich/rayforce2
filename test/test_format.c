@@ -24,7 +24,7 @@
 #include "munit.h"
 #include <rayforce.h>
 #include "mem/heap.h"
-#include "app/format.h"
+#include "lang/format.h"
 #include <string.h>
 #include <limits.h>
 #include <math.h>

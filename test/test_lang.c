@@ -30,7 +30,7 @@
 #include "lang/env.h"
 #include "lang/parse.h"
 #include "lang/eval.h"
-#include "app/format.h"
+#include "lang/format.h"
 
 /* Forward-declare runtime API to avoid ray_vm_t redefinition from runtime.h */
 struct ray_runtime_s;

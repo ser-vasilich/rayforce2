@@ -27,7 +27,7 @@
 #define _GNU_SOURCE
 #endif
 
-#include "app/format.h"
+#include "lang/format.h"
 #include "io/repl.h"
 #include "app/term.h"
 #include "lang/env.h"

@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "app/format.h"
+#include "lang/format.h"
 #include "table/sym.h"
 #include "lang/eval.h"  /* RAY_ATTR_DICT */
 #include "ops/ops.h"    /* RAY_LAZY, ray_lazy_materialize */

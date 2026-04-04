@@ -21,8 +21,8 @@
  *   SOFTWARE.
  */
 
-#ifndef RAY_FORMAT_H
-#define RAY_FORMAT_H
+#ifndef RAY_LANG_FORMAT_H
+#define RAY_LANG_FORMAT_H
 
 #include <rayforce.h>
 #include <stdio.h>
@@ -47,4 +47,4 @@ void ray_fmt_set_width(int cols);
 /* Type name string (e.g. RAY_I64 -> "i64") */
 const char* ray_type_name(int8_t type);
 
-#endif /* RAY_FORMAT_H */
+#endif /* RAY_LANG_FORMAT_H */
