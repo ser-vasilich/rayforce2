@@ -238,7 +238,7 @@
 
       <h2>Use Cases</h2>
       <ul>
-        <li><strong>Saving and loading application state</strong> &mdash; serialize with <code>ser</code>, write bytes to disk with <code>write</code>; read back with <code>read</code> and deserialize with <code>de</code></li>
+        <li><strong>Saving and loading application state</strong> &mdash; use <code>set-splayed</code> / <code>get-splayed</code> for tables, or <code>ser</code> / <code>de</code> for in-memory round-trips. Binary file persistence via the C API (<code>ray_ser_raw</code> + file I/O)</li>
         <li><strong>Passing data between processes</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding</li>
         <li><strong>Binary file format</strong> &mdash; the IPC format serves as a compact, self-describing binary format for Rayforce data</li>
       </ul>
