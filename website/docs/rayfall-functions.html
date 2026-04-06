@@ -464,13 +464,16 @@
       </table>
 
       <!-- ════════════════════════════════════════ -->
-      <h2 id="serialization">Serialization</h2>
+      <h2 id="serialization">Serialization &amp; Storage</h2>
 
       <table>
         <thead><tr><th>Function</th><th>Type</th><th>Description</th><th>Example</th></tr></thead>
         <tbody>
           <tr><td><code>ser</code></td><td>unary</td><td>Serialize value to binary format</td><td><code>(ser [1 2 3])</code></td></tr>
           <tr><td><code>de</code></td><td>unary</td><td>Deserialize from binary format</td><td><code>(de bytes)</code></td></tr>
+          <tr><td><code>set-splayed</code></td><td>variadic</td><td>Save table as splayed columns to directory</td><td><code>(set-splayed "db/trades" trades)</code></td></tr>
+          <tr><td><code>get-splayed</code></td><td>variadic</td><td>Load splayed table from directory</td><td><code>(get-splayed "db/trades")</code></td></tr>
+          <tr><td><code>get-parted</code></td><td>variadic</td><td>Load partitioned table by name from root directory</td><td><code>(get-parted "db" 'trades)</code></td></tr>
         </tbody>
       </table>
 
