@@ -427,6 +427,21 @@ ray_t* ray_get_splayed_fn(ray_t** args, int64_t n);
 ray_t* ray_get_parted_fn(ray_t** args, int64_t n);
 ray_t* ray_guid_fn(ray_t* n_arg);
 
+/* Group (formerly static in eval.c, now extern for query.c) */
+ray_t* ray_group_fn(ray_t* x);
+
+/* Query bridge builtins (formerly in eval.c, now in ops/query.c) */
+ray_t* ray_select_fn(ray_t** args, int64_t n);
+ray_t* ray_update(ray_t** args, int64_t n);
+ray_t* ray_insert(ray_t** args, int64_t n);
+ray_t* ray_upsert(ray_t** args, int64_t n);
+ray_t* ray_xbar(ray_t* col, ray_t* bucket);
+ray_t* ray_left_join(ray_t** args, int64_t n);
+ray_t* ray_inner_join(ray_t** args, int64_t n);
+ray_t* ray_antijoin_fn(ray_t** args, int64_t n);
+ray_t* ray_window_join(ray_t** args, int64_t n);
+ray_t* ray_asof_join_fn(ray_t** args, int64_t n);
+
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return atomic_map_binary_op(fn, 0, left, right);
