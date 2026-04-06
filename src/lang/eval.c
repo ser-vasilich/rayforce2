@@ -32,6 +32,7 @@
 #include "datalog/datalog.h"
 #include "table/sym.h"
 #include "ops/pool.h"
+#include "ops/profile.h"
 #include "table/sym.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
@@ -3758,11 +3759,11 @@ static ray_t* ray_resolve_fn(ray_t** args, int64_t n) {
  * SPECIAL_FORM: does not pre-evaluate args. */
 static ray_t* ray_timeit_fn(ray_t** args, int64_t n) {
     if (n < 1) return ray_error("domain", NULL);
-    clock_t t0 = clock();
+    int64_t t0 = ray_profile_now_ns();
     ray_t* result = ray_eval(args[0]);
-    clock_t t1 = clock();
+    int64_t t1 = ray_profile_now_ns();
     if (result && !RAY_IS_ERR(result)) ray_release(result);
-    double ms = (double)(t1 - t0) / (double)CLOCKS_PER_SEC * 1000.0;
+    double ms = (double)(t1 - t0) / 1e6;
     return make_f64(ms);
 }
 
