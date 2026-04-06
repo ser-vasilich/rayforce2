@@ -2268,49 +2268,49 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
                           gather_rows, ext->sort.desc ? ext->sort.desc[0] : 0);
     }
 
-    /* Gather all columns using sorted indices */
-    if (gather_pool && valid_ncols > 0 && valid_ncols <= MGATHER_MAX_COLS) {
-        /* Fused multi-column gather: one pass over indices for all columns */
-        multi_gather_ctx_t mgctx = { .idx = sorted_idx, .ncols = 0 };
-        for (int64_t c = 0; c < ncols; c++) {
-            if (!new_cols[c]) continue;
-            if (c == decode_col_idx) continue;
-            ray_t* col = ray_table_get_col_idx(tbl, c);
-            int64_t ci = mgctx.ncols;
-            mgctx.srcs[ci] = (char*)ray_data(col);
-            mgctx.dsts[ci] = (char*)ray_data(new_cols[c]);
-            mgctx.esz[ci]  = col_esz(col);
-            mgctx.ncols++;
+    /* Gather all columns using sorted indices, in batches of MGATHER_MAX_COLS */
+    for (int64_t base = 0; base < ncols; ) {
+        char*   g_srcs[MGATHER_MAX_COLS];
+        char*   g_dsts[MGATHER_MAX_COLS];
+        uint8_t g_esz[MGATHER_MAX_COLS];
+        int64_t g_nc = 0;
+        for (; base < ncols && g_nc < MGATHER_MAX_COLS; base++) {
+            if (!new_cols[base] || base == decode_col_idx) continue;
+            ray_t* col = ray_table_get_col_idx(tbl, base);
+            g_srcs[g_nc] = (char*)ray_data(col);
+            g_dsts[g_nc] = (char*)ray_data(new_cols[base]);
+            g_esz[g_nc]  = col_esz(col);
+            g_nc++;
         }
-        if (mgctx.ncols > 0)
-            ray_pool_dispatch(gather_pool, multi_gather_fn, &mgctx, gather_rows);
-    } else {
-        /* Fallback: per-column gather */
-        for (int64_t c = 0; c < ncols; c++) {
-            ray_t* col = ray_table_get_col_idx(tbl, c);
-            if (!col || !new_cols[c]) continue;
-            if (c == decode_col_idx) continue;
-            if (gather_pool) {
-                gather_ctx_t gctx = {
-                    .idx = sorted_idx, .src_col = col, .dst_col = new_cols[c],
-                    .esz = col_esz(col), .nullable = false,
-                };
-                ray_pool_dispatch(gather_pool, gather_fn, &gctx, gather_rows);
-            } else {
-                uint8_t esz = col_esz(col);
-                char* src_p = (char*)ray_data(col);
-                char* dst_p = (char*)ray_data(new_cols[c]);
-                for (int64_t i = 0; i < gather_rows; i++)
-                    memcpy(dst_p + i * esz, src_p + sorted_idx[i] * esz, esz);
+        if (g_nc == 0) continue;
+        if (n_sort == 1)
+            partitioned_gather(gather_pool, sorted_idx, gather_rows,
+                               nrows, g_srcs, g_dsts, g_esz, g_nc);
+        else {
+            multi_gather_ctx_t mg = { .idx = sorted_idx, .ncols = g_nc };
+            for (int64_t i = 0; i < g_nc; i++) {
+                mg.srcs[i] = g_srcs[i];
+                mg.dsts[i] = g_dsts[i];
+                mg.esz[i]  = g_esz[i];
             }
+            if (gather_pool)
+                ray_pool_dispatch(gather_pool, multi_gather_fn, &mg,
+                                 gather_rows);
+            else
+                multi_gather_fn(&mg, 0, 0, gather_rows);
         }
     }
 
-    /* Propagate str_pool for any RAY_STR columns gathered by index */
+    /* Propagate str_pool / sym_dict from source columns */
     for (int64_t c = 0; c < ncols; c++) {
         if (!new_cols[c]) continue;
         ray_t* col = ray_table_get_col_idx(tbl, c);
-        if (col) col_propagate_str_pool(new_cols[c], col);
+        if (!col) continue;
+        col_propagate_str_pool(new_cols[c], col);
+        if (col->type == RAY_SYM && col->sym_dict) {
+            ray_retain(col->sym_dict);
+            new_cols[c]->sym_dict = col->sym_dict;
+        }
     }
 
     for (int64_t c = 0; c < ncols; c++) {
@@ -2472,41 +2472,101 @@ ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
         }
     }
 
+    /* Pre-allocate all output columns */
+    ray_pool_t* gather_pool = (nrows > RAY_PARALLEL_THRESHOLD)
+                              ? ray_pool_get() : NULL;
+    ray_t* new_cols[ncols];
+    int64_t col_names[ncols];
+    int64_t valid_ncols = 0;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        ray_t* col = ray_table_get_col_idx(tbl, c);
+        col_names[c] = ray_table_col_name(tbl, c);
+        if (!col) { new_cols[c] = NULL; continue; }
+        ray_t* nc = col_vec_new(col, nrows);
+        if (!nc || RAY_IS_ERR(nc)) {
+            /* Allocation failed — clean up and return error */
+            for (int64_t j = 0; j < c; j++)
+                if (new_cols[j]) ray_release(new_cols[j]);
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+            ray_release(idx);
+            return nc ? nc : ray_error("oom", NULL);
+        }
+        nc->len = nrows;
+        new_cols[c] = nc;
+        valid_ncols++;
+    }
+
+    /* Decode sort key column directly from sorted radix keys */
+    if (decode_col_idx >= 0 && new_cols[decode_col_idx]) {
+        radix_decode_into(ray_data(new_cols[decode_col_idx]),
+                          key_cols[0]->type, sorted_keys,
+                          nrows, descs[0]);
+    }
+
+    /* Gather remaining columns in batches of MGATHER_MAX_COLS.
+     * Single-key sorts use partitioned gather (permutation has locality).
+     * Multi-key sorts use regular parallel gather. */
+    for (int64_t base = 0; base < ncols; ) {
+        char*   g_srcs[MGATHER_MAX_COLS];
+        char*   g_dsts[MGATHER_MAX_COLS];
+        uint8_t g_esz[MGATHER_MAX_COLS];
+        int64_t g_nc = 0;
+        for (; base < ncols && g_nc < MGATHER_MAX_COLS; base++) {
+            if (!new_cols[base] || base == decode_col_idx) continue;
+            ray_t* col = ray_table_get_col_idx(tbl, base);
+            g_srcs[g_nc] = (char*)ray_data(col);
+            g_dsts[g_nc] = (char*)ray_data(new_cols[base]);
+            g_esz[g_nc]  = col_esz(col);
+            g_nc++;
+        }
+        if (g_nc == 0) continue;
+        if (n_keys == 1)
+            partitioned_gather(gather_pool, idx_data, nrows,
+                               nrows, g_srcs, g_dsts, g_esz, g_nc);
+        else {
+            multi_gather_ctx_t mg = { .idx = idx_data, .ncols = g_nc };
+            for (int64_t i = 0; i < g_nc; i++) {
+                mg.srcs[i] = g_srcs[i];
+                mg.dsts[i] = g_dsts[i];
+                mg.esz[i]  = g_esz[i];
+            }
+            if (gather_pool)
+                ray_pool_dispatch(gather_pool, multi_gather_fn, &mg, nrows);
+            else
+                multi_gather_fn(&mg, 0, 0, nrows);
+        }
+    }
+
+    /* Propagate str_pool / sym_dict from source columns */
+    for (int64_t c = 0; c < ncols; c++) {
+        if (!new_cols[c]) continue;
+        ray_t* col = ray_table_get_col_idx(tbl, c);
+        if (!col) continue;
+        col_propagate_str_pool(new_cols[c], col);
+        if (col->type == RAY_SYM && col->sym_dict) {
+            ray_retain(col->sym_dict);
+            new_cols[c]->sym_dict = col->sym_dict;
+        }
+    }
+
+    /* Build result table */
     ray_t* result = ray_table_new(ncols);
     if (RAY_IS_ERR(result)) {
+        for (int64_t c = 0; c < ncols; c++)
+            if (new_cols[c]) ray_release(new_cols[c]);
         if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
         ray_release(idx);
         return result;
     }
 
     for (int64_t c = 0; c < ncols; c++) {
-        ray_t* col = ray_table_get_col_idx(tbl, c);
-        int64_t name_id = ray_table_col_name(tbl, c);
-        ray_t* gathered;
-
-        if (c == decode_col_idx) {
-            gathered = ray_vec_new(col->type, nrows);
-            if (!gathered || RAY_IS_ERR(gathered)) {
-                if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
-                ray_release(idx);
-                ray_release(result);
-                return gathered ? gathered : ray_error("oom", NULL);
-            }
-            gathered->len = nrows;
-            radix_decode_into(ray_data(gathered), col->type, sorted_keys,
-                              nrows, descs[0]);
-        } else {
-            gathered = gather_by_idx(col, idx_data, nrows);
-        }
-        if (RAY_IS_ERR(gathered)) {
-            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
-            ray_release(idx);
-            ray_release(result);
-            return gathered;
-        }
-        result = ray_table_add_col(result, name_id, gathered);
-        ray_release(gathered);
+        if (!new_cols[c]) continue;
+        result = ray_table_add_col(result, col_names[c], new_cols[c]);
+        ray_release(new_cols[c]);
         if (RAY_IS_ERR(result)) {
+            for (int64_t c2 = c + 1; c2 < ncols; c2++)
+                if (new_cols[c2]) ray_release(new_cols[c2]);
             if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
             ray_release(idx);
             return result;

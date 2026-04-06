@@ -460,6 +460,9 @@ static inline uint8_t radix_key_bytes(int8_t type) {
 /* ── exec.c (gather helpers) ── */
 void multi_gather_fn(void* raw, uint32_t wid, int64_t start, int64_t end);
 void gather_fn(void* raw, uint32_t wid, int64_t start, int64_t end);
+void partitioned_gather(ray_pool_t* pool, const int64_t* idx, int64_t n,
+                        int64_t src_rows, char** srcs, char** dsts,
+                        const uint8_t* esz, int64_t ncols);
 
 /* ── filter.c ── */
 ray_t* exec_filter(ray_graph_t* g, ray_op_t* op, ray_t* input, ray_t* pred);

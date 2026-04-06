@@ -235,6 +235,241 @@ void gather_fn(void* raw, uint32_t wid, int64_t start, int64_t end) {
 #undef GATHER_PF
 }
 
+/* ============================================================================
+ * Partitioned gather — cache-conscious column rearrangement
+ *
+ * Standard gather:  dst[i] = src[idx[i]] — sequential writes, random reads.
+ * With 10M rows the source data (~hundreds of MB) far exceeds L2 cache, so
+ * every read is a main-memory miss (~60ns even with prefetching).
+ *
+ * Partitioned gather groups work by source ranges: for each 16K-row source
+ * block, process all indices that point into it.  The block fits in L2, so
+ * reads become L2 hits (~5ns).  Output writes become random but the CPU's
+ * store buffer absorbs them without stalling (~20ns effective).
+ *
+ * Three phases:
+ *   1. Histogram  — count indices per source block           (parallel)
+ *   2. Route      — scatter (dest, src) pairs into buckets   (parallel)
+ *   3. Block-gather — per block, source in L2 → fast reads   (parallel)
+ * ============================================================================ */
+
+/* Block = 16K source rows.  16K × 16 cols × 8B = 2MB ≈ L2 cache per core. */
+#define PG_BSHIFT 14
+#define PG_BSIZE  (1 << PG_BSHIFT)   /* 16384 */
+#define PG_MIN    (PG_BSIZE * 8)     /* 131072 — below this, routing overhead > benefit */
+
+/* Phase 1+2 use dispatch_n with explicit task-to-range mapping so that
+ * histogram and scatter have consistent per-task assignments regardless
+ * of which worker picks up each task (work-stealing is non-deterministic). */
+
+typedef struct {
+    const int64_t* idx;
+    int64_t*       hist;      /* n_tasks × n_parts, row-major */
+    int64_t        n_parts;
+    int64_t        n;         /* total rows */
+    uint32_t       n_tasks;
+} pg_hist_ctx_t;
+
+static void pg_hist_fn(void* arg, uint32_t wid, int64_t start, int64_t end) {
+    (void)wid; (void)end;
+    pg_hist_ctx_t* c = (pg_hist_ctx_t*)arg;
+    int64_t task = start;
+
+    int64_t chunk = (c->n + c->n_tasks - 1) / c->n_tasks;
+    int64_t lo = task * chunk;
+    int64_t hi = lo + chunk;
+    if (hi > c->n) hi = c->n;
+    if (lo >= hi) { memset(c->hist + task * c->n_parts, 0,
+                           (size_t)c->n_parts * sizeof(int64_t)); return; }
+
+    int64_t* h = c->hist + task * c->n_parts;
+    memset(h, 0, (size_t)c->n_parts * sizeof(int64_t));
+    const int64_t* idx = c->idx;
+    for (int64_t i = lo; i < hi; i++)
+        h[idx[i] >> PG_BSHIFT]++;
+}
+
+typedef struct {
+    const int64_t* idx;
+    int32_t*       rdest;
+    int32_t*       rsrc;
+    int64_t*       offsets;   /* n_tasks × n_parts write cursors */
+    int64_t        n_parts;
+    int64_t        n;
+    uint32_t       n_tasks;
+} pg_route_ctx_t;
+
+static void pg_route_fn(void* arg, uint32_t wid, int64_t start, int64_t end) {
+    (void)wid; (void)end;
+    pg_route_ctx_t* c = (pg_route_ctx_t*)arg;
+    int64_t task = start;
+
+    int64_t chunk = (c->n + c->n_tasks - 1) / c->n_tasks;
+    int64_t lo = task * chunk;
+    int64_t hi = lo + chunk;
+    if (hi > c->n) hi = c->n;
+    if (lo >= hi) return;
+
+    int64_t* off = c->offsets + task * c->n_parts;
+    const int64_t* idx = c->idx;
+    int32_t* rd = c->rdest;
+    int32_t* rs = c->rsrc;
+    for (int64_t i = lo; i < hi; i++) {
+        int64_t src = idx[i];
+        int64_t pos = off[src >> PG_BSHIFT]++;
+        rd[pos] = (int32_t)i;
+        rs[pos] = (int32_t)src;
+    }
+}
+
+/* Phase 3: per-block gather — one task per source block */
+typedef struct {
+    const int32_t* rdest;
+    const int32_t* rsrc;
+    const int64_t* part_off;  /* partition start offsets (n_parts + 1) */
+    char**         srcs;
+    char**         dsts;
+    const uint8_t* esz;
+    int64_t        ncols;
+} pg_block_ctx_t;
+
+static void pg_block_fn(void* arg, uint32_t wid, int64_t start, int64_t end) {
+    (void)wid; (void)end;
+    pg_block_ctx_t* c = (pg_block_ctx_t*)arg;
+    int64_t blk = start;  /* dispatch_n: one task per call */
+
+    int64_t lo = c->part_off[blk];
+    int64_t hi = c->part_off[blk + 1];
+    if (lo >= hi) return;
+
+    const int32_t* rd = c->rdest + lo;
+    const int32_t* rs = c->rsrc  + lo;
+    int64_t cnt = hi - lo;
+
+    /* Column-at-a-time: keeps the source block hot in L2.
+     * After the first few reads, the entire 16K-row source slice
+     * is cache-resident, so subsequent reads are L2 hits. */
+    for (int64_t col = 0; col < c->ncols; col++) {
+        uint8_t e = c->esz[col];
+        const char* src = c->srcs[col];
+        char* dst = c->dsts[col];
+        if (e == 8) {
+            const uint64_t* s8 = (const uint64_t*)src;
+            uint64_t* d8 = (uint64_t*)dst;
+            for (int64_t j = 0; j < cnt; j++)
+                d8[rd[j]] = s8[rs[j]];
+        } else if (e == 4) {
+            const uint32_t* s4 = (const uint32_t*)src;
+            uint32_t* d4 = (uint32_t*)dst;
+            for (int64_t j = 0; j < cnt; j++)
+                d4[rd[j]] = s4[rs[j]];
+        } else if (e == 2) {
+            const uint16_t* s2 = (const uint16_t*)src;
+            uint16_t* d2 = (uint16_t*)dst;
+            for (int64_t j = 0; j < cnt; j++)
+                d2[rd[j]] = s2[rs[j]];
+        } else if (e == 1) {
+            for (int64_t j = 0; j < cnt; j++)
+                dst[rd[j]] = src[rs[j]];
+        } else {
+            for (int64_t j = 0; j < cnt; j++)
+                memcpy(dst + (int64_t)rd[j] * e,
+                       src + (int64_t)rs[j] * e, e);
+        }
+    }
+}
+
+/* Public entry point: partitioned gather for n > PG_MIN, fallback otherwise.
+ * n:        number of index entries (output rows)
+ * src_rows: number of rows in the source columns (indices may reference [0, src_rows)) */
+void partitioned_gather(ray_pool_t* pool, const int64_t* idx, int64_t n,
+                        int64_t src_rows, char** srcs, char** dsts,
+                        const uint8_t* esz, int64_t ncols) {
+    /* Fallback for small arrays or no pool */
+    if (!pool || n < PG_MIN || n > INT32_MAX || src_rows > INT32_MAX) {
+        multi_gather_ctx_t mg = { .idx = idx, .ncols = 0 };
+        for (int64_t c = 0; c < ncols && c < MGATHER_MAX_COLS; c++) {
+            mg.srcs[c] = srcs[c]; mg.dsts[c] = dsts[c]; mg.esz[c] = esz[c];
+            mg.ncols++;
+        }
+        if (pool) ray_pool_dispatch(pool, multi_gather_fn, &mg, n);
+        else      multi_gather_fn(&mg, 0, 0, n);
+        return;
+    }
+
+    /* Partition by SOURCE range — indices can reference any row in [0, src_rows) */
+    int64_t n_parts = (src_rows + PG_BSIZE - 1) >> PG_BSHIFT;
+    uint32_t nw = ray_pool_total_workers(pool);
+
+    /* Allocate routing buffers */
+    ray_t *hist_hdr = NULL, *off_hdr = NULL;
+    ray_t *rdest_hdr = NULL, *rsrc_hdr = NULL, *poff_hdr = NULL;
+
+    int64_t* hist    = (int64_t*)scratch_alloc(&hist_hdr,
+                           (size_t)nw * (size_t)n_parts * sizeof(int64_t));
+    int64_t* offsets = (int64_t*)scratch_alloc(&off_hdr,
+                           (size_t)nw * (size_t)n_parts * sizeof(int64_t));
+    int32_t* rdest   = (int32_t*)scratch_alloc(&rdest_hdr,
+                           (size_t)n * sizeof(int32_t));
+    int32_t* rsrc    = (int32_t*)scratch_alloc(&rsrc_hdr,
+                           (size_t)n * sizeof(int32_t));
+    int64_t* part_off = (int64_t*)scratch_alloc(&poff_hdr,
+                            (size_t)(n_parts + 1) * sizeof(int64_t));
+
+    if (!hist || !offsets || !rdest || !rsrc || !part_off) {
+        scratch_free(hist_hdr); scratch_free(off_hdr);
+        scratch_free(rdest_hdr); scratch_free(rsrc_hdr);
+        scratch_free(poff_hdr);
+        /* Fallback to regular gather on allocation failure */
+        multi_gather_ctx_t mg = { .idx = idx, .ncols = 0 };
+        for (int64_t c = 0; c < ncols && c < MGATHER_MAX_COLS; c++) {
+            mg.srcs[c] = srcs[c]; mg.dsts[c] = dsts[c]; mg.esz[c] = esz[c];
+            mg.ncols++;
+        }
+        ray_pool_dispatch(pool, multi_gather_fn, &mg, n);
+        return;
+    }
+
+    /* Phase 1: parallel histogram (dispatch_n for deterministic task→range) */
+    pg_hist_ctx_t hctx = {
+        .idx = idx, .hist = hist, .n_parts = n_parts,
+        .n = n, .n_tasks = nw,
+    };
+    ray_pool_dispatch_n(pool, pg_hist_fn, &hctx, nw);
+
+    /* Phase 2: prefix sum → per-task scatter offsets + partition boundaries */
+    int64_t running = 0;
+    for (int64_t p = 0; p < n_parts; p++) {
+        part_off[p] = running;
+        for (uint32_t t = 0; t < nw; t++) {
+            offsets[t * n_parts + p] = running;
+            running += hist[t * n_parts + p];
+        }
+    }
+    part_off[n_parts] = running;
+
+    /* Phase 3: parallel route (same task→range mapping as histogram) */
+    pg_route_ctx_t rctx = {
+        .idx = idx, .rdest = rdest, .rsrc = rsrc,
+        .offsets = offsets, .n_parts = n_parts,
+        .n = n, .n_tasks = nw,
+    };
+    ray_pool_dispatch_n(pool, pg_route_fn, &rctx, nw);
+
+    /* Phase 4: parallel per-block gather */
+    pg_block_ctx_t bctx = {
+        .rdest = rdest, .rsrc = rsrc, .part_off = part_off,
+        .srcs = srcs, .dsts = dsts, .esz = esz, .ncols = ncols,
+    };
+    ray_pool_dispatch_n(pool, pg_block_fn, &bctx, (uint32_t)n_parts);
+
+    scratch_free(hist_hdr);
+    scratch_free(off_hdr);
+    scratch_free(rdest_hdr);
+    scratch_free(rsrc_hdr);
+    scratch_free(poff_hdr);
+}
+
 /* (filter execution moved to filter.c) */
 
 
