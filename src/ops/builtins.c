@@ -724,8 +724,9 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             else if (val->type == -RAY_I16) n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i16);
             else if (val->type == -RAY_I32) n2 = snprintf(buf, sizeof(buf), "%d", (int)val->i32);
             else if (val->type == -RAY_F64) {
-                /* Format float: remove trailing zeros but keep at least one decimal */
-                n2 = snprintf(buf, sizeof(buf), "%.17g", val->f64);
+                double fv = val->f64;
+                if (fv == 0.0 && signbit(fv)) fv = 0.0;
+                n2 = snprintf(buf, sizeof(buf), "%.17g", fv);
             }
             else n2 = snprintf(buf, sizeof(buf), "%lld", (long long)as_i64(val));
             if (n2 > 0) {
