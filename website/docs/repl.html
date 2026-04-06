@@ -142,15 +142,17 @@ echo '(+ 1 2)' | ./rayforce</code></pre>
       <p>You can also exit with <code>\\</code>, <code>exit</code>, or <strong>Ctrl-D</strong> on an empty line.</p>
 
       <h2>Profiling with :t</h2>
-      <p>When profiling is active, every evaluation emits a nested span tree showing where time was spent. Use <code>:t <em>expr</em></code> to profile a one-off expression:</p>
-      <pre><code>&#x2023; :t (+ 1 2)
+      <p>Enable profiling with <code>:t 1</code>. Every subsequent evaluation emits a nested span tree showing where time was spent:</p>
+      <pre><code>&#x2023; :t 1
+. Timeit is on.
+&#x2023; (+ 1 2)
 3
 &#x256D; top-level
-&#x2502; &#x2736;  parse: 0.009 ms
-&#x2502; &#x2736;  eval: 0.003 ms
-&#x2570;&#x2500;&#x2524; 0.013 ms</code></pre>
+&#x2502; &#x2736;  parse: 0.016 ms
+&#x2502; &#x2736;  eval: 0.004 ms
+&#x2570;&#x2500;&#x2524; 0.025 ms</code></pre>
+      <p>Disable with <code>:t 0</code>. You can also profile a single expression without toggling: <code>:t (+ 1 2)</code>.</p>
       <p>Spans nest automatically. The DAG executor reports sub-spans for optimizer passes (type inference, fusion, predicate pushdown) and per-morsel execution when applicable. A progress bar appears for long-running operations.</p>
-      <p>Toggle profiling for all subsequent expressions with bare <code>:t</code> or explicit <code>:t 1</code> / <code>:t 0</code>.</p>
 
       <h2>Multi-Line Input</h2>
       <p>The REPL auto-detects incomplete expressions by tracking unmatched brackets <code>( [ {</code>. When the current input has unmatched openers, pressing Enter starts a continuation line instead of evaluating:</p>
