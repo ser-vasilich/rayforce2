@@ -1327,7 +1327,9 @@ static MunitResult test_eval_println(const void* params, void* fixture) {
 
 static MunitResult test_sort_decode_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    ray_t* r = ray_eval_str("(== (asc (- (til 2000) 1000)) (- (til 2000) 1000))");
+    /* Use large values (range > 2^24) to force non-packed MSD radix → decode path.
+     * Multiply by 100000 so range = 200M, needs >3 key bytes → non-packed. */
+    ray_t* r = ray_eval_str("(== (asc (* 100000 (- (til 2000) 1000))) (* 100000 (- (til 2000) 1000)))");
     munit_assert_ptr_not_null(r);
     munit_assert_false(RAY_IS_ERR(r));
     int64_t n = ray_len(r);
@@ -1357,13 +1359,14 @@ static MunitResult test_sort_decode_f64(const void* params, void* fixture) {
 
 static MunitResult test_sort_decode_desc(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    ray_t* first = ray_eval_str("(first (desc (til 2000)))");
+    /* Large range I64 desc sort — forces non-packed radix decode path */
+    ray_t* first = ray_eval_str("(first (desc (* 100000 (til 2000))))");
     munit_assert_ptr_not_null(first);
     munit_assert_false(RAY_IS_ERR(first));
-    munit_assert_true(first->i64 == 1999);
+    munit_assert_true(first->i64 == 199900000);
     ray_release(first);
 
-    ray_t* last = ray_eval_str("(last (desc (til 2000)))");
+    ray_t* last = ray_eval_str("(last (desc (* 100000 (til 2000))))");
     munit_assert_ptr_not_null(last);
     munit_assert_false(RAY_IS_ERR(last));
     munit_assert_true(last->i64 == 0);
