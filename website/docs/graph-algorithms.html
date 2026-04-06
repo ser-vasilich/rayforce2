@@ -104,6 +104,8 @@
       <h1>Graph Algorithms</h1>
       <p class="page-subtitle">Graph opcodes covering traversal, shortest paths, centrality, community detection, similarity search, optimal joins, and spanning trees &mdash; all integrated into the DAG pipeline.</p>
 
+      <p>Graph algorithms are available through the C API. Many graph queries can also be expressed in Rayfall using the Datalog engine &mdash; see the <a href="tutorial-graph.html">Graph Queries Tutorial</a>.</p>
+
       <div class="info-box">
         <strong>All graph algorithms</strong> operate on <code>ray_rel_t</code> relationships built from CSR storage. See <a href="graph-storage.html">Graph Storage</a> for how to build and persist relationships.
       </div>
@@ -124,6 +126,19 @@
       <pre><code><span class="hl-comment">/* C API */</span>
 <span class="hl-type">ray_op_t</span>* nbrs = <span class="hl-fn">ray_expand</span>(g, src_nodes, rel, <span class="hl-num">0</span>);  <span class="hl-comment">/* direction: 0=fwd */</span></code></pre>
 
+      <h4>Rayfall</h4>
+      <p>In Rayfall, 1-hop expansion is a Datalog query with a single pattern. Pin the source entity to query its direct neighbors:</p>
+      <pre><code><span class="hl-comment">; Build a graph</span>
+(<span class="hl-kw">set</span> db (<span class="hl-fn">datoms</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">0</span> <span class="hl-sym">'edge</span> <span class="hl-num">1</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">0</span> <span class="hl-sym">'edge</span> <span class="hl-num">2</span>))
+(<span class="hl-kw">set</span> db (<span class="hl-fn">assert-fact</span> db <span class="hl-num">1</span> <span class="hl-sym">'edge</span> <span class="hl-num">2</span>))
+
+<span class="hl-comment">; 1-hop neighbors of node 0</span>
+(<span class="hl-fn">query</span> db (<span class="hl-kw">find</span> ?target)
+  (<span class="hl-kw">where</span> (<span class="hl-num">0</span> <span class="hl-sym">:edge</span> ?target)))
+<span class="hl-comment">; => ?target: 1, 2</span></code></pre>
+
       <h3>OP_VAR_EXPAND &mdash; Variable-Length BFS/DFS</h3>
       <p>Expands nodes through multiple hops with configurable minimum and maximum depth. Uses BFS by default. Optionally tracks the full path for each discovered node.</p>
       <table>
@@ -141,6 +156,17 @@
     <span class="hl-num">3</span>,    <span class="hl-comment">/* max_depth */</span>
     <span class="hl-bool">true</span>  <span class="hl-comment">/* track_path */</span>
 );</code></pre>
+
+      <h4>Rayfall</h4>
+      <p>Recursive Datalog rules express variable-length reachability. The <code>path</code> rule computes transitive closure &mdash; equivalent to BFS over all reachable nodes:</p>
+      <pre><code><span class="hl-comment">; Base case: direct edge</span>
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?y) (?x <span class="hl-sym">:edge</span> ?y))
+<span class="hl-comment">; Recursive case: follow chains</span>
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?z) (?x <span class="hl-sym">:edge</span> ?y) (path ?y ?z))
+
+<span class="hl-comment">; All nodes reachable from node 0</span>
+(<span class="hl-fn">query</span> db (<span class="hl-kw">find</span> ?y) (<span class="hl-kw">where</span> (path <span class="hl-num">0</span> ?y)))
+<span class="hl-comment">; => all transitively reachable nodes</span></code></pre>
 
       <h3>OP_DFS &mdash; Depth-First Search</h3>
       <p>Explicit depth-first traversal from a source node, returning nodes in DFS visit order.</p>
@@ -180,6 +206,19 @@
         </tbody>
       </table>
       <pre><code><span class="hl-type">ray_op_t</span>* path = <span class="hl-fn">ray_shortest_path</span>(g, src, dst, rel, <span class="hl-num">20</span>); <span class="hl-comment">/* max depth 20 */</span></code></pre>
+
+      <h4>Rayfall</h4>
+      <p>Datalog reachability rules find all paths between two nodes. Pin both source and destination to check connectivity:</p>
+      <pre><code><span class="hl-comment">; Reuse the path rule from above</span>
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?y) (?x <span class="hl-sym">:edge</span> ?y))
+(<span class="hl-kw">rule</span> (<span class="hl-fn">path</span> ?x ?z) (?x <span class="hl-sym">:edge</span> ?y) (path ?y ?z))
+
+<span class="hl-comment">; Is node 4 reachable from node 0?</span>
+(<span class="hl-fn">query</span> db (<span class="hl-kw">find</span> ?y) (<span class="hl-kw">where</span> (path <span class="hl-num">0</span> ?y)))
+<span class="hl-comment">; => includes 4 if reachable</span></code></pre>
+      <div class="info-box">
+        <strong>Note:</strong> Datalog computes reachability (whether a path exists), not the actual shortest hop sequence. For weighted shortest paths or explicit path reconstruction, use the C API (<code>ray_shortest_path</code>, <code>ray_dijkstra</code>).
+      </div>
 
       <h3>OP_DIJKSTRA &mdash; Weighted Shortest Path</h3>
       <p>Dijkstra's algorithm for weighted shortest paths. Reads edge weights from a property column on the relationship.</p>
@@ -246,6 +285,10 @@
     <span class="hl-num">100</span>,   <span class="hl-comment">/* max iterations */</span>
     <span class="hl-num">0.85</span>   <span class="hl-comment">/* damping factor */</span>
 );</code></pre>
+
+      <div class="info-box">
+        <strong>C API only.</strong> PageRank is an iterative numerical algorithm that operates directly on CSR arrays. It is not available as a Rayfall builtin. Use the <a href="#centrality">C API</a> shown above.
+      </div>
 
       <h3>OP_DEGREE_CENT &mdash; Degree Centrality</h3>
       <p>Computes degree centrality for all nodes (normalized degree count).</p>
@@ -418,6 +461,10 @@
     <span class="hl-num">10</span>,            <span class="hl-comment">/* k */</span>
     <span class="hl-num">200</span>            <span class="hl-comment">/* ef_search (beam width, higher = more accurate) */</span>
 );</code></pre>
+
+      <div class="info-box">
+        <strong>C API only.</strong> HNSW index construction and approximate KNN search operate on raw float arrays and are not available as Rayfall builtins. Use the <a href="#similarity">C API</a> shown above for vector similarity workloads.
+      </div>
 
       <!-- ====== ORDERING ====== -->
       <h2 id="ordering">Ordering</h2>
