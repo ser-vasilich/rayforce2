@@ -2455,29 +2455,71 @@ ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
     uint8_t descs[16];
     for (int64_t i = 0; i < n_keys; i++) descs[i] = descending;
 
-    ray_t* idx = ray_sort_indices(key_cols, descs, NULL, (uint8_t)n_keys, nrows);
-    if (RAY_IS_ERR(idx)) return idx;
+    uint64_t* sorted_keys = NULL;
+    ray_t* sorted_keys_hdr = NULL;
+    ray_t* idx = sort_indices_ex(key_cols, descs, NULL, (uint8_t)n_keys, nrows,
+                                 &sorted_keys, &sorted_keys_hdr);
+    if (RAY_IS_ERR(idx)) {
+        if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+        return idx;
+    }
 
     int64_t* idx_data = (int64_t*)ray_data(idx);
     int64_t ncols = ray_table_ncols(tbl);
 
+    /* Identify sort key column for decode-gather optimisation */
+    int64_t decode_col_idx = -1;
+    if (sorted_keys && n_keys == 1 && !RAY_IS_SYM(key_cols[0]->type)) {
+        for (int64_t c = 0; c < ncols; c++) {
+            if (ray_table_col_name(tbl, c) == key_ids[0]) {
+                decode_col_idx = c;
+                break;
+            }
+        }
+    }
+
     ray_t* result = ray_table_new(ncols);
-    if (RAY_IS_ERR(result)) { ray_release(idx); return result; }
+    if (RAY_IS_ERR(result)) {
+        if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+        ray_release(idx);
+        return result;
+    }
 
     for (int64_t c = 0; c < ncols; c++) {
         ray_t* col = ray_table_get_col_idx(tbl, c);
         int64_t name_id = ray_table_col_name(tbl, c);
-        ray_t* gathered = gather_by_idx(col, idx_data, nrows);
+        ray_t* gathered;
+
+        if (c == decode_col_idx) {
+            gathered = ray_vec_new(col->type, nrows);
+            if (!gathered || RAY_IS_ERR(gathered)) {
+                if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+                ray_release(idx);
+                ray_release(result);
+                return gathered ? gathered : ray_error("oom", NULL);
+            }
+            gathered->len = nrows;
+            radix_decode_into(ray_data(gathered), col->type, sorted_keys,
+                              nrows, descs[0]);
+        } else {
+            gathered = gather_by_idx(col, idx_data, nrows);
+        }
         if (RAY_IS_ERR(gathered)) {
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
             ray_release(idx);
             ray_release(result);
             return gathered;
         }
         result = ray_table_add_col(result, name_id, gathered);
         ray_release(gathered);
-        if (RAY_IS_ERR(result)) { ray_release(idx); return result; }
+        if (RAY_IS_ERR(result)) {
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+            ray_release(idx);
+            return result;
+        }
     }
 
+    if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
     ray_release(idx);
     return result;
 }
