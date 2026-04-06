@@ -304,6 +304,53 @@
 └─────────────────────────────────────┘</code></pre>
       <p>A typical workflow: <code>read-csv</code> to load, <code>select</code> to filter and transform, <code>write-csv</code> to save results. The CSV reader uses parallel parsing and automatic type inference for fast loading of large files.</p>
 
+      <!-- 8. Complex Aggregation with fold -->
+      <h2 id="fold-aggregation">8. Complex Aggregation with <code>fold</code></h2>
+      <p><strong>Problem:</strong> Compute a weighted average where each value has a different weight.</p>
+      <pre><code><span class="hl-comment">; Weighted average: sum(w*p) / sum(w)</span>
+(<span class="hl-kw">set</span> w [<span class="hl-num">2</span> <span class="hl-num">4</span> <span class="hl-num">4</span>])
+(<span class="hl-kw">set</span> p [<span class="hl-num">10.0</span> <span class="hl-num">20.0</span> <span class="hl-num">30.0</span>])
+(<span class="hl-fn">/</span> (<span class="hl-fn">fold</span> <span class="hl-fn">+</span> <span class="hl-num">0.0</span> (<span class="hl-fn">*</span> w p)) (<span class="hl-fn">fold</span> <span class="hl-fn">+</span> <span class="hl-num">0.0</span> w))</code></pre>
+      <pre><code>22.0</code></pre>
+      <p>The <code>fold</code> function takes a binary function, an initial accumulator, and a vector. It reduces the vector to a single value by applying the function left-to-right. Unlike <code>scan</code> which returns all intermediate results, <code>fold</code> returns only the final result.</p>
+
+      <pre><code><span class="hl-comment">; Sum of squares using fold with a custom function</span>
+(<span class="hl-fn">fold</span> (<span class="hl-kw">fn</span> [a b] (<span class="hl-fn">+</span> a (<span class="hl-fn">*</span> b b))) <span class="hl-num">0</span> [<span class="hl-num">3</span> <span class="hl-num">4</span> <span class="hl-num">5</span>])</code></pre>
+      <pre><code>50</code></pre>
+      <p>Here the lambda squares each element and adds it to the running total: 9 + 16 + 25 = 50. Any binary function works with <code>fold</code>, including builtins like <code>+</code>, <code>*</code>, <code>min</code>, <code>max</code>.</p>
+
+      <!-- 9. Null Handling in Aggregations -->
+      <h2 id="null-handling">9. Null Handling in Aggregations</h2>
+      <p><strong>Problem:</strong> What happens when your data contains null values?</p>
+      <pre><code><span class="hl-comment">; Create a vector with null entries (0Nl = null i64)</span>
+(<span class="hl-kw">set</span> v [<span class="hl-num">10</span> <span class="hl-num">0Nl</span> <span class="hl-num">30</span> <span class="hl-num">0Nl</span> <span class="hl-num">50</span>])
+(<span class="hl-fn">sum</span> v)    <span class="hl-comment">; 90  — nulls skipped</span>
+(<span class="hl-fn">avg</span> v)    <span class="hl-comment">; 30.0 — average of non-null values (90 / 3)</span>
+(<span class="hl-fn">min</span> v)    <span class="hl-comment">; 10</span>
+(<span class="hl-fn">max</span> v)    <span class="hl-comment">; 50</span>
+(<span class="hl-fn">count</span> v)  <span class="hl-comment">; 5 — total length including nulls</span></code></pre>
+      <p>All built-in aggregation functions (<code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>med</code>) skip null values automatically. The <code>count</code> function returns the total vector length including nulls.</p>
+
+      <p>Use <code>nil?</code> to check for null values:</p>
+      <pre><code>(<span class="hl-fn">nil?</span> <span class="hl-num">0Nl</span>)            <span class="hl-comment">; true</span>
+(<span class="hl-fn">nil?</span> <span class="hl-num">42</span>)             <span class="hl-comment">; false</span>
+(<span class="hl-fn">map</span> <span class="hl-fn">nil?</span> (<span class="hl-fn">list</span> <span class="hl-num">10</span> <span class="hl-num">0Nl</span> <span class="hl-num">30</span>))  <span class="hl-comment">; [false true false]</span></code></pre>
+      <p>Null literals are type-suffixed: <code>0Nl</code> (i64), <code>0Nf</code> (f64), <code>0Ns</code> (sym), <code>0Nd</code> (date), <code>0Nt</code> (time), <code>0Np</code> (timestamp).</p>
+
+      <!-- 10. Performance Tips -->
+      <h2 id="performance-tips">10. Performance Tips</h2>
+      <div class="info-box">
+        <strong>Tips for fast analytics queries:</strong>
+        <ul>
+          <li><strong>Prefer <code>select</code> with <code>by:</code></strong> over manual group-then-map. The <code>select</code> pipeline fuses grouping and aggregation into a single pass, avoiding intermediate materialization.</li>
+          <li><strong>Use <code>xbar</code> for time bucketing</strong> to bin timestamps into fixed intervals (e.g., 5-minute bars). This avoids materializing group keys and is faster than building date groups by hand.</li>
+          <li><strong>Use <code>pmap</code> for embarrassingly parallel work.</strong> It distributes a function across list elements using worker threads. Ideal for independent per-group transformations:
+            <pre style="margin:0.5em 0 0"><code>(<span class="hl-fn">pmap</span> (<span class="hl-kw">fn</span> [x] (<span class="hl-fn">*</span> x x)) (<span class="hl-fn">list</span> <span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span> <span class="hl-num">4</span> <span class="hl-num">5</span>))</code></pre>
+            <pre style="margin:0 0 0"><code>[1 4 9 16 25]</code></pre>
+          </li>
+        </ul>
+      </div>
+
       <h2 id="next-steps">Next Steps</h2>
       <ul>
         <li><a href="guide-storage.html"><strong>Data Persistence</strong></a> &mdash; Columnar files, splayed tables, partitioned storage</li>

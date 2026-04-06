@@ -194,7 +194,7 @@
 <span class="hl-type">ray_t</span>* trades = <span class="hl-fn">ray_splay_load</span>(<span class="hl-str">"db/trades"</span>, <span class="hl-str">"db/sym"</span>);</code></pre>
 
       <div class="info-box">
-        <strong>Note:</strong> Splayed table I/O is currently available only through the C API. There are no <code>splay-save</code> / <code>splay-load</code> Rayfall builtins yet.
+        <strong>Rayfall builtins:</strong> Use <code>set-splayed</code> and <code>get-splayed</code> from Rayfall to save and load splayed tables without writing C code. See the <a href="#rayfall-storage">Rayfall Storage Builtins</a> section below.
       </div>
 
       <h2 id="partitioned-tables">Date-Partitioned Tables</h2>
@@ -228,7 +228,7 @@
 <span class="hl-comment">// - All segments are memory-mapped — no data copy</span></code></pre>
 
       <div class="info-box">
-        <strong>Note:</strong> Partitioned table loading is currently available only through the C API (<code>ray_part_load</code>). There is no <code>part-load</code> Rayfall builtin yet. Once loaded via the C API, the resulting table supports normal <code>select</code> queries with partition pruning.
+        <strong>Rayfall builtin:</strong> Use <code>get-parted</code> from Rayfall to load partitioned tables: <code>(get-parted "db" 'trades)</code>. See the <a href="#rayfall-storage">Rayfall Storage Builtins</a> section below.
       </div>
 
       <h3>Partition Pruning</h3>
@@ -373,6 +373,68 @@ MSFT 380.00   50  2024.01.15</code></pre>
       <div class="info-box">
         <strong>Atomic writes:</strong> When saving column files, Rayforce writes to a temporary file first, calls <code>fsync()</code>, then atomically renames it to the target path. This prevents data corruption if the process is interrupted during a write.
       </div>
+
+      <h2 id="rayfall-storage">Rayfall Storage Builtins</h2>
+      <p>Rayfall provides three builtins for working with on-disk storage directly from the REPL or scripts.</p>
+
+      <h3><code>set-splayed</code> &mdash; Save a Splayed Table</h3>
+      <p>Writes a table as column files to a directory. A symbol table file is saved automatically alongside the data.</p>
+      <pre><code>(<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">City</span> <span class="hl-sym">Temp</span> <span class="hl-sym">Rain</span>]
+  (<span class="hl-fn">list</span> [<span class="hl-sym">London</span> <span class="hl-sym">Paris</span> <span class="hl-sym">Tokyo</span>]
+        [<span class="hl-num">15</span> <span class="hl-num">22</span> <span class="hl-num">28</span>]
+        [<span class="hl-num">120.5</span> <span class="hl-num">60.3</span> <span class="hl-num">200.1</span>])))
+
+<span class="hl-comment">; Save to /tmp/weather</span>
+(<span class="hl-fn">set-splayed</span> <span class="hl-str">"/tmp/weather"</span> t)</code></pre>
+      <p>An optional third argument specifies a custom symbol table path: <code>(set-splayed "/tmp/weather" t "/tmp/my_sym")</code>. Without it, a <code>sym</code> file is created in the table directory.</p>
+
+      <h3><code>get-splayed</code> &mdash; Load a Splayed Table</h3>
+      <p>Loads a splayed table from a directory. Columns are memory-mapped for zero-copy access.</p>
+      <pre><code>(<span class="hl-fn">get-splayed</span> <span class="hl-str">"/tmp/weather"</span>)</code></pre>
+      <pre><code>&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;  City   &#x2502; Temp &#x2502;        Rain        &#x2502;
+&#x2502;   sym   &#x2502; i64  &#x2502;        f64         &#x2502;
+&#x251C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x253C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x253C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2524;
+&#x2502; `London &#x2502; 15   &#x2502; 120.5              &#x2502;
+&#x2502; `Paris  &#x2502; 22   &#x2502; 60.3               &#x2502;
+&#x2502; `Tokyo  &#x2502; 28   &#x2502; 200.1              &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</code></pre>
+      <p>An optional second argument specifies the symbol table path: <code>(get-splayed "/tmp/weather" "/tmp/my_sym")</code>.</p>
+
+      <h3><code>get-parted</code> &mdash; Load a Partitioned Table</h3>
+      <p>Loads a date-partitioned table. The first argument is the database root directory, the second is the table name as a quoted symbol.</p>
+      <pre><code><span class="hl-comment">; Load the "trades" partitioned table from db/</span>
+(<span class="hl-fn">get-parted</span> <span class="hl-str">"db"</span> <span class="hl-sym">'trades</span>)</code></pre>
+      <p>This scans all date-named subdirectories under <code>db/trades/</code>, memory-maps every column, and returns a single table with a virtual date column. Partition pruning applies to subsequent queries.</p>
+
+      <h2 id="sym-management">Symbol Table Management</h2>
+      <p>Symbol tables are persisted automatically when you use <code>set-splayed</code>. A <code>sym</code> file is written into the table directory containing all interned symbol strings. When loading with <code>get-splayed</code> or <code>get-parted</code>, the symbol table is loaded first so that symbol columns decode correctly.</p>
+      <p>At the C API level, <code>ray_sym_save(path)</code> and <code>ray_sym_load(path)</code> handle persistence directly. The format is append-only &mdash; new symbols are appended without rewriting existing entries, making concurrent access safe.</p>
+
+      <h2 id="working-example">Working Example: Round-Trip</h2>
+      <p>A complete workflow: create a table, save it to disk, load it back, and verify the data.</p>
+      <pre><code><span class="hl-comment">; 1. Create a table</span>
+(<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">City</span> <span class="hl-sym">Temp</span> <span class="hl-sym">Rain</span>]
+  (<span class="hl-fn">list</span> [<span class="hl-sym">London</span> <span class="hl-sym">Paris</span> <span class="hl-sym">Tokyo</span>]
+        [<span class="hl-num">15</span> <span class="hl-num">22</span> <span class="hl-num">28</span>]
+        [<span class="hl-num">120.5</span> <span class="hl-num">60.3</span> <span class="hl-num">200.1</span>])))
+
+<span class="hl-comment">; 2. Save as splayed table</span>
+(<span class="hl-fn">set-splayed</span> <span class="hl-str">"/tmp/weather"</span> t)
+
+<span class="hl-comment">; 3. Load it back</span>
+(<span class="hl-kw">set</span> loaded (<span class="hl-fn">get-splayed</span> <span class="hl-str">"/tmp/weather"</span>))
+
+<span class="hl-comment">; 4. Query the loaded table</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span>loaded <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> <span class="hl-sym">Temp</span> <span class="hl-num">20</span>)})</code></pre>
+      <pre><code>&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;  City  &#x2502; Temp &#x2502;        Rain        &#x2502;
+&#x2502;  sym   &#x2502; i64  &#x2502;        f64         &#x2502;
+&#x251C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x253C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x253C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2524;
+&#x2502; `Paris &#x2502; 22   &#x2502; 60.3               &#x2502;
+&#x2502; `Tokyo &#x2502; 28   &#x2502; 200.1              &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</code></pre>
+      <p>The loaded table is fully functional &mdash; you can run <code>select</code>, <code>update</code>, joins, and aggregations on it just like an in-memory table. Symbol columns resolve correctly because the symbol table was saved and loaded alongside the data.</p>
 
       <!-- Prev/Next -->
       <div class="docs-nav-footer">
