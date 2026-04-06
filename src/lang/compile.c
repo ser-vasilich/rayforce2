@@ -190,7 +190,7 @@ static void patch_jump(compiler_t *c, int32_t pos) {
 }
 
 /* Cached sym IDs for special forms */
-static _Thread_local int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1, sf_self = -1;
+static _Thread_local int64_t sf_set = -1, sf_let = -1, sf_if = -1, sf_do = -1, sf_fn = -1, sf_self = -1, sf_try = -1;
 
 static void init_sf_syms(void) {
     if (sf_set >= 0) return;
@@ -200,6 +200,7 @@ static void init_sf_syms(void) {
     sf_do   = ray_sym_intern("do",  2);
     sf_fn   = ray_sym_intern("fn",  2);
     sf_self = ray_sym_intern("self", 4);
+    sf_try  = ray_sym_intern("try",  3);
 }
 
 /* ── Compile a list (special form or function call) ── */
@@ -277,6 +278,30 @@ static void compile_list(compiler_t *c, ray_t *ast) {
             emit_const(c, idx);
             emit(c, OP_CALLD);
             emit(c, 0);
+            return;
+        }
+
+        /* (try body handler) — compile to OP_TRAP/OP_TRAP_END */
+        if (sym_id == sf_try && n == 3) {
+            /* Reserve a hidden local for err_val */
+            int32_t err_slot = add_local(c, -1);
+            if (err_slot < 0) { c->error = true; return; }
+
+            int32_t trap_pos = emit_jump(c, OP_TRAP);
+            compile_expr(c, elems[1]);       /* body */
+            emit(c, OP_TRAP_END);
+            int32_t jmp_pos = emit_jump(c, OP_JMP);
+            patch_jump(c, trap_pos);         /* handler starts here */
+            /* err_val is on stack (pushed by vm_error_cleanup).
+             * Stash it, compile handler fn, reload err_val, call. */
+            emit(c, OP_STOREENV);
+            emit(c, (uint8_t)err_slot);
+            compile_expr(c, elems[2]);       /* handler fn */
+            emit(c, OP_LOADENV);
+            emit(c, (uint8_t)err_slot);
+            emit(c, OP_CALLF);
+            emit(c, 1);                     /* call handler(err_val) */
+            patch_jump(c, jmp_pos);          /* end */
             return;
         }
     }
@@ -474,5 +499,5 @@ ray_span_t ray_bc_dbg_get(ray_t* dbg, int32_t ip) {
 }
 
 void ray_compile_reset(void) {
-    sf_set = sf_let = sf_if = sf_do = sf_fn = -1;
+    sf_set = sf_let = sf_if = sf_do = sf_fn = sf_try = -1;
 }
