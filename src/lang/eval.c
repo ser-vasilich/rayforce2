@@ -32,7 +32,7 @@
 #include "datalog/datalog.h"
 #include "table/sym.h"
 #include "core/pool.h"
-#include "ops/profile.h"
+#include "core/profile.h"
 #include "table/sym.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
