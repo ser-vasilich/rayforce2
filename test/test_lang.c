@@ -1329,10 +1329,11 @@ static MunitResult test_sort_decode_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
     /* Random unsorted I64, large range (>2^24) → non-packed MSD radix → decode.
      * Verify: (1) every pair ordered, (2) sum preserved, (3) count preserved. */
-    ray_t* v = ray_eval_str("(set _sv (rand 2000 100000000))");
+    ray_t* tmp = ray_eval_str("(set _sv (rand 2000 100000000))");
+    if (tmp && !RAY_IS_ERR(tmp)) ray_release(tmp);
     ray_t* s = ray_eval_str("(asc _sv)");
     munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
-    v = ray_eval_str("_sv");
+    ray_t* v = ray_eval_str("_sv");
     munit_assert_int(ray_len(s), ==, 2000);
     int64_t* sd = (int64_t*)ray_data(s);
     for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] <= sd[i + 1]);
@@ -1347,10 +1348,11 @@ static MunitResult test_sort_decode_i64(const void* params, void* fixture) {
 static MunitResult test_sort_decode_f64(const void* params, void* fixture) {
     (void)params; (void)fixture;
     /* Random unsorted F64 with negatives — always 8-byte keys → non-packed → decode. */
-    ray_t* v = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    ray_t* tmp = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    if (tmp && !RAY_IS_ERR(tmp)) ray_release(tmp);
     ray_t* s = ray_eval_str("(asc _sv)");
     munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
-    v = ray_eval_str("_sv");
+    ray_t* v = ray_eval_str("_sv");
     double* sd = (double*)ray_data(s);
     for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] <= sd[i + 1]);
     double sum_orig = 0, sum_sorted = 0;
@@ -1364,10 +1366,11 @@ static MunitResult test_sort_decode_f64(const void* params, void* fixture) {
 static MunitResult test_sort_decode_desc(const void* params, void* fixture) {
     (void)params; (void)fixture;
     /* Random unsorted I64 desc — large range → non-packed decode. */
-    ray_t* v = ray_eval_str("(set _sv (rand 2000 100000000))");
+    ray_t* tmp = ray_eval_str("(set _sv (rand 2000 100000000))");
+    if (tmp && !RAY_IS_ERR(tmp)) ray_release(tmp);
     ray_t* s = ray_eval_str("(desc _sv)");
     munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
-    v = ray_eval_str("_sv");
+    ray_t* v = ray_eval_str("_sv");
     int64_t* sd = (int64_t*)ray_data(s);
     for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] >= sd[i + 1]);
     int64_t sum_orig = 0, sum_sorted = 0;
@@ -1381,10 +1384,11 @@ static MunitResult test_sort_decode_desc(const void* params, void* fixture) {
 static MunitResult test_sort_decode_f64_neg(const void* params, void* fixture) {
     (void)params; (void)fixture;
     /* Random unsorted F64 desc with negatives — verify descending + sum. */
-    ray_t* v = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    ray_t* tmp = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    if (tmp && !RAY_IS_ERR(tmp)) ray_release(tmp);
     ray_t* s = ray_eval_str("(desc _sv)");
     munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
-    v = ray_eval_str("_sv");
+    ray_t* v = ray_eval_str("_sv");
     double* sd = (double*)ray_data(s);
     for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] >= sd[i + 1]);
     double sum_orig = 0, sum_sorted = 0;
