@@ -501,8 +501,7 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
         if (color) fprintf(stdout, "\033[90m");
         fprintf(stdout,
             "  :?      - Displays help.\n"
-            "  :t      - Turns on|off measurement of expressions: [0|1].\n"
-            "  :t expr - Profiles a single expression.\n"
+            "  :t      - Toggle profiling on/off. Use (timeit expr) for one-off.\n"
             "  :env    - Lists defined variables.\n"
             "  :clear  - Clears screen.\n"
             "  :q      - Exits the application.");
@@ -513,33 +512,13 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
 
     if (cmd_match(cmd, clen, "t", 1, &arg, &arg_len) ||
         cmd_match(cmd, clen, "timeit", 6, &arg, &arg_len)) {
-        if (arg && arg_len > 0) {
-            /* :t 1 / :t 0 — activate/deactivate profiler */
-            if (arg_len == 1 && (arg[0] == '1' || arg[0] == '0')) {
-                bool on = (arg[0] == '1');
-                g_ray_profile.active = on;
-                repl->timeit = on;
-                if (color) fprintf(stdout, "\033[1;33m");
-                fprintf(stdout, ". Timeit is %s.", on ? "on" : "off");
-                if (color) fprintf(stdout, "\033[0m");
-                fprintf(stdout, "\n");
-            } else {
-                /* :t <expr> — profile a single expression */
-                bool was_active = g_ray_profile.active;
-                g_ray_profile.active = true;
-                repl->timeit = true;
-                eval_and_print(repl->term, arg, color, true);
-                g_ray_profile.active = was_active;
-                repl->timeit = was_active;
-            }
-        } else {
-            repl->timeit = !repl->timeit;
-            g_ray_profile.active = repl->timeit;
-            if (color) fprintf(stdout, "\033[1;33m");
-            fprintf(stdout, ". Timeit is %s.", repl->timeit ? "on" : "off");
-            if (color) fprintf(stdout, "\033[0m");
-            fprintf(stdout, "\n");
-        }
+        /* :t — pure toggle, no arguments. Use (timeit expr) for per-expression. */
+        repl->timeit = !repl->timeit;
+        g_ray_profile.active = repl->timeit;
+        if (color) fprintf(stdout, "\033[1;33m");
+        fprintf(stdout, ". Timeit is %s.", repl->timeit ? "on" : "off");
+        if (color) fprintf(stdout, "\033[0m");
+        fprintf(stdout, "\n");
         return true;
     }
 
