@@ -25,7 +25,7 @@
 
 #include "lang/eval_internal.h"
 #include "core/types.h"
-#include "ops/pool.h"
+#include "core/pool.h"
 #include "mem/sys.h"
 #include <stdlib.h>
 

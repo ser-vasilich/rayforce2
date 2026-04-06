@@ -16,7 +16,7 @@
 
 #include "exec.h"
 #include "hash.h"
-#include "pool.h"
+#include "core/pool.h"
 #include "profile.h"
 #include "store/csr.h"
 #include "store/hnsw.h"

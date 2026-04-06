@@ -31,7 +31,7 @@
 #include "ops/ops.h"
 #include "datalog/datalog.h"
 #include "table/sym.h"
-#include "ops/pool.h"
+#include "core/pool.h"
 #include "ops/profile.h"
 #include "table/sym.h"
 #include "mem/heap.h"
