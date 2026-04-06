@@ -233,14 +233,12 @@
           <tr><td><code>ray_serde_size(obj)</code></td><td>Calculate serialized size (excluding header)</td></tr>
           <tr><td><code>ray_ser_raw(buf, obj)</code></td><td>Serialize into a caller-provided buffer (no header)</td></tr>
           <tr><td><code>ray_de_raw(buf, len)</code></td><td>Deserialize from raw buffer, updates <code>len</code> with bytes consumed</td></tr>
-          <tr><td><code>ray_obj_save(obj, path)</code></td><td>Save any object to a binary file</td></tr>
-          <tr><td><code>ray_obj_load(path)</code></td><td>Load an object from a binary file</td></tr>
         </tbody>
       </table>
 
       <h2>Use Cases</h2>
       <ul>
-        <li><strong>Saving and loading application state</strong> &mdash; persist any Rayforce object to disk with <code>ray_obj_save</code> / <code>ray_obj_load</code>, or use the Rayfall builtins <code>save</code> / <code>load</code></li>
+        <li><strong>Saving and loading application state</strong> &mdash; serialize with <code>ser</code>, write bytes to disk with <code>write</code>; read back with <code>read</code> and deserialize with <code>de</code></li>
         <li><strong>Passing data between processes</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding</li>
         <li><strong>Binary file format</strong> &mdash; the IPC format serves as a compact, self-describing binary format for Rayforce data</li>
       </ul>
