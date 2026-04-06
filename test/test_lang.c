@@ -1327,95 +1327,71 @@ static MunitResult test_eval_println(const void* params, void* fixture) {
 
 static MunitResult test_sort_decode_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    /* Random unsorted data, large range (>2^24) → non-packed MSD radix → decode.
-     * Verify: sorted result has min at first, max at last, count preserved. */
-    ray_t* r = ray_eval_str(
-        "(do (set v (rand 2000 100000000))"
-        "    (set s (asc v))"
-        "    (== (first s) (min v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
-
-    r = ray_eval_str(
-        "(do (set v (rand 2000 100000000))"
-        "    (set s (asc v))"
-        "    (== (last s) (max v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
+    /* Random unsorted I64, large range (>2^24) → non-packed MSD radix → decode.
+     * Verify: (1) every pair ordered, (2) sum preserved, (3) count preserved. */
+    ray_t* v = ray_eval_str("(set _sv (rand 2000 100000000))");
+    ray_t* s = ray_eval_str("(asc _sv)");
+    munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
+    v = ray_eval_str("_sv");
+    munit_assert_int(ray_len(s), ==, 2000);
+    int64_t* sd = (int64_t*)ray_data(s);
+    for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] <= sd[i + 1]);
+    int64_t sum_orig = 0, sum_sorted = 0;
+    int64_t* vd = (int64_t*)ray_data(v);
+    for (int64_t i = 0; i < 2000; i++) { sum_orig += vd[i]; sum_sorted += sd[i]; }
+    munit_assert_true(sum_orig == sum_sorted);
+    ray_release(s); ray_release(v);
     return MUNIT_OK;
 }
 
 static MunitResult test_sort_decode_f64(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    /* Random unsorted F64 with negatives — F64 keys are always 8 bytes → non-packed.
-     * Subtract to get negatives, multiply to get fractional parts. */
-    ray_t* r = ray_eval_str(
-        "(do (set v (* 1.0 (- (rand 2000 2000000) 1000000)))"
-        "    (set s (asc v))"
-        "    (== (first s) (min v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
-
-    r = ray_eval_str(
-        "(do (set v (* 1.0 (- (rand 2000 2000000) 1000000)))"
-        "    (set s (asc v))"
-        "    (== (last s) (max v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
+    /* Random unsorted F64 with negatives — always 8-byte keys → non-packed → decode. */
+    ray_t* v = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    ray_t* s = ray_eval_str("(asc _sv)");
+    munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
+    v = ray_eval_str("_sv");
+    double* sd = (double*)ray_data(s);
+    for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] <= sd[i + 1]);
+    double sum_orig = 0, sum_sorted = 0;
+    double* vd = (double*)ray_data(v);
+    for (int64_t i = 0; i < 2000; i++) { sum_orig += vd[i]; sum_sorted += sd[i]; }
+    munit_assert_double(sum_orig, ==, sum_sorted);
+    ray_release(s); ray_release(v);
     return MUNIT_OK;
 }
 
 static MunitResult test_sort_decode_desc(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    /* Random unsorted I64 desc — large range forces non-packed decode path */
-    ray_t* r = ray_eval_str(
-        "(do (set v (rand 2000 100000000))"
-        "    (set s (desc v))"
-        "    (== (first s) (max v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
-
-    r = ray_eval_str(
-        "(do (set v (rand 2000 100000000))"
-        "    (set s (desc v))"
-        "    (== (last s) (min v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
+    /* Random unsorted I64 desc — large range → non-packed decode. */
+    ray_t* v = ray_eval_str("(set _sv (rand 2000 100000000))");
+    ray_t* s = ray_eval_str("(desc _sv)");
+    munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
+    v = ray_eval_str("_sv");
+    int64_t* sd = (int64_t*)ray_data(s);
+    for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] >= sd[i + 1]);
+    int64_t sum_orig = 0, sum_sorted = 0;
+    int64_t* vd = (int64_t*)ray_data(v);
+    for (int64_t i = 0; i < 2000; i++) { sum_orig += vd[i]; sum_sorted += sd[i]; }
+    munit_assert_true(sum_orig == sum_sorted);
+    ray_release(s); ray_release(v);
     return MUNIT_OK;
 }
 
 static MunitResult test_sort_decode_f64_neg(const void* params, void* fixture) {
     (void)params; (void)fixture;
-    /* Random unsorted F64 desc with negatives */
-    ray_t* r = ray_eval_str(
-        "(do (set v (* 1.0 (- (rand 2000 2000000) 1000000)))"
-        "    (set s (desc v))"
-        "    (== (first s) (max v)))");
-    munit_assert_ptr_not_null(r);
-    munit_assert_false(RAY_IS_ERR(r));
-    munit_assert_true(r->b8);
-    ray_release(r);
-
-    ray_t* last = ray_eval_str(
-        "(do (set v (* 1.0 (- (rand 2000 2000000) 1000000)))"
-        "    (set s (desc v))"
-        "    (== (last s) (min v)))");
-    munit_assert_ptr_not_null(last);
-    munit_assert_false(RAY_IS_ERR(last));
-    munit_assert_true(last->b8);
-    ray_release(last);
+    /* Random unsorted F64 desc with negatives — verify descending + sum. */
+    ray_t* v = ray_eval_str("(set _sv (* 1.0 (- (rand 2000 2000000) 1000000)))");
+    ray_t* s = ray_eval_str("(desc _sv)");
+    munit_assert_ptr_not_null(s); munit_assert_false(RAY_IS_ERR(s));
+    v = ray_eval_str("_sv");
+    double* sd = (double*)ray_data(s);
+    for (int64_t i = 0; i < 1999; i++) munit_assert_true(sd[i] >= sd[i + 1]);
+    double sum_orig = 0, sum_sorted = 0;
+    double* vd = (double*)ray_data(v);
+    for (int64_t i = 0; i < 2000; i++) { sum_orig += vd[i]; sum_sorted += sd[i]; }
+    munit_assert_double(sum_orig, ==, sum_sorted);
+    ray_release(s); ray_release(v);
     return MUNIT_OK;
 }
 
