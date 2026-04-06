@@ -25,7 +25,7 @@
 
 #include "lang/eval_internal.h"
 #include "lang/env.h"
-#include "datalog/datalog.h"
+#include "ops/datalog.h"
 #include "table/sym.h"
 #include "ops/ops.h"
 

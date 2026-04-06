@@ -4,7 +4,7 @@
  * Compiles Datalog rules into ray_graph_t operation DAGs and evaluates
  * them to fixpoint using semi-naive evaluation with stratified negation.
  */
-#include "datalog/datalog.h"
+#include "ops/datalog.h"
 #include <string.h>
 #include <stdio.h>
 

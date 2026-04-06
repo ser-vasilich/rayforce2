@@ -29,7 +29,7 @@
 #include "core/types.h"
 #include "io/csv.h"
 #include "ops/ops.h"
-#include "datalog/datalog.h"
+#include "ops/datalog.h"
 #include "table/sym.h"
 #include "core/pool.h"
 #include "core/profile.h"
