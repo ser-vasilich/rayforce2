@@ -38,6 +38,7 @@
 /* Helper: print a ray_t value to a file handle */
 void ray_lang_print(FILE* fp, ray_t* val) {
     if (!val || RAY_IS_ERR(val)) { fprintf(fp, "error"); return; }
+    if (RAY_IS_NULL(val)) { fprintf(fp, "null"); return; }
     /* Materialize lazy handles before printing */
     if (ray_is_lazy(val))
         val = ray_lazy_materialize(val);
@@ -174,7 +175,7 @@ ray_t* ray_println(ray_t** args, int64_t n) {
             fputc('\n', stdout);
             fflush(stdout);
             ray_sys_free(result);
-            return make_i64(0);
+            return RAY_NULL_OBJ;
         }
     }
 
@@ -184,7 +185,7 @@ ray_t* ray_println(ray_t** args, int64_t n) {
     }
     fputc('\n', stdout);
     fflush(stdout);
-    return make_i64(0);
+    return RAY_NULL_OBJ;
 }
 
 /* (show val1 val2 ...) — print values to stdout using ray_fmt, newline at end */
@@ -205,7 +206,7 @@ ray_t* ray_show(ray_t** args, int64_t n) {
     }
     fputc('\n', stdout);
     fflush(stdout);
-    return make_i64(0);
+    return RAY_NULL_OBJ;
 }
 
 /* (format "hello % world %" a b) — string formatting with % placeholders */
@@ -1098,7 +1099,7 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
 /* type_sym_name moved to eval_internal.h */
 
 ray_t* ray_type_fn(ray_t* val) {
-    if (!val) return ray_sym(ray_sym_intern("null", 4));
+    if (!val || RAY_IS_NULL(val)) return ray_sym(ray_sym_intern("null", 4));
     /* Dict is a LIST with ATTR_DICT flag */
     if (val->type == RAY_LIST && (val->attrs & RAY_ATTR_DICT)) {
         int64_t id = ray_sym_intern("DICT", 4);
@@ -1361,7 +1362,7 @@ ray_t* ray_dict_fn(ray_t* keys, ray_t* vals) {
 
 /* (nil? x) -> true if x is null */
 ray_t* ray_nil_fn(ray_t* x) {
-    if (!x) return ray_bool(true);
+    if (!x || RAY_IS_NULL(x)) return ray_bool(true);
     if (ray_is_atom(x)) {
         switch (-x->type) {
         case RAY_I16:  return ray_bool(x->i16 == INT16_MIN);

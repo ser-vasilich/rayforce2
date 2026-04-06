@@ -126,9 +126,10 @@ int is_comparable(ray_t* x) {
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
-    /* Handle C NULL (null keyword) */
-    if (!a && !b) return make_bool(1);
-    if (!a || !b) return make_bool(0);
+    /* Handle NULL / RAY_NULL */
+    int na = (!a || RAY_IS_NULL(a)), nb = (!b || RAY_IS_NULL(b));
+    if (na && nb) return make_bool(1);
+    if (na || nb) return make_bool(0);
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c == 0 ? 1 : 0); }
     if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 == b->b8 ? 1 : 0);
@@ -149,9 +150,10 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
 }
 
 ray_t* ray_neq(ray_t* a, ray_t* b) {
-    /* Handle C NULL (null keyword) */
-    if (!a && !b) return make_bool(0);
-    if (!a || !b) return make_bool(1);
+    /* Handle NULL / RAY_NULL */
+    int na = (!a || RAY_IS_NULL(a)), nb = (!b || RAY_IS_NULL(b));
+    if (na && nb) return make_bool(0);
+    if (na || nb) return make_bool(1);
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c != 0 ? 1 : 0); }
     if (a->type == -RAY_BOOL && b->type == -RAY_BOOL)
         return make_bool(a->b8 != b->b8 ? 1 : 0);

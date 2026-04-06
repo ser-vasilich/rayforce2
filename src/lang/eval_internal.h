@@ -113,6 +113,7 @@ static inline int is_float_op(ray_t* a, ray_t* b) {
 
 /* Null sentinel checks */
 static inline int is_null_atom(ray_t* x) {
+    if (RAY_IS_NULL(x))       return 1;
     if (x->type == -RAY_I64)  return x->i64 == INT64_MIN;
     if (x->type == -RAY_I32)  return x->i32 == INT32_MIN;
     if (x->type == -RAY_I16)  return x->i16 == INT16_MIN;

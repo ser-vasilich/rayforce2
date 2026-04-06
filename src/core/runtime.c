@@ -37,6 +37,9 @@ extern void      ray_lang_destroy(void);
 ray_runtime_t *__RUNTIME = NULL;
 _Thread_local ray_vm_t *__VM = NULL;
 
+/* Static null singleton — type RAY_NULL, ARENA flag makes retain/release no-ops */
+ray_t __ray_null = { .type = RAY_NULL, .attrs = RAY_ATTR_ARENA, .rc = 0, .len = 0 };
+
 /* ===== Error code to string ===== */
 
 const char* ray_err_code_str(ray_err_t e) {

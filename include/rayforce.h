@@ -82,6 +82,7 @@ const char* ray_version_string(void);
 #define RAY_BINARY    102   /* Binary builtin: ray_t* (*)(ray_t*, ray_t*) */
 #define RAY_VARY      103   /* Variadic builtin: ray_t* (*)(ray_t**, int64_t) */
 #define RAY_ERROR     127   /* Error object: 8-byte packed ASCII code in sdata */
+#define RAY_NULL      126   /* Null / void — singleton static object */
 
 /* ===== Error Handling ===== */
 
@@ -143,6 +144,11 @@ typedef union ray_t {
         union ray_t* fl_next;
     };
 } ray_t;
+
+/* Global null singleton — always valid, retain/release are no-ops (ARENA flag) */
+extern ray_t __ray_null;
+#define RAY_NULL_OBJ  (&__ray_null)
+#define RAY_IS_NULL(p) ((p) == RAY_NULL_OBJ)
 
 /* Error object creation (defined in core/runtime.c) */
 ray_t* ray_error(const char* code, const char* fmt, ...);
