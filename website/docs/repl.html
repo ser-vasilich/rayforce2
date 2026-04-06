@@ -132,8 +132,6 @@ echo '(+ 1 2)' | ./rayforce</code></pre>
         <tbody>
           <tr><td><code>:?</code></td><td><code>:help</code></td><td>Display the command list.</td></tr>
           <tr><td><code>:t</code></td><td><code>:timeit</code></td><td>Toggle profiling on/off.</td></tr>
-          <tr><td><code>:t 1</code> / <code>:t 0</code></td><td></td><td>Explicitly enable or disable profiling.</td></tr>
-          <tr><td><code>:t <em>expr</em></code></td><td><code>:timeit <em>expr</em></code></td><td>Profile a single expression without changing the global toggle.</td></tr>
           <tr><td><code>:env</code></td><td></td><td>List all defined variables with their types.</td></tr>
           <tr><td><code>:clear</code></td><td></td><td>Clear the screen.</td></tr>
           <tr><td><code>:q</code></td><td><code>:quit</code></td><td>Exit the REPL.</td></tr>
@@ -142,17 +140,21 @@ echo '(+ 1 2)' | ./rayforce</code></pre>
       <p>You can also exit with <code>\\</code>, <code>exit</code>, or <strong>Ctrl-D</strong> on an empty line.</p>
 
       <h2>Profiling with :t</h2>
-      <p>Enable profiling with <code>:t 1</code>. Every subsequent evaluation emits a nested span tree showing where time was spent:</p>
-      <pre><code>&#x2023; :t 1
+      <p>Toggle profiling with <code>:t</code>. When active, every evaluation emits a nested span tree showing where time was spent:</p>
+      <pre><code>&#x2023; :t
 . Timeit is on.
 &#x2023; (+ 1 2)
 3
 &#x256D; top-level
 &#x2502; &#x2736;  parse: 0.016 ms
 &#x2502; &#x2736;  eval: 0.004 ms
-&#x2570;&#x2500;&#x2524; 0.025 ms</code></pre>
-      <p>Disable with <code>:t 0</code>. You can also profile a single expression without toggling: <code>:t (+ 1 2)</code>.</p>
+&#x2570;&#x2500;&#x2524; 0.025 ms
+&#x2023; :t
+. Timeit is off.</code></pre>
       <p>Spans nest automatically. The DAG executor reports sub-spans for optimizer passes (type inference, fusion, predicate pushdown) and per-morsel execution when applicable. A progress bar appears for long-running operations.</p>
+      <p>For one-off measurement, use the <code>timeit</code> builtin which returns elapsed time in milliseconds:</p>
+      <pre><code>(<span class="hl-fn">timeit</span> (+ <span class="hl-num">1</span> <span class="hl-num">2</span>))
+<span class="hl-comment">;; =&gt; 0.003</span></code></pre>
 
       <h2>Multi-Line Input</h2>
       <p>The REPL auto-detects incomplete expressions by tracking unmatched brackets <code>( [ {</code>. When the current input has unmatched openers, pressing Enter starts a continuation line instead of evaluating:</p>
