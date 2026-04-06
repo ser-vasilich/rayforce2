@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "io/repl.h"
+#include "app/repl.h"
 #include "core/runtime.h"
 #include <rayforce.h>
 #include <stdio.h>

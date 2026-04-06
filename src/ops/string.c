@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* ============================================================================
  * OP_LIKE: SQL LIKE pattern matching on SYM columns

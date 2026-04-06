@@ -33,7 +33,7 @@
  */
 
 #include "core/platform.h"
-#include "ops.h"
+#include "ops/ops.h"
 
 /* Callback: process elements [start, end) with the given worker_id */
 typedef void (*ray_pool_fn)(void* ctx, uint32_t worker_id, int64_t start, int64_t end);

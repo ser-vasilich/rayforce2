@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 static bool atom_to_numeric(ray_t* atom, double* out_f, int64_t* out_i, bool* out_is_f64) {
     if (!atom || !ray_is_atom(atom)) return false;

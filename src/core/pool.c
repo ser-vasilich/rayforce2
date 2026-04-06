@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "pool.h"
+#include "core/pool.h"
 #include "mem/cow.h"
 #include "mem/heap.h"
 #include "mem/sys.h"

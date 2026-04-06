@@ -427,6 +427,44 @@ ray_t* ray_get_splayed_fn(ray_t** args, int64_t n);
 ray_t* ray_get_parted_fn(ray_t** args, int64_t n);
 ray_t* ray_guid_fn(ray_t* n_arg);
 
+/* Group (formerly static in eval.c, now extern for query.c) */
+ray_t* ray_group_fn(ray_t* x);
+
+/* I/O and formatting builtins (formerly in eval.c, now in ops/builtins.c) */
+ray_t* ray_println(ray_t** args, int64_t n);
+ray_t* ray_show(ray_t** args, int64_t n);
+ray_t* ray_format_fn(ray_t** args, int64_t n);
+ray_t* ray_resolve_fn(ray_t** args, int64_t n);
+ray_t* ray_timeit_fn(ray_t** args, int64_t n);
+ray_t* ray_exit_fn(ray_t* arg);
+ray_t* ray_read_csv_fn(ray_t** args, int64_t n);
+ray_t* ray_write_csv_fn(ray_t** args, int64_t n);
+ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val);
+ray_t* ray_type_fn(ray_t* val);
+ray_t* ray_read_file(ray_t* path_obj);
+ray_t* ray_load_file(ray_t* path_obj);
+ray_t* ray_write_file(ray_t* path_obj, ray_t* content);
+
+/* Misc builtins (formerly in eval.c, now in ops/builtins.c) */
+ray_t* ray_dict_fn(ray_t* keys, ray_t* vals);
+ray_t* ray_nil_fn(ray_t* x);
+ray_t* ray_where_fn(ray_t* x);
+ray_t* ray_raze_fn(ray_t* x);
+ray_t* ray_within_fn(ray_t* vals, ray_t* range);
+ray_t* ray_fdiv_fn(ray_t* a, ray_t* b);
+
+/* Query bridge builtins (formerly in eval.c, now in ops/query.c) */
+ray_t* ray_select_fn(ray_t** args, int64_t n);
+ray_t* ray_update(ray_t** args, int64_t n);
+ray_t* ray_insert(ray_t** args, int64_t n);
+ray_t* ray_upsert(ray_t** args, int64_t n);
+ray_t* ray_xbar(ray_t* col, ray_t* bucket);
+ray_t* ray_left_join(ray_t** args, int64_t n);
+ray_t* ray_inner_join(ray_t** args, int64_t n);
+ray_t* ray_antijoin_fn(ray_t** args, int64_t n);
+ray_t* ray_window_join(ray_t** args, int64_t n);
+ray_t* ray_asof_join_fn(ray_t** args, int64_t n);
+
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */
 static inline ray_t* atomic_map_binary(ray_binary_fn fn, ray_t* left, ray_t* right) {
     return atomic_map_binary_op(fn, 0, left, right);

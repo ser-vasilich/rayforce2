@@ -40,7 +40,7 @@
 #include "csv.h"
 #include "mem/heap.h"
 #include "mem/sys.h"
-#include "ops/pool.h"
+#include "core/pool.h"
 #include "ops/hash.h"
 #include "table/sym.h"
 

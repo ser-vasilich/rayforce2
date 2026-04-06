@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* ============================================================================
  * Filter execution — extracted from exec.c

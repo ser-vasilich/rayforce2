@@ -26,7 +26,7 @@
 #endif
 
 #include "opt.h"
-#include "profile.h"
+#include "core/profile.h"
 #include "mem/sys.h"
 #include <math.h>
 #include <string.h>

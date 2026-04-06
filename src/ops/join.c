@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* ── Hash helper (shared by radix and chained HT join paths) ──────────── */
 

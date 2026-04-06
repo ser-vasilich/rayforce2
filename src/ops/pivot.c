@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* ============================================================================
  * OP_IF: ternary select  result[i] = cond[i] ? then[i] : else[i]

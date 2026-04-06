@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* --------------------------------------------------------------------------
  * exec_cosine_sim: cosine similarity between embedding column and query vector.

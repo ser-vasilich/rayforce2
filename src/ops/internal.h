@@ -16,8 +16,8 @@
 
 #include "exec.h"
 #include "hash.h"
-#include "pool.h"
-#include "profile.h"
+#include "core/pool.h"
+#include "core/profile.h"
 #include "store/csr.h"
 #include "store/hnsw.h"
 #include "lftj.h"

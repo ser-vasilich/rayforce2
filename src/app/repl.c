@@ -28,7 +28,7 @@
 #endif
 
 #include "lang/format.h"
-#include "io/repl.h"
+#include "app/repl.h"
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
@@ -36,7 +36,7 @@
 #include "lang/parse.h"
 #include "mem/heap.h"
 #include "ops/ops.h"
-#include "ops/profile.h"
+#include "core/profile.h"
 #include "table/sym.h"
 #include <inttypes.h>
 #include <stdio.h>
