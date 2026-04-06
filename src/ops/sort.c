@@ -1555,7 +1555,9 @@ static void radix_decode_into(void* dst, int8_t type, const uint64_t* sorted_key
         double* d = (double*)dst;
         for (int64_t i = 0; i < n; i++) {
             uint64_t k = desc ? ~sorted_keys[i] : sorted_keys[i];
-            uint64_t mask = -(k >> 63) | ((uint64_t)1 << 63);
+            /* Inverse of encode: positive originals have MSB=1 in key (flip sign bit),
+             * negative originals have MSB=0 in key (flip all bits). */
+            uint64_t mask = (k >> 63) ? ((uint64_t)1 << 63) : ~(uint64_t)0;
             uint64_t bits = k ^ mask;
             memcpy(&d[i], &bits, 8);
         }
@@ -1755,28 +1757,20 @@ static ray_t* sort_indices_ex(ray_t** cols, uint8_t* descs, uint8_t* nulls_first
                                     if (sorted) {
                                         uint64_t idx_mask =
                                             (idx_bits < 64) ? ((1ULL << idx_bits) - 1) : ~0ULL;
-                                        uint64_t key_mask =
-                                            (key_bits < 64) ? ((1ULL << key_bits) - 1) : ~0ULL;
 
-                                        bool do_decode = sorted_keys_out
-                                            && !RAY_IS_SYM(cols[0]->type);
+                                        /* Packed path: keys are truncated to key_bits,
+                                         * not full 64-bit encoded keys — can't decode. */
                                         packed_unpack_ctx_t up = {
                                             .sorted = sorted, .indices = indices,
-                                            .keys_out = do_decode ? keys : NULL,
+                                            .keys_out = NULL,
                                             .key_bits = key_bits,
-                                            .idx_mask = idx_mask, .key_mask = key_mask,
-                                            .extract_keys = do_decode,
+                                            .idx_mask = idx_mask, .key_mask = 0,
+                                            .extract_keys = false,
                                         };
                                         if (sk_pool)
                                             ray_pool_dispatch(sk_pool, packed_unpack_fn, &up, nrows);
                                         else
                                             packed_unpack_fn(&up, 0, 0, nrows);
-
-                                        if (do_decode) {
-                                            *sorted_keys_out = keys;
-                                            *keys_hdr_out = keys_hdr;
-                                            keys_hdr = NULL; /* prevent free below */
-                                        }
 
                                         sorted_idx = indices;
                                         radix_done = true;
