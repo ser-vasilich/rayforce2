@@ -2309,17 +2309,10 @@ ray_t* ray_asc_fn(ray_t* x) {
     if (!x || RAY_IS_ERR(x)) return x;
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (!ray_is_vec(x)) return ray_error("type", "asc expects a vector");
-
     int64_t n = ray_len(x);
     if (n <= 1) { ray_retain(x); return x; }
-
     uint8_t desc = 0;
-    ray_t* idx = ray_sort_indices(&x, &desc, NULL, 1, n);
-    if (RAY_IS_ERR(idx)) return idx;
-
-    ray_t* result = gather_by_idx(x, (int64_t*)ray_data(idx), n);
-    ray_release(idx);
-    return result;
+    return ray_sort(&x, &desc, NULL, 1, n);
 }
 
 /* (desc v) — sort vector descending */
@@ -2327,17 +2320,10 @@ ray_t* ray_desc_fn(ray_t* x) {
     if (!x || RAY_IS_ERR(x)) return x;
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (!ray_is_vec(x)) return ray_error("type", "desc expects a vector");
-
     int64_t n = ray_len(x);
     if (n <= 1) { ray_retain(x); return x; }
-
     uint8_t desc = 1;
-    ray_t* idx = ray_sort_indices(&x, &desc, NULL, 1, n);
-    if (RAY_IS_ERR(idx)) return idx;
-
-    ray_t* result = gather_by_idx(x, (int64_t*)ray_data(idx), n);
-    ray_release(idx);
-    return result;
+    return ray_sort(&x, &desc, NULL, 1, n);
 }
 
 /* (iasc v) — ascending sort indices */
