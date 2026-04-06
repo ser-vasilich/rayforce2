@@ -45,7 +45,12 @@ void ray_lang_print(FILE* fp, ray_t* val) {
     if (!val || RAY_IS_ERR(val)) { fprintf(fp, "error"); return; }
     switch (val->type) {
     case -RAY_I64:  fprintf(fp, "%ld", (long)val->i64); break;
-    case -RAY_F64:  fprintf(fp, "%g", val->f64); break;
+    case -RAY_F64: {
+        double fv = val->f64;
+        if (fv == 0.0 && signbit(fv)) fv = 0.0;
+        fprintf(fp, "%g", fv);
+        break;
+    }
     case -RAY_BOOL: fprintf(fp, "%s", val->b8 ? "true" : "false"); break;
     case -RAY_SYM: {
         ray_t* s = ray_sym_str(val->i64);
@@ -108,7 +113,9 @@ static char* fmt_interpolate(const char* fmt, size_t flen, ray_t** args, int64_t
             } else if (a->type == -RAY_I64) {
                 tlen = snprintf(tmp, sizeof(tmp), "%ld", (long)a->i64);
             } else if (a->type == -RAY_F64) {
-                tlen = snprintf(tmp, sizeof(tmp), "%g", a->f64);
+                double fv = a->f64;
+                if (fv == 0.0 && signbit(fv)) fv = 0.0;
+                tlen = snprintf(tmp, sizeof(tmp), "%g", fv);
             } else if (a->type == -RAY_BOOL) {
                 tlen = snprintf(tmp, sizeof(tmp), "%s", a->b8 ? "true" : "false");
             } else if (a->type == -RAY_STR) {
