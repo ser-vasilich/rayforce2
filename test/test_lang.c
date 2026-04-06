@@ -1318,12 +1318,8 @@ static MunitResult test_eval_window_join(const void* params, void* fixture) {
 static MunitResult test_eval_println(const void* params, void* fixture) {
     (void)params; (void)fixture;
     ray_t* result = ray_eval_str("(println \"hello\")");
-    munit_assert_ptr_not_null(result);
-    munit_assert_false(RAY_IS_ERR(result));
-    /* println returns null (i64 0) */
-    munit_assert_int(result->type, ==, -RAY_I64);
-    munit_assert_int(result->i64, ==, 0);
-    ray_release(result);
+    /* println returns RAY_NULL_OBJ (no value — side-effect only) */
+    munit_assert_true(RAY_IS_NULL(result));
     return MUNIT_OK;
 }
 

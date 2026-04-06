@@ -984,6 +984,7 @@ ray_t* ray_cond(ray_t** args, int64_t n) {
     if (ray_is_lazy(cond))
         cond = ray_lazy_materialize(cond);
     if (RAY_IS_ERR(cond)) return cond;
+    if (RAY_IS_NULL(cond)) return (n >= 3) ? ray_eval(args[2]) : make_i64(0);
     int truthy = 0;
     if (cond->type == -RAY_BOOL) truthy = cond->b8;
     else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
@@ -1377,7 +1378,10 @@ op_call1: {
     ray_t *fn_obj = POP();
     ray_unary_fn fn = (ray_unary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && arg->type >= 0)
+    if (RAY_UNLIKELY(RAY_IS_NULL(arg))) {
+        result = (fn == (ray_unary_fn)ray_nil_fn || fn == (ray_unary_fn)ray_type_fn)
+                 ? fn(arg) : ray_error("type", NULL);
+    } else if ((fn_obj->attrs & RAY_FN_ATOMIC) && arg->type >= 0)
         result = atomic_map_unary(fn, arg);
     else
         result = fn(arg);
@@ -1394,9 +1398,12 @@ op_call2: {
     ray_t *fn_obj = POP();
     ray_binary_fn fn = (ray_binary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
+    if (RAY_UNLIKELY(RAY_IS_NULL(left) || RAY_IS_NULL(right))) {
+        result = (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq)
+                 ? fn(left, right) : ray_error("type", NULL);
     /* Fast path: atoms have negative type — skip collection check entirely.
      * Only call is_collection when at least one arg has type >= 0 (vector/list). */
-    if ((fn_obj->attrs & RAY_FN_ATOMIC) && (left->type >= 0 || right->type >= 0))
+    } else if ((fn_obj->attrs & RAY_FN_ATOMIC) && (left->type >= 0 || right->type >= 0))
         result = atomic_map_binary_op(fn, RAY_FN_OPCODE(fn_obj), left, right);
     else
         result = fn(left, right);
@@ -1577,7 +1584,7 @@ op_ret: {
         result = POP();
         ray_retain(result);  /* prevent free during cleanup if aliased in locals */
     } else {
-        result = make_i64(0);
+        result = RAY_NULL_OBJ;
     }
 
     /* Clean up current frame — release all locals and leftover stack slots */
@@ -2114,9 +2121,10 @@ ray_t* ray_eval(ray_t* obj) {
             ray_release(head);
             if (arg && RAY_IS_ERR(arg)) { ret = arg; goto out; }
             ray_t* result;
-            if (!arg) {
-                /* Only nil? safely handles NULL — check by function pointer */
-                result = (fn == (ray_unary_fn)ray_nil_fn || fn == (ray_unary_fn)ray_ser_fn) ? fn(NULL) : ray_error("type", NULL);
+            if (!arg || RAY_IS_NULL(arg)) {
+                /* Only nil?/type/ser safely handle null */
+                result = (fn == (ray_unary_fn)ray_nil_fn || fn == (ray_unary_fn)ray_type_fn ||
+                          fn == (ray_unary_fn)ray_ser_fn) ? fn(arg) : ray_error("type", NULL);
             } else if ((fn_attrs & RAY_FN_ATOMIC) && is_collection(arg))
                 result = atomic_map_unary(fn, arg);
             else
@@ -2142,18 +2150,18 @@ ray_t* ray_eval(ray_t* obj) {
                 ray_release(head); if (left) ray_release(left);
                 ret = right; goto out;
             }
-            /* If either arg is NULL (null keyword), only == and != can handle it */
-            if (!left || !right) {
+            /* If either arg is null, only == and != can handle it */
+            if (!left || !right || RAY_IS_NULL(left) || RAY_IS_NULL(right)) {
                 if (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq) {
                     ray_release(head);
                     ray_t* result = fn(left, right);
-                    if (left) ray_release(left);
-                    if (right) ray_release(right);
+                    ray_release(left);
+                    ray_release(right);
                     ret = result; goto out;
                 }
                 ray_release(head);
-                if (left) ray_release(left);
-                if (right) ray_release(right);
+                ray_release(left);
+                ray_release(right);
                 ret = ray_error("type", NULL); goto out;
             }
             uint16_t fn_opcode = RAY_FN_OPCODE(head);
