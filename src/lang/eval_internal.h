@@ -114,11 +114,18 @@ static inline int is_float_op(ray_t* a, ray_t* b) {
 /* Null sentinel checks */
 static inline int is_null_atom(ray_t* x) {
     if (RAY_IS_NULL(x))       return 1;
-    if (x->type == -RAY_I64)  return x->i64 == INT64_MIN;
-    if (x->type == -RAY_I32)  return x->i32 == INT32_MIN;
-    if (x->type == -RAY_I16)  return x->i16 == INT16_MIN;
-    if (x->type == -RAY_F64)  return isnan(x->f64);
-    return 0;
+    switch (-x->type) {
+    case RAY_I64: case RAY_TIMESTAMP: case RAY_SYM:
+        return x->i64 == INT64_MIN;
+    case RAY_I32: case RAY_DATE: case RAY_TIME:
+        return x->i32 == INT32_MIN;
+    case RAY_I16:
+        return x->i16 == INT16_MIN;
+    case RAY_F64:
+        return isnan(x->f64);
+    default:
+        return 0;
+    }
 }
 
 /* Return the null value for the promoted result type of two operands */
