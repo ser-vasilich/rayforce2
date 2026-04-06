@@ -1323,6 +1323,71 @@ static MunitResult test_eval_println(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- Sort decode-gather regression tests (2000+ rows → radix path) ---- */
+
+static MunitResult test_sort_decode_i64(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* r = ray_eval_str("(== (asc (- (til 2000) 1000)) (- (til 2000) 1000))");
+    munit_assert_ptr_not_null(r);
+    munit_assert_false(RAY_IS_ERR(r));
+    int64_t n = ray_len(r);
+    munit_assert_int(n, ==, 2000);
+    bool* d = (bool*)ray_data(r);
+    for (int64_t i = 0; i < n; i++) munit_assert_true(d[i]);
+    ray_release(r);
+    return MUNIT_OK;
+}
+
+static MunitResult test_sort_decode_f64(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Sort 2000 F64 values with negatives, verify first/last */
+    ray_t* first = ray_eval_str("(first (asc (* 1.0 (- (til 2000) 1000))))");
+    munit_assert_ptr_not_null(first);
+    munit_assert_false(RAY_IS_ERR(first));
+    munit_assert_double(first->f64, ==, -1000.0);
+    ray_release(first);
+
+    ray_t* last = ray_eval_str("(last (asc (* 1.0 (- (til 2000) 1000))))");
+    munit_assert_ptr_not_null(last);
+    munit_assert_false(RAY_IS_ERR(last));
+    munit_assert_double(last->f64, ==, 999.0);
+    ray_release(last);
+    return MUNIT_OK;
+}
+
+static MunitResult test_sort_decode_desc(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* first = ray_eval_str("(first (desc (til 2000)))");
+    munit_assert_ptr_not_null(first);
+    munit_assert_false(RAY_IS_ERR(first));
+    munit_assert_true(first->i64 == 1999);
+    ray_release(first);
+
+    ray_t* last = ray_eval_str("(last (desc (til 2000)))");
+    munit_assert_ptr_not_null(last);
+    munit_assert_false(RAY_IS_ERR(last));
+    munit_assert_true(last->i64 == 0);
+    ray_release(last);
+    return MUNIT_OK;
+}
+
+static MunitResult test_sort_decode_f64_neg(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Descending F64 sort with negatives */
+    ray_t* first = ray_eval_str("(first (desc (* 1.0 (- (til 2000) 1000))))");
+    munit_assert_ptr_not_null(first);
+    munit_assert_false(RAY_IS_ERR(first));
+    munit_assert_double(first->f64, ==, 999.0);
+    ray_release(first);
+
+    ray_t* last = ray_eval_str("(last (desc (* 1.0 (- (til 2000) 1000))))");
+    munit_assert_ptr_not_null(last);
+    munit_assert_false(RAY_IS_ERR(last));
+    munit_assert_double(last->f64, ==, -1000.0);
+    ray_release(last);
+    return MUNIT_OK;
+}
+
 /* ---- Test: read/write CSV roundtrip ---- */
 static MunitResult test_eval_read_write_csv(const void* params, void* fixture) {
     (void)params; (void)fixture;
@@ -1712,6 +1777,10 @@ static MunitTest lang_tests[] = {
     { "/eval/inner_join",      test_eval_inner_join,      lang_setup, lang_teardown, 0, NULL },
     { "/eval/window_join",     test_eval_window_join,     lang_setup, lang_teardown, 0, NULL },
     { "/eval/println",         test_eval_println,         lang_setup, lang_teardown, 0, NULL },
+    { "/sort/decode_i64",      test_sort_decode_i64,      lang_setup, lang_teardown, 0, NULL },
+    { "/sort/decode_f64",      test_sort_decode_f64,      lang_setup, lang_teardown, 0, NULL },
+    { "/sort/decode_desc",     test_sort_decode_desc,     lang_setup, lang_teardown, 0, NULL },
+    { "/sort/decode_f64_neg",  test_sort_decode_f64_neg,  lang_setup, lang_teardown, 0, NULL },
     { "/eval/read_write_csv",  test_eval_read_write_csv,  lang_setup, lang_teardown, 0, NULL },
     { "/eval/as_cast",         test_eval_as_cast,         lang_setup, lang_teardown, 0, NULL },
     { "/eval/type",            test_eval_type,            lang_setup, lang_teardown, 0, NULL },
