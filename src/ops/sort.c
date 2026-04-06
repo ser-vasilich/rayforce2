@@ -2186,10 +2186,14 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         }
     }
 
-    /* Sort columns -> get index permutation */
-    ray_t* idx_vec = ray_sort_indices(sort_vecs, ext->sort.desc,
-                                      ext->sort.nulls_first, n_sort, nrows);
+    /* Sort columns -> get index permutation (with optional sorted radix keys) */
+    uint64_t* sorted_keys = NULL;
+    ray_t* sorted_keys_hdr = NULL;
+    ray_t* idx_vec = sort_indices_ex(sort_vecs, ext->sort.desc,
+                                     ext->sort.nulls_first, n_sort, nrows,
+                                     &sorted_keys, &sorted_keys_hdr);
     if (!idx_vec || RAY_IS_ERR(idx_vec)) {
+        if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
         for (uint8_t k = 0; k < n_sort; k++) {
             if (sort_owned[k] && sort_vecs[k] && !RAY_IS_ERR(sort_vecs[k]))
                 ray_release(sort_vecs[k]);
@@ -2202,6 +2206,7 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
     {
         ray_pool_t* cp = ray_pool_get();
         if (pool_cancelled(cp)) {
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
             for (uint8_t k = 0; k < n_sort; k++) {
                 if (sort_owned[k] && sort_vecs[k] && !RAY_IS_ERR(sort_vecs[k]))
                     ray_release(sort_vecs[k]);
@@ -2218,6 +2223,7 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
 
     ray_t* result = ray_table_new(ncols);
     if (!result || RAY_IS_ERR(result)) {
+        if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
         for (uint8_t k = 0; k < n_sort; k++) {
             if (sort_owned[k] && sort_vecs[k] && !RAY_IS_ERR(sort_vecs[k]))
                 ray_release(sort_vecs[k]);
@@ -2243,12 +2249,38 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         valid_ncols++;
     }
 
+    /* Decode-gather optimisation: decode the sort key column directly from
+     * sorted radix keys (sequential writes) instead of random-access gather.
+     * Only for single-key, non-SYM sorts where radix keys are available. */
+    int64_t sort_key_sym = -1;
+    if (sorted_keys && n_sort == 1 && !RAY_IS_SYM(sort_vecs[0]->type)) {
+        ray_op_ext_t* key_ext = find_ext(g, ext->sort.columns[0]->id);
+        if (key_ext && key_ext->base.opcode == OP_SCAN)
+            sort_key_sym = key_ext->sym;
+    }
+    int64_t decode_col_idx = -1;
+    if (sort_key_sym >= 0) {
+        for (int64_t c = 0; c < ncols; c++) {
+            if (col_names[c] == sort_key_sym && new_cols[c]) {
+                decode_col_idx = c;
+                break;
+            }
+        }
+    }
+
+    if (decode_col_idx >= 0) {
+        radix_decode_into(ray_data(new_cols[decode_col_idx]),
+                          sort_vecs[0]->type, sorted_keys,
+                          gather_rows, ext->sort.desc ? ext->sort.desc[0] : 0);
+    }
+
     /* Gather all columns using sorted indices */
     if (gather_pool && valid_ncols > 0 && valid_ncols <= MGATHER_MAX_COLS) {
         /* Fused multi-column gather: one pass over indices for all columns */
         multi_gather_ctx_t mgctx = { .idx = sorted_idx, .ncols = 0 };
         for (int64_t c = 0; c < ncols; c++) {
             if (!new_cols[c]) continue;
+            if (c == decode_col_idx) continue;
             ray_t* col = ray_table_get_col_idx(tbl, c);
             int64_t ci = mgctx.ncols;
             mgctx.srcs[ci] = (char*)ray_data(col);
@@ -2263,6 +2295,7 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         for (int64_t c = 0; c < ncols; c++) {
             ray_t* col = ray_table_get_col_idx(tbl, c);
             if (!col || !new_cols[c]) continue;
+            if (c == decode_col_idx) continue;
             if (gather_pool) {
                 gather_ctx_t gctx = {
                     .idx = sorted_idx, .src_col = col, .dst_col = new_cols[c],
@@ -2291,6 +2324,9 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         result = ray_table_add_col(result, col_names[c], new_cols[c]);
         ray_release(new_cols[c]);
     }
+
+    /* Free sorted radix keys scratch buffer */
+    if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
 
     /* Free expression-evaluated sort keys */
     for (uint8_t k = 0; k < n_sort; k++) {
