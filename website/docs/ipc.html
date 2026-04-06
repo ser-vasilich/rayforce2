@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPC &amp; Serialization — Rayforce Documentation</title>
+  <meta name="description" content="Rayforce binary serialization format: serialize and deserialize any ray_t object with ser/de builtins. Wire format reference and supported types.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="docs.css">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <!-- Top Bar -->
+  <div class="docs-topbar">
+    <div class="docs-topbar-left">
+      <button class="docs-sidebar-toggle" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <a href="../" class="docs-brand">
+        <img src="../assets/favicon.svg" alt="Rayforce" width="22" height="22">
+        Rayforce
+      </a>
+      <a href="../">&larr; Back to home</a>
+    </div>
+    <a href="https://github.com/RayforceDB/rayforce2" class="nav-github" target="_blank" rel="noopener">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <nav class="docs-sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Getting Started</div>
+        <a href="index.html" class="sidebar-link">Overview</a>
+        <a href="quick-start.html" class="sidebar-link">Quick Start</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Guides</div>
+        <a href="tutorial.html" class="sidebar-link">Getting Started Tutorial</a>
+        <a href="guide-datalog.html" class="sidebar-link">Building a Knowledge Base</a>
+        <a href="guide-analytics.html" class="sidebar-link">Analytics Cookbook</a>
+        <a href="guide-storage.html" class="sidebar-link">Data Persistence</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Rayfall Language</div>
+        <a href="rayfall-syntax.html" class="sidebar-link">Syntax &amp; Types</a>
+        <a href="rayfall-functions.html" class="sidebar-link">Functions Reference</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Data Model</div>
+        <a href="data-types.html" class="sidebar-link">Scalar Types</a>
+        <a href="data-types-collections.html" class="sidebar-link">Collections</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Queries</div>
+        <a href="queries-select.html" class="sidebar-link">Select &amp; Update</a>
+        <a href="queries-joins.html" class="sidebar-link">Joins</a>
+        <a href="queries-pivot.html" class="sidebar-link">Pivot &amp; Window</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Operations</div>
+        <a href="operations-math.html" class="sidebar-link">Math &amp; Aggregation</a>
+        <a href="operations-string.html" class="sidebar-link">String Operations</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Storage</div>
+        <a href="storage.html" class="sidebar-link">Files &amp; Partitions</a>
+        <a href="ipc.html" class="sidebar-link active">IPC &amp; Serialization</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">C API</div>
+        <a href="c-api-core.html" class="sidebar-link">Core API</a>
+        <a href="c-api-dag.html" class="sidebar-link">DAG &amp; Execution</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Graph Engine</div>
+        <a href="graph-storage.html" class="sidebar-link">CSR Storage</a>
+        <a href="graph-algorithms.html" class="sidebar-link">Algorithms</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Architecture</div>
+        <a href="architecture-pipeline.html" class="sidebar-link">Pipeline &amp; Optimizer</a>
+        <a href="architecture-memory.html" class="sidebar-link">Memory Model</a>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">Datalog</div>
+        <a href="datalog.html" class="sidebar-link">Rules &amp; Queries</a>
+      </div>
+    </nav>
+
+    <!-- Content -->
+    <main class="docs-content">
+      <div class="breadcrumb">
+        <a href="../">Rayforce</a>
+        <span class="sep">/</span>
+        <a href="index.html">Docs</a>
+        <span class="sep">/</span>
+        <span>IPC &amp; Serialization</span>
+      </div>
+
+      <h1>IPC &amp; Serialization</h1>
+      <p class="page-subtitle">Compact binary format for serializing any <code>ray_t</code> object. Atoms, vectors, lists, tables, and nested structures all round-trip faithfully.</p>
+
+      <h2>Overview</h2>
+      <p>Rayforce uses a compact binary format for serializing any <code>ray_t</code> object. The format supports atoms, vectors, lists, tables, and nested structures. Every serialized payload is prefixed with a 16-byte IPC header that carries endianness, message type, and payload size.</p>
+      <p>The transport layer (TCP sockets) is planned but not yet implemented &mdash; the wire format is ready.</p>
+
+      <h2>Serialization with <code>ser</code></h2>
+      <p>The <code>ser</code> builtin converts any value to a binary buffer (a <code>U8</code> vector). Pass it any Rayforce value &mdash; atom, vector, list, or table:</p>
+
+      <pre><code><span class="hl-comment">;; Serialize an integer</span>
+(<span class="hl-fn">ser</span> <span class="hl-num">42</span>)
+<span class="hl-comment">;; =&gt; [0xfa 0xde 0xfa 0xce 0x02 0x00 0x00 0x00 ..]</span>
+
+<span class="hl-comment">;; Serialize a vector</span>
+(<span class="hl-fn">ser</span> (<span class="hl-fn">til</span> <span class="hl-num">10</span>))
+
+<span class="hl-comment">;; Serialize a string</span>
+(<span class="hl-fn">ser</span> <span class="hl-str">"hello"</span>)
+
+<span class="hl-comment">;; Serialize a table</span>
+(<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-sym">`A</span> <span class="hl-sym">`B</span> <span class="hl-sym">`C</span>])))
+(<span class="hl-fn">ser</span> t)</code></pre>
+
+      <p>The result is always a <code>U8</code> byte vector containing the IPC header followed by the serialized payload.</p>
+
+      <h2>Deserialization with <code>de</code></h2>
+      <p>The <code>de</code> builtin reconstructs a value from its binary representation. Compose it with <code>ser</code> for a perfect round-trip:</p>
+
+      <pre><code><span class="hl-comment">;; Round-trip an integer</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> <span class="hl-num">42</span>))
+<span class="hl-comment">;; =&gt; 42</span>
+
+<span class="hl-comment">;; Round-trip a vector</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> (<span class="hl-fn">til</span> <span class="hl-num">10</span>)))
+<span class="hl-comment">;; =&gt; [0 1 2 3 4 5 6 7 8 9]</span>
+
+<span class="hl-comment">;; Round-trip a string</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> <span class="hl-str">"hello"</span>))
+<span class="hl-comment">;; =&gt; "hello"</span>
+
+<span class="hl-comment">;; Round-trip a float</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> <span class="hl-num">3.14</span>))
+<span class="hl-comment">;; =&gt; 3.14</span>
+
+<span class="hl-comment">;; Round-trip a boolean</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> <span class="hl-num">1b</span>))
+<span class="hl-comment">;; =&gt; 1</span>
+
+<span class="hl-comment">;; Round-trip a list of mixed types</span>
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> (<span class="hl-fn">list</span> <span class="hl-num">1</span> <span class="hl-str">"two"</span> <span class="hl-num">3.0</span>)))
+<span class="hl-comment">;; =&gt; (1 "two" 3.0)</span>
+
+<span class="hl-comment">;; Round-trip a table</span>
+(<span class="hl-kw">set</span> t (<span class="hl-fn">table</span> [<span class="hl-sym">x</span> <span class="hl-sym">y</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>] [<span class="hl-sym">`A</span> <span class="hl-sym">`B</span> <span class="hl-sym">`C</span>])))
+(<span class="hl-fn">de</span> (<span class="hl-fn">ser</span> t))
+<span class="hl-comment">;; =&gt; the same 3-row table with columns x (i64) and y (sym)</span></code></pre>
+
+      <h2>Wire Format</h2>
+      <p>Every serialized payload begins with a 16-byte <code>ray_ipc_header_t</code> header, followed by the serialized object bytes. The header layout:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Offset</th>
+            <th>Size</th>
+            <th>Field</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>0</td><td>4 bytes</td><td><code>prefix</code></td><td>Magic bytes <code>0xcefadefa</code> &mdash; identifies Rayforce binary data</td></tr>
+          <tr><td>4</td><td>1 byte</td><td><code>version</code></td><td>Protocol version (<code>RAY_VERSION_MAJOR</code>)</td></tr>
+          <tr><td>5</td><td>1 byte</td><td><code>flags</code></td><td>Reserved flags (currently <code>0</code>)</td></tr>
+          <tr><td>6</td><td>1 byte</td><td><code>endian</code></td><td>Endianness: <code>0</code> = little-endian</td></tr>
+          <tr><td>7</td><td>1 byte</td><td><code>msgtype</code></td><td>Message type: <code>0</code> = async, <code>1</code> = sync, <code>2</code> = response</td></tr>
+          <tr><td>8</td><td>8 bytes</td><td><code>size</code></td><td>Payload size in bytes (<code>int64</code>)</td></tr>
+        </tbody>
+      </table>
+
+      <p>The corresponding C struct:</p>
+      <pre><code><span class="hl-kw">typedef struct</span> ray_ipc_header_t {
+    uint32_t prefix;     <span class="hl-comment">/* RAY_SERDE_PREFIX (0xcefadefa) */</span>
+    uint8_t  version;    <span class="hl-comment">/* RAY_VERSION_MAJOR */</span>
+    uint8_t  flags;      <span class="hl-comment">/* 0 */</span>
+    uint8_t  endian;     <span class="hl-comment">/* 0 = little-endian */</span>
+    uint8_t  msgtype;    <span class="hl-comment">/* 0 = async, 1 = sync, 2 = response */</span>
+    int64_t  size;       <span class="hl-comment">/* payload size in bytes */</span>
+} ray_ipc_header_t;</code></pre>
+      <p>The header is exactly 16 bytes, enforced by a compile-time static assertion.</p>
+
+      <h2>Supported Types</h2>
+      <p>All core Rayforce types serialize and deserialize faithfully:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Types</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Integer atoms</td><td><code>i64</code>, <code>bool</code></td></tr>
+          <tr><td>Float atoms</td><td><code>f64</code></td></tr>
+          <tr><td>String atoms</td><td><code>str</code>, <code>sym</code></td></tr>
+          <tr><td>Temporal atoms</td><td><code>date</code>, <code>time</code>, <code>timestamp</code></td></tr>
+          <tr><td>Other atoms</td><td><code>guid</code>, <code>null</code></td></tr>
+          <tr><td>Vectors</td><td>All typed vectors (<code>I64</code>, <code>F64</code>, <code>BOOL</code>, <code>STR</code>, <code>SYM</code>, <code>DATE</code>, <code>TIME</code>, <code>TS</code>, <code>GUID</code>), including null bitmaps</td></tr>
+          <tr><td>Collections</td><td><code>list</code> (heterogeneous, nested), <code>dict</code></td></tr>
+          <tr><td>Tables</td><td><code>table</code> (column names + column vectors)</td></tr>
+        </tbody>
+      </table>
+
+      <h2>C API</h2>
+      <p>The serialization functions are declared in <code>src/store/serde.h</code>:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Function</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ray_ser(obj)</code></td><td>Serialize <code>obj</code> to a <code>U8</code> vector with IPC header</td></tr>
+          <tr><td><code>ray_de(bytes)</code></td><td>Deserialize from a <code>U8</code> vector, validates IPC header</td></tr>
+          <tr><td><code>ray_serde_size(obj)</code></td><td>Calculate serialized size (excluding header)</td></tr>
+          <tr><td><code>ray_ser_raw(buf, obj)</code></td><td>Serialize into a caller-provided buffer (no header)</td></tr>
+          <tr><td><code>ray_de_raw(buf, len)</code></td><td>Deserialize from raw buffer, updates <code>len</code> with bytes consumed</td></tr>
+          <tr><td><code>ray_obj_save(obj, path)</code></td><td>Save any object to a binary file</td></tr>
+          <tr><td><code>ray_obj_load(path)</code></td><td>Load an object from a binary file</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Use Cases</h2>
+      <ul>
+        <li><strong>Saving and loading application state</strong> &mdash; persist any Rayforce object to disk with <code>ray_obj_save</code> / <code>ray_obj_load</code>, or use the Rayfall builtins <code>save</code> / <code>load</code></li>
+        <li><strong>Passing data between processes</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding</li>
+        <li><strong>Binary file format</strong> &mdash; the IPC format serves as a compact, self-describing binary format for Rayforce data</li>
+      </ul>
+
+      <h2>Limitations</h2>
+      <ul>
+        <li><strong>No streaming</strong> &mdash; the entire object is serialized at once; there is no chunked or incremental mode</li>
+        <li><strong>No compression</strong> &mdash; the <code>flags</code> field in the header reserves space for a compression flag, but compression is not yet implemented</li>
+        <li><strong>No transport layer</strong> &mdash; TCP socket support is planned but not yet available; currently serialization targets in-memory buffers and files</li>
+      </ul>
+
+      <!-- Prev/Next -->
+      <div class="docs-nav-footer">
+        <a href="storage.html" class="docs-nav-link prev">
+          <span class="docs-nav-label">Previous</span>
+          <span class="docs-nav-title">&larr; Files &amp; Partitions</span>
+        </a>
+        <a href="c-api-core.html" class="docs-nav-link next">
+          <span class="docs-nav-label">Next</span>
+          <span class="docs-nav-title">Core API &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="docs.js"></script>
+</body>
+</html>
