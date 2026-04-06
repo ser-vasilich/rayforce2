@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "ops/exec_internal.h"
+#include "ops/internal.h"
 
 /* Global profiler instance (zero-initialized = inactive) */
 ray_profile_t g_ray_profile;
