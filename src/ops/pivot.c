@@ -505,6 +505,7 @@ ray_t* exec_pivot(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
             if (pt == RAY_F64) {
                 double fv;
                 memcpy(&fv, &pval, 8);
+                if (fv == 0.0 && signbit(fv)) fv = 0.0;
                 len = snprintf(buf, sizeof(buf), "%g", fv);
             } else if (pt == RAY_BOOL) {
                 len = snprintf(buf, sizeof(buf), "%s", pval ? "true" : "false");

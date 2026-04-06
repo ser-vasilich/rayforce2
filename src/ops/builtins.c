@@ -670,7 +670,9 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
             return ray_str(buf, (size_t)n2);
         }
         if (val->type == -RAY_F64) {
-            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%g", val->f64);
+            double fv = val->f64;
+            if (fv == 0.0 && signbit(fv)) fv = 0.0;
+            char buf[32]; int n2 = snprintf(buf, sizeof(buf), "%g", fv);
             return ray_str(buf, (size_t)n2);
         }
         if (val->type == -RAY_BOOL) {
