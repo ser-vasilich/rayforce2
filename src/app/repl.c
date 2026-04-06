@@ -28,7 +28,7 @@
 #endif
 
 #include "lang/format.h"
-#include "io/repl.h"
+#include "app/repl.h"
 #include "app/term.h"
 #include "lang/env.h"
 #include "lang/eval.h"
