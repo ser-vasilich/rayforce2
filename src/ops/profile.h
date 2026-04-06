@@ -31,6 +31,12 @@
 #include <windows.h>
 #else
 #include <time.h>
+/* clock_gettime / CLOCK_MONOTONIC may be hidden under strict -std=c17
+ * without _POSIX_C_SOURCE.  Provide fallback declarations. */
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+int clock_gettime(int clk_id, struct timespec *tp);
+#endif
 #endif
 
 /* ===== Span-based execution profiler =====
