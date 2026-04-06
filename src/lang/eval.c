@@ -984,7 +984,11 @@ ray_t* ray_cond(ray_t** args, int64_t n) {
     if (ray_is_lazy(cond))
         cond = ray_lazy_materialize(cond);
     if (RAY_IS_ERR(cond)) return cond;
-    if (RAY_IS_NULL(cond)) return (n >= 3) ? ray_eval(args[2]) : make_i64(0);
+    /* All null forms are falsy */
+    if (is_null_atom(cond)) {
+        ray_release(cond);
+        return (n >= 3) ? ray_eval(args[2]) : make_i64(0);
+    }
     int truthy = 0;
     if (cond->type == -RAY_BOOL) truthy = cond->b8;
     else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
@@ -1365,7 +1369,8 @@ op_jmpf: {
     ip += 2;
     ray_t *cond = POP();
     int truthy = 0;
-    if (cond->type == -RAY_BOOL) truthy = cond->b8;
+    if (is_null_atom(cond)) truthy = 0;
+    else if (cond->type == -RAY_BOOL) truthy = cond->b8;
     else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
     else truthy = 1;
     ray_release(cond);
@@ -2150,7 +2155,7 @@ ray_t* ray_eval(ray_t* obj) {
                 ray_release(head); if (left) ray_release(left);
                 ret = right; goto out;
             }
-            /* If either arg is null, only == and != can handle it */
+            /* If either arg is NULL/void, only == and != can handle it */
             if (!left || !right || RAY_IS_NULL(left) || RAY_IS_NULL(right)) {
                 if (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq) {
                     ray_release(head);

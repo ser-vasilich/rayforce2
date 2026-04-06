@@ -126,8 +126,8 @@ int is_comparable(ray_t* x) {
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
-    /* Handle NULL / RAY_NULL */
-    int na = (!a || RAY_IS_NULL(a)), nb = (!b || RAY_IS_NULL(b));
+    /* Handle all null forms (C NULL, RAY_NULL_OBJ, sentinel nulls) */
+    int na = (!a || is_null_atom(a)), nb = (!b || is_null_atom(b));
     if (na && nb) return make_bool(1);
     if (na || nb) return make_bool(0);
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c == 0 ? 1 : 0); }
@@ -150,8 +150,8 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
 }
 
 ray_t* ray_neq(ray_t* a, ray_t* b) {
-    /* Handle NULL / RAY_NULL */
-    int na = (!a || RAY_IS_NULL(a)), nb = (!b || RAY_IS_NULL(b));
+    /* Handle all null forms (C NULL, RAY_NULL_OBJ, sentinel nulls) */
+    int na = (!a || is_null_atom(a)), nb = (!b || is_null_atom(b));
     if (na && nb) return make_bool(0);
     if (na || nb) return make_bool(1);
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c != 0 ? 1 : 0); }
