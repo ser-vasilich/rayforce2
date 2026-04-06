@@ -143,12 +143,12 @@ echo '(+ 1 2)' | ./rayforce</code></pre>
 
       <h2>Profiling with :t</h2>
       <p>When profiling is active, every evaluation emits a nested span tree showing where time was spent. Use <code>:t <em>expr</em></code> to profile a one-off expression:</p>
-      <pre><code><span class="hl-comment">&#x2023;</span> :t (select sum x from: (table 'x (til 1000000)) by: (xbar 1000 x))
-&#x2563; top-level
-&#x2502; &#x2736;  parse: 0.082 ms
-&#x2502; &#x2736;  eval: 12.410 ms
-&#x2502; &#x2736;  materialize: 1.205 ms
-&#x255a;&#x2500;&#x2524; 13.712 ms</code></pre>
+      <pre><code>&#x2023; :t (+ 1 2)
+3
+&#x256D; top-level
+&#x2502; &#x2736;  parse: 0.009 ms
+&#x2502; &#x2736;  eval: 0.003 ms
+&#x2570;&#x2500;&#x2524; 0.013 ms</code></pre>
       <p>Spans nest automatically. The DAG executor reports sub-spans for optimizer passes (type inference, fusion, predicate pushdown) and per-morsel execution when applicable. A progress bar appears for long-running operations.</p>
       <p>Toggle profiling for all subsequent expressions with bare <code>:t</code> or explicit <code>:t 1</code> / <code>:t 0</code>.</p>
 

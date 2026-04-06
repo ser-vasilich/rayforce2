@@ -238,9 +238,9 @@
 
       <h2>Use Cases</h2>
       <ul>
-        <li><strong>Saving and loading application state</strong> &mdash; use <code>set-splayed</code> / <code>get-splayed</code> for tables, or <code>ser</code> / <code>de</code> for in-memory round-trips. Binary file persistence via the C API (<code>ray_ser_raw</code> + file I/O)</li>
-        <li><strong>Passing data between processes</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding</li>
-        <li><strong>Binary file format</strong> &mdash; the IPC format serves as a compact, self-describing binary format for Rayforce data</li>
+        <li><strong>In-memory data exchange</strong> &mdash; <code>ser</code> / <code>de</code> round-trip any Rayforce value through a compact byte vector</li>
+        <li><strong>Inter-process communication</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding over TCP</li>
+        <li><strong>Table persistence</strong> &mdash; for saving tables to disk, use <code>set-splayed</code> / <code>get-splayed</code> (see <a href="storage.html">Columnar Storage</a>)</li>
       </ul>
 
       <h2>Limitations</h2>
