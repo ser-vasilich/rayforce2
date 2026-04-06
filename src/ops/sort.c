@@ -1539,16 +1539,64 @@ static int64_t topn_merge(topn_ctx_t* ctx, uint32_t n_workers,
     return cnt;
 }
 
-/* Sort columns and return index array.
+/* Decode sorted radix keys directly into a typed output vector.
+ * Sequential writes — no random access. */
+static void radix_decode_into(void* dst, int8_t type, const uint64_t* sorted_keys,
+                               int64_t n, bool desc) {
+    if (type == RAY_I64 || type == RAY_TIMESTAMP) {
+        int64_t* d = (int64_t*)dst;
+        if (desc)
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int64_t)(~sorted_keys[i] ^ ((uint64_t)1 << 63));
+        else
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int64_t)(sorted_keys[i] ^ ((uint64_t)1 << 63));
+    } else if (type == RAY_F64) {
+        double* d = (double*)dst;
+        for (int64_t i = 0; i < n; i++) {
+            uint64_t k = desc ? ~sorted_keys[i] : sorted_keys[i];
+            uint64_t mask = -(k >> 63) | ((uint64_t)1 << 63);
+            uint64_t bits = k ^ mask;
+            memcpy(&d[i], &bits, 8);
+        }
+    } else if (type == RAY_I32 || type == RAY_DATE || type == RAY_TIME) {
+        int32_t* d = (int32_t*)dst;
+        if (desc)
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int32_t)((uint32_t)(~sorted_keys[i]) ^ ((uint32_t)1 << 31));
+        else
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int32_t)((uint32_t)sorted_keys[i] ^ ((uint32_t)1 << 31));
+    } else if (type == RAY_I16) {
+        int16_t* d = (int16_t*)dst;
+        if (desc)
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int16_t)((uint16_t)(~sorted_keys[i]) ^ ((uint16_t)1 << 15));
+        else
+            for (int64_t i = 0; i < n; i++)
+                d[i] = (int16_t)((uint16_t)sorted_keys[i] ^ ((uint16_t)1 << 15));
+    } else if (type == RAY_BOOL || type == RAY_U8) {
+        uint8_t* d = (uint8_t*)dst;
+        if (desc)
+            for (int64_t i = 0; i < n; i++) d[i] = (uint8_t)(~sorted_keys[i]);
+        else
+            for (int64_t i = 0; i < n; i++) d[i] = (uint8_t)sorted_keys[i];
+    }
+}
+
+/* Sort columns and return index array (extended: optionally returns sorted keys).
  * cols:        array of n_cols vectors (sort keys, most significant first)
  * descs:       array of n_cols flags (0=asc, 1=desc), or NULL for all-asc
  * nulls_first: array of n_cols flags (0=nulls last, 1=nulls first), or NULL
  *              for PostgreSQL convention (nulls last for asc, nulls first for desc)
  * n_cols:      number of sort key columns (max 16)
  * nrows:       number of rows in each column
+ * sorted_keys_out: if non-NULL, receives sorted radix keys (caller frees keys_hdr_out)
+ * keys_hdr_out:    if non-NULL, receives scratch header for sorted_keys_out
  * Returns:     ray_t* I64 vector of sorted indices (caller owns), or RAY_ERROR */
-ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
-                        uint8_t n_cols, int64_t nrows) {
+static ray_t* sort_indices_ex(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
+                               uint8_t n_cols, int64_t nrows,
+                               uint64_t** sorted_keys_out, ray_t** keys_hdr_out) {
     if (n_cols == 0 || nrows <= 0)
         return ray_vec_new(RAY_I64, 0);
     if (n_cols > 16)
@@ -1710,17 +1758,25 @@ ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
                                         uint64_t key_mask =
                                             (key_bits < 64) ? ((1ULL << key_bits) - 1) : ~0ULL;
 
+                                        bool do_decode = sorted_keys_out
+                                            && !RAY_IS_SYM(cols[0]->type);
                                         packed_unpack_ctx_t up = {
                                             .sorted = sorted, .indices = indices,
-                                            .keys_out = NULL,
+                                            .keys_out = do_decode ? keys : NULL,
                                             .key_bits = key_bits,
                                             .idx_mask = idx_mask, .key_mask = key_mask,
-                                            .extract_keys = false,
+                                            .extract_keys = do_decode,
                                         };
                                         if (sk_pool)
                                             ray_pool_dispatch(sk_pool, packed_unpack_fn, &up, nrows);
                                         else
                                             packed_unpack_fn(&up, 0, 0, nrows);
+
+                                        if (do_decode) {
+                                            *sorted_keys_out = keys;
+                                            *keys_hdr_out = keys_hdr;
+                                            keys_hdr = NULL; /* prevent free below */
+                                        }
 
                                         sorted_idx = indices;
                                         radix_done = true;
@@ -1743,12 +1799,22 @@ ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
                                 int64_t*  itmp = (int64_t*)scratch_alloc(&itmp_hdr,
                                                     (size_t)nrows * sizeof(int64_t));
                                 if (ktmp && itmp) {
+                                    bool want_sk = sorted_keys_out
+                                        && !RAY_IS_SYM(cols[0]->type);
+                                    uint64_t* sk_out = NULL;
                                     sorted_idx = msd_radix_sort_run(sk_pool, keys, indices,
                                                                      ktmp, itmp, nrows,
-                                                                     key_nbytes, NULL);
+                                                                     key_nbytes,
+                                                                     want_sk ? &sk_out : NULL);
                                     radix_done = (sorted_idx != NULL);
+                                    if (radix_done && want_sk && sk_out) {
+                                        *sorted_keys_out = sk_out;
+                                        /* sk_out points to ktmp — keep it alive */
+                                        *keys_hdr_out = ktmp_hdr;
+                                        ktmp_hdr = NULL; /* prevent free below */
+                                    }
                                 }
-                                scratch_free(ktmp_hdr);
+                                if (ktmp_hdr) scratch_free(ktmp_hdr);
                                 if (sorted_idx != itmp) scratch_free(itmp_hdr);
                                 else radix_itmp_hdr = itmp_hdr;
                             }
@@ -2004,9 +2070,17 @@ ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
         }
     }
 
+    /* If sorted_keys_out was requested but never set, null it out */
+    if (sorted_keys_out && !*sorted_keys_out) {
+        *sorted_keys_out = NULL;
+        if (keys_hdr_out) *keys_hdr_out = NULL;
+    }
+
     /* Build result I64 vector containing sorted indices */
     ray_t* result = ray_vec_new(RAY_I64, nrows);
     if (!result || RAY_IS_ERR(result)) {
+        if (sorted_keys_out && *sorted_keys_out && keys_hdr_out)
+            scratch_free(*keys_hdr_out);
         for (uint8_t k = 0; k < n_cols; k++)
             scratch_free(enum_rank_hdrs[k]);
         scratch_free(radix_itmp_hdr);
@@ -2024,6 +2098,51 @@ ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
         scratch_free(enum_rank_hdrs[k]);
     scratch_free(radix_itmp_hdr);
     scratch_free(indices_hdr);
+    return result;
+}
+
+ray_t* ray_sort_indices(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
+                        uint8_t n_cols, int64_t nrows) {
+    return sort_indices_ex(cols, descs, nulls_first, n_cols, nrows, NULL, NULL);
+}
+
+ray_t* ray_sort(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
+                uint8_t n_cols, int64_t nrows) {
+    if (n_cols == 1) {
+        uint64_t* sorted_keys = NULL;
+        ray_t* keys_hdr = NULL;
+        ray_t* idx = sort_indices_ex(cols, descs, nulls_first, 1, nrows,
+                                      &sorted_keys, &keys_hdr);
+        if (!idx || RAY_IS_ERR(idx)) return idx;
+
+        if (sorted_keys && !RAY_IS_SYM(cols[0]->type)) {
+            /* Decode path: sequential writes, no random access */
+            ray_t* result = ray_vec_new(cols[0]->type, nrows);
+            if (!result || RAY_IS_ERR(result)) {
+                ray_release(idx);
+                if (keys_hdr) scratch_free(keys_hdr);
+                return result ? result : ray_error("oom", NULL);
+            }
+            result->len = nrows;
+            radix_decode_into(ray_data(result), cols[0]->type, sorted_keys,
+                              nrows, descs ? descs[0] : 0);
+            ray_release(idx);
+            scratch_free(keys_hdr);
+            return result;
+        }
+
+        /* Fallback: gather by index */
+        if (keys_hdr) scratch_free(keys_hdr);
+        ray_t* result = gather_by_idx(cols[0], (int64_t*)ray_data(idx), nrows);
+        ray_release(idx);
+        return result;
+    }
+
+    /* Multi-column: index sort + gather (decode only helps single-key) */
+    ray_t* idx = ray_sort_indices(cols, descs, nulls_first, n_cols, nrows);
+    if (!idx || RAY_IS_ERR(idx)) return idx;
+    ray_t* result = gather_by_idx(cols[0], (int64_t*)ray_data(idx), nrows);
+    ray_release(idx);
     return result;
 }
 

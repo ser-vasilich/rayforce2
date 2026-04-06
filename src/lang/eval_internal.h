@@ -316,6 +316,8 @@ ray_t* call_lambda(ray_t* lambda, ray_t** call_args, int64_t argc);
 ray_t* call_fn1(ray_t* fn, ray_t* arg);
 ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b);
 ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n);
+ray_t* ray_sort(ray_t** cols, uint8_t* descs, uint8_t* nulls_first,
+                uint8_t n_cols, int64_t nrows);
 int    char_str_cmp(ray_t* a, ray_t* b, int *out);
 int    is_comparable(ray_t* x);
 
