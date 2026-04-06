@@ -513,6 +513,13 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     if (cmd_match(cmd, clen, "t", 1, &arg, &arg_len) ||
         cmd_match(cmd, clen, "timeit", 6, &arg, &arg_len)) {
         /* :t — pure toggle, no arguments. Use (timeit expr) for per-expression. */
+        if (arg && arg_len > 0) {
+            if (color) fprintf(stdout, "\033[1;33m");
+            fprintf(stdout, ". :t takes no arguments. Use (timeit expr) for per-expression timing.");
+            if (color) fprintf(stdout, "\033[0m");
+            fprintf(stdout, "\n");
+            return true;
+        }
         repl->timeit = !repl->timeit;
         g_ray_profile.active = repl->timeit;
         if (color) fprintf(stdout, "\033[1;33m");
