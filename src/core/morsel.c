@@ -21,7 +21,7 @@
  *   SOFTWARE.
  */
 
-#include "morsel.h"
+#include "core/morsel.h"
 #include "core/platform.h"
 #include "mem/heap.h"
 #include "table/sym.h"

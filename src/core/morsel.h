@@ -32,7 +32,7 @@
  * direct data pointers and null bitmap pointers for each chunk.
  */
 
-#include "ops.h"
+#include "ops/ops.h"
 
 /* Initialize a morsel iterator over a sub-range [start, end) of vec.
  * Used by parallel dispatch to partition work across workers. */
