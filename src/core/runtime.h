@@ -70,6 +70,7 @@ typedef struct {
 typedef struct ray_runtime_s {
     ray_vm_t       **vms;
     int32_t          n_vms;
+    int64_t          mem_budget;   /* 80% of physical RAM, bytes */
 } ray_runtime_t;
 
 /* Global runtime + per-thread VM */

@@ -10,13 +10,13 @@
 
 ---
 
-## Task 1: Memory Budget in Runtime
+## Task 1: Memory Budget in Runtime [x]
 
 **Files:**
-- Modify: `src/core/runtime.h:70-73` (add `mem_budget` field to `ray_runtime_s`)
-- Modify: `src/core/runtime.c` (detect budget at init)
-- Modify: `include/rayforce.h` (declare public API)
-- Test: `test/test_store.c` (add budget test)
+- [x] Modify: `src/core/runtime.h:70-73` (add `mem_budget` field to `ray_runtime_s`)
+- [x] Modify: `src/core/runtime.c` (detect budget at init)
+- [x] Modify: `include/rayforce.h` (declare public API)
+- [x] Test: `test/test_store.c` (add budget test)
 
 **Step 1: Add `mem_budget` field to runtime struct**
 
