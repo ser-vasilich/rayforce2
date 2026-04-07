@@ -1577,8 +1577,10 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
  * requires specialized merge or global state. */
 static bool op_streamable(uint16_t opc) {
     switch (opc) {
-        /* Data access */
-        case OP_SCAN: case OP_CONST:
+        /* Data access (OP_CONST excluded: vector constants have total-row
+         * length and produce length mismatches with per-segment data.
+         * Scalar constants are checked separately in dag_can_stream.) */
+        case OP_SCAN:
         /* Element-wise unary */
         case OP_NEG: case OP_ABS: case OP_NOT: case OP_SQRT:
         case OP_LOG: case OP_EXP: case OP_CEIL: case OP_FLOOR:
@@ -1604,11 +1606,21 @@ static bool op_streamable(uint16_t opc) {
 }
 
 /* Check whether a DAG can be correctly executed via segment streaming
- * with simple concatenation merge. Every live node must be streamable. */
+ * with simple concatenation merge. Every live node must be streamable.
+ * OP_CONST is allowed only for scalar (atom) literals — vector constants
+ * have total-row length and would mismatch per-segment data. */
 static bool dag_can_stream(ray_graph_t* g) {
     for (uint32_t i = 0; i < g->node_count; i++) {
         if (g->nodes[i].flags & OP_FLAG_DEAD) continue;
-        if (!op_streamable(g->nodes[i].opcode))
+        uint16_t opc = g->nodes[i].opcode;
+        if (opc == OP_CONST) {
+            /* Scalar constants are safe; vector constants are not */
+            ray_op_ext_t* ext = find_ext(g, g->nodes[i].id);
+            if (ext && ext->literal && !ray_is_atom(ext->literal))
+                return false;
+            continue;
+        }
+        if (!op_streamable(opc))
             return false;
     }
     return true;
