@@ -194,20 +194,102 @@ ray_err_t ray_sock_set_nonblocking(ray_sock_t s)
     return RAY_OK;
 }
 
-/* ===== Compression (stub) ===== */
+/* ===== Compression (delta + RLE) ===== */
 
 size_t ray_ipc_compress(const uint8_t* src, size_t len,
                         uint8_t* dst, size_t dst_cap)
 {
-    (void)src; (void)len; (void)dst; (void)dst_cap;
-    return 0;
+    if (len <= RAY_IPC_COMPRESS_THRESHOLD) return 0;
+
+    /* Step 1: delta-encode into temporary buffer */
+    uint8_t* delta = (uint8_t*)ray_sys_alloc(len);
+    if (!delta) return 0;
+
+    delta[0] = src[0];
+    for (size_t i = 1; i < len; i++)
+        delta[i] = (uint8_t)(src[i] - src[i - 1]);
+
+    /* Step 2: RLE-compress the delta stream */
+    size_t di = 0;   /* destination index */
+    size_t si = 0;   /* source index into delta */
+
+    while (si < len) {
+        /* Check for a run of identical bytes (need at least 2) */
+        if (si + 1 < len && delta[si] == delta[si + 1]) {
+            uint8_t val = delta[si];
+            size_t run = 1;
+            while (si + run < len && delta[si + run] == val && run < 127)
+                run++;
+            if (di + 2 > dst_cap) { ray_sys_free(delta); return 0; }
+            dst[di++] = (uint8_t)run;        /* positive count = run */
+            dst[di++] = val;
+            si += run;
+        } else {
+            /* Literal sequence: collect non-repeating bytes */
+            size_t start = si;
+            size_t llen = 0;
+            while (si < len && llen < 128) {
+                /* Stop if we see a run of 2+ identical bytes ahead */
+                if (si + 1 < len && delta[si] == delta[si + 1])
+                    break;
+                si++;
+                llen++;
+            }
+            /* Encode: negative count followed by raw bytes */
+            if (di + 1 + llen > dst_cap) { ray_sys_free(delta); return 0; }
+            dst[di++] = (uint8_t)(-(int8_t)llen);  /* -1..-128 */
+            memcpy(dst + di, delta + start, llen);
+            di += llen;
+        }
+    }
+
+    ray_sys_free(delta);
+
+    /* Not worth compressing if result >= original */
+    if (di >= len) return 0;
+    return di;
 }
 
 size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
                           uint8_t* dst, size_t dst_len)
 {
-    (void)src; (void)clen; (void)dst; (void)dst_len;
-    return 0;
+    /* Step 1: RLE-decode */
+    uint8_t* decoded = (uint8_t*)ray_sys_alloc(dst_len);
+    if (!decoded) return 0;
+
+    size_t si = 0;   /* source index */
+    size_t di = 0;   /* decoded index */
+
+    while (si < clen && di < dst_len) {
+        int8_t count = (int8_t)src[si++];
+        if (count > 0) {
+            /* Run: repeat single byte count times */
+            if (si >= clen) { ray_sys_free(decoded); return 0; }
+            uint8_t val = src[si++];
+            size_t n = (size_t)count;
+            if (di + n > dst_len) { ray_sys_free(decoded); return 0; }
+            memset(decoded + di, val, n);
+            di += n;
+        } else {
+            /* Literal: copy |count| bytes */
+            size_t n = (size_t)(-(int)count);
+            if (si + n > clen || di + n > dst_len) {
+                ray_sys_free(decoded);
+                return 0;
+            }
+            memcpy(decoded + di, src + si, n);
+            si += n;
+            di += n;
+        }
+    }
+
+    /* Step 2: un-delta */
+    dst[0] = decoded[0];
+    for (size_t i = 1; i < di; i++)
+        dst[i] = (uint8_t)(decoded[i] + dst[i - 1]);
+
+    ray_sys_free(decoded);
+    return di;
 }
 
 /* ===== Server (stub) ===== */

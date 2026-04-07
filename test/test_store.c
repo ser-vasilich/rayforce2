@@ -30,6 +30,7 @@
 #include "store/splay.h"
 #include "store/part.h"
 #include "store/serde.h"
+#include "core/ipc.h"
 #include "table/sym.h"
 #include "table/table.h"
 #include <stdatomic.h>
@@ -1583,6 +1584,54 @@ static MunitResult test_mem_budget(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* Test: IPC compression round-trip with compressible data */
+static MunitResult test_ipc_compress_rt(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Create highly compressible data: runs of identical bytes */
+    uint8_t src[4000];
+    for (int i = 0; i < 4000; i++) src[i] = (uint8_t)(i / 16);
+
+    uint8_t compressed[8000];
+    size_t clen = ray_ipc_compress(src, 4000, compressed, 8000);
+    munit_assert_int(clen, >, 0);
+    munit_assert_int(clen, <, 4000);
+
+    uint8_t decompressed[4000];
+    size_t dlen = ray_ipc_decompress(compressed, clen, decompressed, 4000);
+    munit_assert_int(dlen, ==, 4000);
+    munit_assert_memory_equal(4000, src, decompressed);
+    return MUNIT_OK;
+}
+
+/* Test: IPC compression below threshold returns 0 */
+static MunitResult test_ipc_compress_threshold(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    uint8_t src[1000];
+    memset(src, 0, 1000);
+    uint8_t dst[2000];
+    size_t clen = ray_ipc_compress(src, 1000, dst, 2000);
+    munit_assert_int(clen, ==, 0);  /* below 2000 byte threshold */
+    return MUNIT_OK;
+}
+
+/* Test: IPC compression with all-zero data (best case) */
+static MunitResult test_ipc_compress_zeros(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    uint8_t src[4000];
+    memset(src, 0, 4000);
+
+    uint8_t compressed[8000];
+    size_t clen = ray_ipc_compress(src, 4000, compressed, 8000);
+    munit_assert_int(clen, >, 0);
+    munit_assert_int(clen, <, 100);  /* should compress very well */
+
+    uint8_t decompressed[4000];
+    size_t dlen = ray_ipc_decompress(compressed, clen, decompressed, 4000);
+    munit_assert_int(dlen, ==, 4000);
+    munit_assert_memory_equal(4000, src, decompressed);
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1614,6 +1663,9 @@ static MunitTest store_tests[] = {
     { "/serde_long_str_roundtrip", test_serde_long_str_roundtrip, store_setup, store_teardown, 0, NULL },
     { "/serde_null_roundtrip", test_serde_null_roundtrip, store_setup, store_teardown, 0, NULL },
     { "/mem_budget",          test_mem_budget,          NULL,        NULL,            0, NULL },
+    { "/ipc/compress_rt",        test_ipc_compress_rt,        NULL, NULL, 0, NULL },
+    { "/ipc/compress_threshold", test_ipc_compress_threshold,  NULL, NULL, 0, NULL },
+    { "/ipc/compress_zeros",     test_ipc_compress_zeros,      NULL, NULL, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
