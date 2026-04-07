@@ -1202,6 +1202,27 @@ static MunitResult test_eval_select_asc_multi(const void* params, void* fixture)
     return MUNIT_OK;
 }
 
+/* ---- Test: select groupby + desc + take ---- */
+static MunitResult test_eval_select_groupby_sort(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_t* result = ray_eval_str(
+        "(do (set t (table ['dept 'salary] "
+        "(list [1 2 1 2 1] [50000 60000 70000 80000 30000]))) "
+        "(select {from: t by: dept total: (sum salary) desc: 'total take: 1}))");
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->type, ==, RAY_TABLE);
+    munit_assert_int(ray_table_nrows(result), ==, 1);
+    /* dept=1: sum=150000, dept=2: sum=140000. desc by total → dept 1 first */
+    int64_t dept_id = ray_sym_intern("dept", 4);
+    ray_t* dept_col = ray_table_get_col(result, dept_id);
+    munit_assert_ptr_not_null(dept_col);
+    int64_t* dd = (int64_t*)ray_data(dept_col);
+    munit_assert_int(dd[0], ==, 1);
+    ray_release(result);
+    return MUNIT_OK;
+}
+
 /* ---- Test: update ---- */
 static MunitResult test_eval_update(const void* params, void* fixture) {
     (void)params; (void)fixture;
@@ -1945,6 +1966,7 @@ static MunitTest lang_tests[] = {
     { "/eval/select_take_range", test_eval_select_take_range, lang_setup, lang_teardown, 0, NULL },
     { "/eval/select_combined", test_eval_select_combined, lang_setup, lang_teardown, 0, NULL },
     { "/eval/select_asc_multi", test_eval_select_asc_multi, lang_setup, lang_teardown, 0, NULL },
+    { "/eval/select_groupby_sort", test_eval_select_groupby_sort, lang_setup, lang_teardown, 0, NULL },
     { "/eval/update",          test_eval_update,          lang_setup, lang_teardown, 0, NULL },
     { "/eval/update_no_where", test_eval_update_no_where, lang_setup, lang_teardown, 0, NULL },
     { "/eval/update_str_masked", test_eval_update_str_masked, lang_setup, lang_teardown, 0, NULL },

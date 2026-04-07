@@ -80,6 +80,93 @@ static uint16_t resolve_agg_opcode(int64_t sym_id) {
     return 0;
 }
 
+/* Apply sort (asc/desc) and take clauses to a materialized result table.
+ * Used by eval-level paths that bypass the DAG (e.g., LIST/STR group keys).
+ * Builds a temporary DAG for sorting (supports per-column direction flags)
+ * and applies take via ray_head/ray_tail or ray_take. */
+static ray_t* apply_sort_take(ray_t* result, ray_t** dict_elems, int64_t dict_n,
+                              int64_t asc_id, int64_t desc_id, int64_t take_id) {
+    if (!result || RAY_IS_ERR(result)) return result;
+
+    /* Check for sort/take clauses */
+    bool has_sort = false;
+    ray_t* take_val_expr = NULL;
+    for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+        int64_t kid = dict_elems[i]->i64;
+        if (kid == asc_id || kid == desc_id) has_sort = true;
+        if (kid == take_id) take_val_expr = dict_elems[i + 1];
+    }
+    if (!has_sort && !take_val_expr) return result;
+
+    /* Build temporary DAG on the materialized result */
+    ray_graph_t* g = ray_graph_new(result);
+    if (!g) return result;
+    ray_op_t* root = ray_const_table(g, result);
+
+    /* Sort */
+    if (has_sort) {
+        ray_op_t* sort_keys[16];
+        uint8_t   sort_descs[16];
+        uint8_t   n_sort = 0;
+        for (int64_t i = 0; i + 1 < dict_n && n_sort < 16; i += 2) {
+            int64_t kid = dict_elems[i]->i64;
+            uint8_t is_desc = 0;
+            if (kid == asc_id) is_desc = 0;
+            else if (kid == desc_id) is_desc = 1;
+            else continue;
+            ray_t* val = dict_elems[i + 1];
+            if (val->type == -RAY_SYM) {
+                ray_t* s = ray_sym_str(val->i64);
+                sort_keys[n_sort] = ray_scan(g, ray_str_ptr(s));
+                sort_descs[n_sort] = is_desc;
+                n_sort++;
+            } else if (ray_is_vec(val) && val->type == RAY_SYM) {
+                for (int64_t c = 0; c < val->len && n_sort < 16; c++) {
+                    int64_t sid = ray_read_sym(ray_data(val), c, val->type, val->attrs);
+                    ray_t* s = ray_sym_str(sid);
+                    sort_keys[n_sort] = ray_scan(g, ray_str_ptr(s));
+                    sort_descs[n_sort] = is_desc;
+                    n_sort++;
+                }
+            }
+        }
+        if (n_sort > 0)
+            root = ray_sort_op(g, root, sort_keys, sort_descs, NULL, n_sort);
+    }
+
+    /* Take (atom → DAG head/tail, vector → post-execute ray_take) */
+    ray_t* take_range = NULL;
+    if (take_val_expr) {
+        ray_t* tv = ray_eval(take_val_expr);
+        if (!tv || RAY_IS_ERR(tv)) { ray_graph_free(g); ray_release(result); return tv ? tv : ray_error("domain", NULL); }
+        if (ray_is_atom(tv) && (tv->type == -RAY_I64 || tv->type == -RAY_I32)) {
+            int64_t n_take = (tv->type == -RAY_I64) ? tv->i64 : tv->i32;
+            ray_release(tv);
+            if (n_take >= 0) root = ray_head(g, root, n_take);
+            else             root = ray_tail(g, root, -n_take);
+        } else if (ray_is_vec(tv) && (tv->type == RAY_I64 || tv->type == RAY_I32) && tv->len == 2) {
+            take_range = tv;
+        } else {
+            ray_release(tv); ray_graph_free(g); ray_release(result);
+            return ray_error("domain", NULL);
+        }
+    }
+
+    root = ray_optimize(g, root);
+    ray_t* sorted = ray_execute(g, root);
+    ray_graph_free(g);
+    ray_release(result);
+
+    if (take_range && sorted && !RAY_IS_ERR(sorted)) {
+        ray_t* sliced = ray_take(sorted, take_range);
+        ray_release(sorted);
+        ray_release(take_range);
+        return sliced;
+    }
+    if (take_range) ray_release(take_range);
+    return sorted;
+}
+
 /* Compile a Rayfall AST expression into a DAG node */
 static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
     if (!expr) return NULL;
@@ -480,7 +567,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             ray_release(groups);
             if (eval_tbl != tbl) ray_release(eval_tbl);
             ray_release(tbl);
-            return result;
+            return apply_sort_take(result, dict_elems, dict_n, asc_id, desc_id, take_id);
         }
 
         /* Compile group key(s) */
@@ -814,7 +901,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             if (fi_heap_hdr) ray_free(fi_heap_hdr);
             if (filtered_tbl != tbl) ray_release(filtered_tbl);
             ray_release(tbl);
-            return result;
+            return apply_sort_take(result, dict_elems, dict_n, asc_id, desc_id, take_id);
         }
     } else if (n_out > 0) {
         /* Projection only (no group by) — select specific columns */
@@ -833,9 +920,11 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
     }
 
     /* Sort: collect asc/desc columns in dict iteration order.
+     * Only add to the DAG when there's no group-by — group-by changes the
+     * output schema, so sort on output columns must happen post-execution.
      * Values are unevaluated — a SYM atom is a column name, a SYM vector
      * is multiple column names.  No ray_eval needed. */
-    if (has_sort) {
+    if (has_sort && !by_expr) {
         ray_op_t* sort_keys[16];
         uint8_t   sort_descs[16];
         uint8_t   n_sort = 0;
@@ -870,10 +959,10 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             root = ray_sort_op(g, root, sort_keys, sort_descs, NULL, n_sort);
     }
 
-    /* Take: positive atom → head (first N), negative atom → tail (last N),
-     * two-element vector [start count] → applied post-execution via ray_take */
-    ray_t* take_range = NULL;  /* non-NULL if range take needed after execute */
-    if (take_expr) {
+    /* Take: add to DAG only when no group-by (same reason as sort above).
+     * Positive atom → head, negative → tail, [start count] → post-execution. */
+    ray_t* take_range = NULL;
+    if (take_expr && !by_expr) {
         ray_t* tv = ray_eval(take_expr);
         if (!tv || RAY_IS_ERR(tv)) { ray_graph_free(g); ray_release(tbl); return tv ? tv : ray_error("domain", NULL); }
         if (ray_is_atom(tv) && (tv->type == -RAY_I64 || tv->type == -RAY_I32)) {
@@ -988,6 +1077,11 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 ray_table_set_col_name(result, n_key_cols + j, user_names[j]);
         }
     }
+
+    /* Post-process: apply sort/take for group-by queries (output schema
+     * differs from input, so these can't be added to the original DAG) */
+    if (by_expr && (has_sort || take_expr))
+        result = apply_sort_take(result, dict_elems, dict_n, asc_id, desc_id, take_id);
 
     return result;
 }
