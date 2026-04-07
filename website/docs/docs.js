@@ -183,6 +183,13 @@ document.addEventListener('DOMContentLoaded', () => {
       {id: "csv", title: "CSV Import/Export", text: "ray_csv_load, write-csv, parallel parse, type inference"},
       {id: "cross-platform", title: "Cross-Platform I/O", text: "File locking, fsync, atomic rename"}
     ]},
+    {title: "IPC & Serialization", url: "ipc.html", sections: [
+      {id: "", title: "IPC & Serialization", text: "TCP client-server IPC, binary serialization, delta compression, sync async messaging"},
+      {id: "server-mode", title: "Server Mode", text: "Start server with -p PORT flag, REPL integration, piped input"},
+      {id: "client-builtins", title: "Client Builtins", text: "hopen hclose hsend, connect to server, send queries, get results"},
+      {id: "compression", title: "Compression", text: "Delta RLE compression, 2000 byte threshold, automatic transparent"},
+      {id: "limitations", title: "Limitations", text: "Single-threaded server, no authentication, no streaming"}
+    ]},
     {title: "Core API", url: "c-api-core.html", sections: [
       {id: "", title: "C API Core", text: "ray_t abstraction, vectors, tables, atoms, memory management"},
       {id: "lifecycle", title: "Lifecycle", text: "ray_heap_init, ray_heap_destroy, ray_sym_init, ray_sym_destroy"},

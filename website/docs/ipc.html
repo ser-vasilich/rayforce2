@@ -106,11 +106,52 @@
       </div>
 
       <h1>IPC &amp; Serialization</h1>
-      <p class="page-subtitle">Compact binary format for serializing any <code>ray_t</code> object. Atoms, vectors, lists, tables, and nested structures all round-trip faithfully.</p>
+      <p class="page-subtitle">TCP client-server IPC with binary serialization, delta compression, and sync/async messaging.</p>
 
       <h2>Overview</h2>
-      <p>Rayforce uses a compact binary format for serializing any <code>ray_t</code> object. The format supports atoms, vectors, lists, tables, and nested structures. Every serialized payload is prefixed with a 16-byte IPC header that carries endianness, message type, and payload size.</p>
-      <p>The transport layer (TCP sockets) is planned but not yet implemented &mdash; the wire format is ready.</p>
+      <p>Rayforce provides a complete IPC system for client-server communication. A server listens on a TCP port, accepts connections, and evaluates queries sent by clients. The wire format uses the same compact binary serialization for all Rayforce types, with automatic delta/RLE compression for large payloads.</p>
+
+      <h2 id="server-mode">Server Mode</h2>
+      <p>Start Rayforce as an IPC server with the <code>-p</code> flag:</p>
+      <pre><code><span class="hl-comment"># Start server on port 5000</span>
+./rayforce -p 5000
+
+<span class="hl-comment"># Run a script first, then serve</span>
+./rayforce -p 5000 init.rfl
+
+<span class="hl-comment"># Interactive REPL + server</span>
+./rayforce -p 5000</code></pre>
+
+      <p>The server runs in the same thread as the REPL. IPC connections are processed between REPL inputs. When piped input is exhausted, the server continues running until interrupted.</p>
+
+      <h2 id="client-builtins">Client Builtins</h2>
+      <p>Connect to a running server and send queries from Rayfall:</p>
+
+      <h3>hopen</h3>
+      <pre><code><span class="hl-comment">;; Connect to a server</span>
+(<span class="hl-kw">set</span> h (<span class="hl-fn">hopen</span> <span class="hl-str">"127.0.0.1:5000"</span>))
+<span class="hl-comment">;; =&gt; 0  (connection handle)</span></code></pre>
+
+      <h3>hsend</h3>
+      <pre><code><span class="hl-comment">;; Send a string query (evaluated on server)</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(+ 1 2)"</span>)
+<span class="hl-comment">;; =&gt; 3</span>
+
+<span class="hl-comment">;; Query a remote table</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"trades"</span>)
+<span class="hl-comment">;; =&gt; &lt;table 1000x3&gt;</span>
+
+<span class="hl-comment">;; Remote select with filter</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades where: (&gt; price 100) desc: 'price take: 10})"</span>)
+<span class="hl-comment">;; =&gt; top 10 most expensive trades</span></code></pre>
+
+      <h3>hclose</h3>
+      <pre><code><span class="hl-comment">;; Close the connection</span>
+(<span class="hl-fn">hclose</span> h)</code></pre>
+
+      <div class="info-box">
+        <strong>Message types.</strong> <code>hsend</code> uses synchronous messaging &mdash; it blocks until the server returns a result. Asynchronous (fire-and-forget) messaging is available via the C API (<code>ray_ipc_send_async</code>).
+      </div>
 
       <h2>Serialization with <code>ser</code></h2>
       <p>The <code>ser</code> builtin converts any value to a binary buffer (a <code>U8</code> vector). Pass it any Rayforce value &mdash; atom, vector, list, or table:</p>
@@ -178,7 +219,7 @@
         <tbody>
           <tr><td>0</td><td>4 bytes</td><td><code>prefix</code></td><td>Magic bytes <code>0xcefadefa</code> &mdash; identifies Rayforce binary data</td></tr>
           <tr><td>4</td><td>1 byte</td><td><code>version</code></td><td>Protocol version (<code>RAY_VERSION_MAJOR</code>)</td></tr>
-          <tr><td>5</td><td>1 byte</td><td><code>flags</code></td><td>Reserved flags (currently <code>0</code>)</td></tr>
+          <tr><td>5</td><td>1 byte</td><td><code>flags</code></td><td>Bit 0: compressed (0 = no, 1 = yes)</td></tr>
           <tr><td>6</td><td>1 byte</td><td><code>endian</code></td><td>Endianness: <code>0</code> = little-endian</td></tr>
           <tr><td>7</td><td>1 byte</td><td><code>msgtype</code></td><td>Message type: <code>0</code> = async, <code>1</code> = sync, <code>2</code> = response</td></tr>
           <tr><td>8</td><td>8 bytes</td><td><code>size</code></td><td>Payload size in bytes (<code>int64</code>)</td></tr>
@@ -195,6 +236,16 @@
     int64_t  size;       <span class="hl-comment">/* payload size in bytes */</span>
 } ray_ipc_header_t;</code></pre>
       <p>The header is exactly 16 bytes, enforced by a compile-time static assertion.</p>
+
+      <h2 id="compression">Compression</h2>
+      <p>Payloads larger than 2,000 bytes are automatically compressed using delta + RLE encoding. This works especially well for sorted columnar data (long runs of identical delta bytes).</p>
+      <ul>
+        <li><strong>Delta encoding</strong> &mdash; each byte is replaced by the difference from the previous byte</li>
+        <li><strong>RLE</strong> &mdash; runs of identical bytes are stored as (count, value) pairs</li>
+        <li><strong>Threshold</strong> &mdash; payloads &le; 2,000 bytes are sent uncompressed</li>
+        <li><strong>Transparent</strong> &mdash; compression is automatic; the <code>flags</code> header byte signals whether the payload is compressed</li>
+      </ul>
+      <p>If compression doesn&rsquo;t reduce the payload size, the data is sent uncompressed.</p>
 
       <h2>Supported Types</h2>
       <p>All core Rayforce types serialize and deserialize faithfully:</p>
@@ -237,18 +288,19 @@
         </tbody>
       </table>
 
-      <h2>Use Cases</h2>
+      <h2 id="use-cases">Use Cases</h2>
       <ul>
+        <li><strong>Remote queries</strong> &mdash; run analytics on a server-side dataset from a client REPL</li>
+        <li><strong>Multi-process architecture</strong> &mdash; one server process owns the data, multiple clients query it</li>
         <li><strong>In-memory data exchange</strong> &mdash; <code>ser</code> / <code>de</code> round-trip any Rayforce value through a compact byte vector</li>
-        <li><strong>Inter-process communication</strong> &mdash; when the transport layer arrives, <code>ser</code> / <code>de</code> will form the message encoding over TCP</li>
-        <li><strong>Table persistence</strong> &mdash; for saving tables to disk, use <code>set-splayed</code> / <code>get-splayed</code> (see <a href="storage.html">Columnar Storage</a>)</li>
+        <li><strong>Table persistence</strong> &mdash; for saving tables to disk, use splayed/partitioned storage (see <a href="guide-storage.html">Storage Guide</a>)</li>
       </ul>
 
-      <h2>Limitations</h2>
+      <h2 id="limitations">Limitations</h2>
       <ul>
         <li><strong>No streaming</strong> &mdash; the entire object is serialized at once; there is no chunked or incremental mode</li>
-        <li><strong>No compression</strong> &mdash; the <code>flags</code> field in the header reserves space for a compression flag, but compression is not yet implemented</li>
-        <li><strong>No transport layer</strong> &mdash; TCP socket support is planned but not yet available; currently serialization targets in-memory buffers and files</li>
+        <li><strong>Single-threaded server</strong> &mdash; the server processes queries sequentially on the main thread. Long-running queries block other clients.</li>
+        <li><strong>No authentication</strong> &mdash; connections are accepted without credentials. The handshake only validates protocol version compatibility.</li>
       </ul>
 
       <!-- Prev/Next -->
