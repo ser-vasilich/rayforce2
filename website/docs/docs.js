@@ -232,6 +232,14 @@ document.addEventListener('DOMContentLoaded', () => {
     {title: "Memory Model", url: "architecture-memory.html", sections: [
       {id: "", title: "Memory Architecture", text: "Buddy allocator, slab cache, COW ref counting, arena allocator, per-VM heaps, mmap"}
     ]},
+    {title: "Block Offloading", url: "architecture-offloading.html", sections: [
+      {id: "", title: "Block Offloading", text: "Larger-than-RAM query execution, partition streaming, segment iterator, memory budget"},
+      {id: "how-it-works", title: "How It Works", text: "Segment detection, segment table construction, execution and merge, result assembly"},
+      {id: "partition-pruning", title: "Partition Pruning", text: "Skip partitions that don't match filter predicates, seg_mask bitmap, date and integer pruning"},
+      {id: "memory-budget", title: "Memory Budget", text: "Auto-detect physical RAM, 80% budget, ray_mem_budget, ray_mem_pressure"},
+      {id: "streamable-ops", title: "Streamable Operations", text: "Element-wise, string, temporal, filter, select, alias operations safe for streaming"},
+      {id: "limitations", title: "Current Limitations", text: "No streaming for aggregations sorts joins, literal constants only, single partition column"}
+    ]},
     {title: "Datalog Rules & Queries", url: "datalog.html", sections: [
       {id: "", title: "Datalog", text: "Declarative logic programming, rules, queries, fixpoint evaluation"},
       {id: "what-is-datalog", title: "What is Datalog", text: "Declarative logic programming language for queries"},

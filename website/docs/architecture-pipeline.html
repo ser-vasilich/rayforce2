@@ -86,6 +86,7 @@
         <div class="sidebar-section-label">ARCHITECTURE</div>
         <a href="architecture-pipeline.html" class="sidebar-link active">Pipeline &amp; Optimizer</a>
         <a href="architecture-memory.html" class="sidebar-link">Memory Model</a>
+        <a href="architecture-offloading.html" class="sidebar-link">Block Offloading</a>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-label">C API</div>
@@ -206,7 +207,7 @@
       <p>Identifies which columns are actually needed by the query and pushes projection below joins and group-by operations. Columns that are never referenced after a certain point are dropped early, reducing memory bandwidth and intermediate result sizes.</p>
 
       <h3>8. Partition Pruning</h3>
-      <p>For partitioned tables, analyzes filter predicates to determine which partitions can be skipped entirely. A predicate like <code>date &gt; '2024-01-01'</code> on a date-partitioned table eliminates all partition directories before that date without scanning them.</p>
+      <p>For partitioned tables, analyzes filter predicates to determine which partitions can be skipped entirely. A predicate like <code>date &gt; '2024-01-01'</code> on a date-partitioned table eliminates all partition directories before that date without scanning them. The pruning pass produces a <code>seg_mask</code> bitmap that the executor uses during <a href="architecture-offloading.html">block offloading</a> to skip pruned segments entirely.</p>
 
       <h3>9. Fusion</h3>
       <p>The most impactful optimization. Merges chains of element-wise operations (arithmetic, comparisons, logical ops, string ops) into a single fused pass. A chain like <code>SCAN &rarr; ADD &rarr; MUL &rarr; GT &rarr; FILTER</code> becomes a single bytecode program that processes each morsel in one pass without materializing intermediate vectors.</p>
