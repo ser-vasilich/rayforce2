@@ -741,27 +741,192 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
     return ready;
 }
 
-/* ===== Client (stub) ===== */
+/* ===== Client ===== */
+
+static ray_sock_t g_client_fds[RAY_IPC_MAX_CONNS];
+static int        g_client_count = 0;
+static bool       g_client_init = false;
+
+static void client_init(void) {
+    if (g_client_init) return;
+    for (int i = 0; i < RAY_IPC_MAX_CONNS; i++)
+        g_client_fds[i] = RAY_INVALID_SOCK;
+    g_client_init = true;
+}
+
+static int64_t recv_full(ray_sock_t fd, void* buf, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        int64_t n = ray_sock_recv(fd, (uint8_t*)buf + total, len - total);
+        if (n <= 0) return -1;
+        total += (size_t)n;
+    }
+    return (int64_t)total;
+}
+
+static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
+{
+    if (handle < 0 || handle >= RAY_IPC_MAX_CONNS) return -1;
+    ray_sock_t fd = g_client_fds[handle];
+    if (fd == RAY_INVALID_SOCK) return -1;
+
+    /* Serialize */
+    int64_t ser_size = ray_serde_size(msg);
+    if (ser_size <= 0) return -1;
+
+    uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)ser_size);
+    if (!payload) return -1;
+    ray_ser_raw(payload, msg);
+
+    /* Try compression */
+    uint8_t* send_buf = NULL;
+    size_t   send_len = 0;
+    uint8_t  flags    = 0;
+
+    if ((size_t)ser_size > RAY_IPC_COMPRESS_THRESHOLD) {
+        uint8_t* comp = (uint8_t*)ray_sys_alloc((size_t)ser_size);
+        if (comp) {
+            size_t clen = ray_ipc_compress(payload, (size_t)ser_size,
+                                           comp, (size_t)ser_size);
+            if (clen > 0 && clen + 4 < (size_t)ser_size) {
+                send_len = clen + 4;
+                send_buf = (uint8_t*)ray_sys_alloc(send_len);
+                if (send_buf) {
+                    uint32_t uncomp = (uint32_t)ser_size;
+                    memcpy(send_buf, &uncomp, 4);
+                    memcpy(send_buf + 4, comp, clen);
+                    flags = RAY_IPC_FLAG_COMPRESSED;
+                }
+            }
+            ray_sys_free(comp);
+        }
+    }
+
+    if (!send_buf) {
+        send_buf = payload;
+        send_len = (size_t)ser_size;
+        payload  = NULL;
+    }
+
+    /* Build and send header + payload */
+    ray_ipc_header_t hdr = {
+        .prefix  = RAY_SERDE_PREFIX,
+        .version = RAY_VERSION_MAJOR,
+        .flags   = flags,
+        .endian  = 0,
+        .msgtype = msgtype,
+        .size    = (int64_t)send_len,
+    };
+
+    int64_t rc = ray_sock_send(fd, &hdr, sizeof(hdr));
+    if (rc < 0) { ray_sys_free(send_buf); if (payload) ray_sys_free(payload); return -1; }
+    rc = ray_sock_send(fd, send_buf, send_len);
+
+    ray_sys_free(send_buf);
+    if (payload) ray_sys_free(payload);
+    return rc < 0 ? -1 : 0;
+}
 
 int64_t ray_ipc_connect(const char* host, uint16_t port)
 {
-    (void)host; (void)port;
+    client_init();
+
+    ray_sock_t fd = ray_sock_connect(host, port, 5000);
+    if (fd == RAY_INVALID_SOCK) return -1;
+
+    /* Send handshake: version + null */
+    uint8_t hs[2] = { RAY_VERSION_MAJOR, 0x00 };
+    if (ray_sock_send(fd, hs, 2) < 0) {
+        ray_sock_close(fd);
+        return -1;
+    }
+
+    /* Receive handshake response */
+    uint8_t resp[2];
+    if (recv_full(fd, resp, 2) < 0 || resp[1] != 0x00) {
+        ray_sock_close(fd);
+        return -1;
+    }
+
+    /* Find free slot */
+    for (int i = 0; i < RAY_IPC_MAX_CONNS; i++) {
+        if (g_client_fds[i] == RAY_INVALID_SOCK) {
+            g_client_fds[i] = fd;
+            if (i >= g_client_count) g_client_count = i + 1;
+            return (int64_t)i;
+        }
+    }
+
+    /* No free slot */
+    ray_sock_close(fd);
     return -1;
 }
 
 void ray_ipc_close(int64_t handle)
 {
-    (void)handle;
+    if (handle < 0 || handle >= RAY_IPC_MAX_CONNS) return;
+    if (g_client_fds[handle] == RAY_INVALID_SOCK) return;
+    ray_sock_close(g_client_fds[handle]);
+    g_client_fds[handle] = RAY_INVALID_SOCK;
 }
 
 ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
 {
-    (void)handle; (void)msg;
-    return NULL;
+    if (client_send_msg(handle, msg, RAY_IPC_MSG_SYNC) < 0)
+        return ray_error("io", "ipc send failed");
+
+    ray_sock_t fd = g_client_fds[handle];
+
+    /* Receive response header */
+    ray_ipc_header_t hdr;
+    if (recv_full(fd, &hdr, sizeof(hdr)) < 0)
+        return ray_error("io", "ipc recv header failed");
+    if (hdr.prefix != RAY_SERDE_PREFIX || hdr.size <= 0)
+        return ray_error("io", "ipc bad response header");
+
+    /* Receive response payload */
+    uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)hdr.size);
+    if (!payload) return ray_error("oom", NULL);
+    if (recv_full(fd, payload, (size_t)hdr.size) < 0) {
+        ray_sys_free(payload);
+        return ray_error("io", "ipc recv payload failed");
+    }
+
+    /* Decompress if needed */
+    uint8_t* deser_buf     = payload;
+    size_t   deser_len     = (size_t)hdr.size;
+    uint8_t* decompressed  = NULL;
+
+    if (hdr.flags & RAY_IPC_FLAG_COMPRESSED) {
+        if (deser_len < 4) { ray_sys_free(payload); return ray_error("io", "ipc compressed payload too short"); }
+        uint32_t uncomp_size;
+        memcpy(&uncomp_size, payload, 4);
+        decompressed = (uint8_t*)ray_sys_alloc(uncomp_size);
+        if (!decompressed) { ray_sys_free(payload); return ray_error("oom", NULL); }
+        size_t dlen = ray_ipc_decompress(payload + 4, deser_len - 4,
+                                         decompressed, uncomp_size);
+        if (dlen != uncomp_size) {
+            ray_sys_free(decompressed);
+            ray_sys_free(payload);
+            return ray_error("io", "ipc decompress failed");
+        }
+        deser_buf = decompressed;
+        deser_len = uncomp_size;
+    }
+
+    /* Deserialize */
+    int64_t de_len = (int64_t)deser_len;
+    ray_t*  result = ray_de_raw(deser_buf, &de_len);
+
+    if (decompressed) ray_sys_free(decompressed);
+    ray_sys_free(payload);
+
+    return result ? result : RAY_NULL_OBJ;
 }
 
 ray_err_t ray_ipc_send_async(int64_t handle, ray_t* msg)
 {
-    (void)handle; (void)msg;
-    return RAY_ERR_NYI;
+    if (client_send_msg(handle, msg, RAY_IPC_MSG_ASYNC) < 0)
+        return RAY_ERR_IO;
+    return RAY_OK;
 }
