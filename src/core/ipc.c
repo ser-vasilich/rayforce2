@@ -325,9 +325,9 @@ static void conn_close(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
     /* Compact: move last conn into this slot */
     uint32_t idx = (uint32_t)(c - srv->conns);
-    if (idx < srv->n_conns - 1)
+    if (idx + 1 < srv->n_conns)
         srv->conns[idx] = srv->conns[srv->n_conns - 1];
-    srv->n_conns--;
+    if (srv->n_conns > 0) srv->n_conns--;
 }
 
 static void conn_send_response(ray_ipc_conn_t* c, ray_t* result)
@@ -477,7 +477,7 @@ static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
         } else {
             /* Object message: eval directly */
             result = ray_eval(msg);
-            /* ray_eval may consume msg or not — don't double-release */
+            ray_release(msg);
         }
     }
     if (!result) result = RAY_NULL_OBJ;
@@ -731,10 +731,11 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
         }
     }
 
-    for (uint32_t i = 0; i < srv->n_conns; i++) {
-        if (FD_ISSET(srv->conns[i].fd, &rfds)) {
+    /* Iterate in reverse so conn_close swap-compaction doesn't skip entries */
+    for (uint32_t i = srv->n_conns; i > 0; ) {
+        --i;
+        if (srv->conns[i].fd != RAY_INVALID_SOCK && FD_ISSET(srv->conns[i].fd, &rfds))
             conn_on_readable(srv, &srv->conns[i]);
-        }
     }
 #endif
 
@@ -879,16 +880,21 @@ ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
 
     /* Receive response header */
     ray_ipc_header_t hdr;
-    if (recv_full(fd, &hdr, sizeof(hdr)) < 0)
+    if (recv_full(fd, &hdr, sizeof(hdr)) < 0) {
+        ray_ipc_close(handle);  /* invalidate poisoned handle */
         return ray_error("io", "ipc recv header failed");
-    if (hdr.prefix != RAY_SERDE_PREFIX || hdr.size <= 0)
+    }
+    if (hdr.prefix != RAY_SERDE_PREFIX || hdr.size <= 0) {
+        ray_ipc_close(handle);
         return ray_error("io", "ipc bad response header");
+    }
 
     /* Receive response payload */
     uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)hdr.size);
     if (!payload) return ray_error("oom", NULL);
     if (recv_full(fd, payload, (size_t)hdr.size) < 0) {
         ray_sys_free(payload);
+        ray_ipc_close(handle);
         return ray_error("io", "ipc recv payload failed");
     }
 
