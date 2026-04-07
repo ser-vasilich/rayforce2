@@ -1502,19 +1502,59 @@ ray_t* ray_result_merge(ray_t* accum, ray_t* partial, uint16_t root_opcode) {
 
 /* Build a flat table containing one segment's columns from a parted table.
  * For each parted column, extracts segs[seg_idx] as a flat vector.
- * Non-parted columns are retained as-is. MAPCOMMON columns are skipped. */
+ * MAPCOMMON columns are materialized for segment seg_idx: the partition key
+ * value is broadcast to fill seg_rows elements.
+ * Non-parted columns are retained as-is. */
 static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
     int64_t ncols = ray_table_ncols(parted_tbl);
     ray_t* seg_tbl = ray_table_new(ncols);
     if (!seg_tbl || RAY_IS_ERR(seg_tbl)) return seg_tbl;
 
+    /* Find segment row count from first parted column */
+    int64_t seg_rows = 0;
+    for (int64_t c = 0; c < ncols; c++) {
+        ray_t* col = ray_table_get_col_idx(parted_tbl, c);
+        if (col && RAY_IS_PARTED(col->type)) {
+            ray_t** segs = (ray_t**)ray_data(col);
+            if (seg_idx < col->len && segs[seg_idx])
+                seg_rows = segs[seg_idx]->len;
+            break;
+        }
+    }
+
     for (int64_t c = 0; c < ncols; c++) {
         int64_t name_id = ray_table_col_name(parted_tbl, c);
         ray_t* col = ray_table_get_col_idx(parted_tbl, c);
         if (!col) continue;
-        if (col->type == RAY_MAPCOMMON) continue;
 
-        if (RAY_IS_PARTED(col->type)) {
+        if (col->type == RAY_MAPCOMMON) {
+            /* Materialize partition key for this segment: broadcast key
+             * value across seg_rows elements. */
+            ray_t** mc_ptrs = (ray_t**)ray_data(col);
+            ray_t* kv = mc_ptrs[0];  /* key_values */
+            if (!kv || seg_idx >= kv->len) continue;
+            int8_t kv_type = kv->type;
+            size_t esz = (size_t)ray_sym_elem_size(kv_type, kv->attrs);
+            ray_t* flat = ray_vec_new(kv_type, seg_rows);
+            if (!flat || RAY_IS_ERR(flat)) continue;
+            flat->len = seg_rows;
+            const char* src = (const char*)ray_data(kv) + (size_t)seg_idx * esz;
+            char* dst = (char*)ray_data(flat);
+            if (esz == 8) {
+                uint64_t v; memcpy(&v, src, 8);
+                for (int64_t r = 0; r < seg_rows; r++)
+                    ((uint64_t*)dst)[r] = v;
+            } else if (esz == 4) {
+                uint32_t v; memcpy(&v, src, 4);
+                for (int64_t r = 0; r < seg_rows; r++)
+                    ((uint32_t*)dst)[r] = v;
+            } else {
+                for (int64_t r = 0; r < seg_rows; r++)
+                    memcpy(dst + r * esz, src, esz);
+            }
+            seg_tbl = ray_table_add_col(seg_tbl, name_id, flat);
+            ray_release(flat);
+        } else if (RAY_IS_PARTED(col->type)) {
             ray_t** segs = (ray_t**)ray_data(col);
             if (seg_idx < col->len && segs[seg_idx]) {
                 ray_retain(segs[seg_idx]);
@@ -1528,6 +1568,24 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
         }
     }
     return seg_tbl;
+}
+
+/* Check whether a DAG can be correctly executed via segment streaming
+ * with simple concatenation merge. Operations like GROUP, SORT, JOIN
+ * require specialized merge and fall back to flat execution until
+ * their merge functions are implemented. */
+static bool dag_can_stream(ray_graph_t* g) {
+    for (uint32_t i = 0; i < g->node_count; i++) {
+        if (g->nodes[i].flags & OP_FLAG_DEAD) continue;
+        switch (g->nodes[i].opcode) {
+            case OP_GROUP: case OP_SORT: case OP_JOIN:
+            case OP_WINDOW_JOIN: case OP_PIVOT: case OP_WINDOW:
+            case OP_HEAD: case OP_TAIL:
+                return false;
+            default: break;
+        }
+    }
+    return true;
 }
 
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
@@ -1552,8 +1610,9 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         }
     }
 
-    if (seg_count == 0) {
-        /* Non-parted table: existing path, unchanged */
+    if (seg_count == 0 || !dag_can_stream(g)) {
+        /* Non-parted table or DAG contains ops that need specialized merge:
+         * use existing flat-materialization path. */
         ray_t* result = exec_node(g, root);
         if (g->selection && result && !RAY_IS_ERR(result)
             && result->type == RAY_TABLE) {
