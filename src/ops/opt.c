@@ -1678,10 +1678,10 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
 
         /* Extract constant for comparison.
          * Atoms use negative type codes and store values in the header.
-         * Only integer/date/time types are supported for pruning. */
+         * RAY_SYM uses int64_t intern IDs, same representation as RAY_I64. */
         int64_t const_val = 0;
         int8_t lt = lit->type < 0 ? (int8_t)(-lit->type) : lit->type;
-        if (lt == RAY_I64 || lt == RAY_TIMESTAMP) {
+        if (lt == RAY_I64 || lt == RAY_TIMESTAMP || lt == RAY_SYM) {
             if (lit->type < 0)
                 const_val = lit->i64;  /* atom: value in header */
             else

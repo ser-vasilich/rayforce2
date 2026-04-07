@@ -167,7 +167,7 @@
       <p>Multiple filter predicates on the partition column are combined with AND &mdash; each narrows the set of active partitions further.</p>
 
       <div class="info-box">
-        <strong>Pruning applies to date and integer partition types.</strong> Date-partitioned (<code>YYYY.MM.DD</code>) and integer-partitioned tables support pruning. Symbol-partitioned tables (<code>RAY_MC_SYM</code>) do not currently support pruning &mdash; their partition keys are symbol intern IDs, which cannot be meaningfully compared against literal constants at optimization time.
+        <strong>Pruning applies to all partition types.</strong> Date-partitioned (<code>YYYY.MM.DD</code>), integer-partitioned, and symbol-partitioned tables all support pruning. Symbol partition keys and constants both use the same intern ID space, so equality and ordering comparisons work correctly.
       </div>
 
       <!-- ====== MEMORY BUDGET ====== -->
@@ -244,7 +244,6 @@
       <ul>
         <li><strong>No streaming for aggregations, sorts, or joins</strong> &mdash; these operations require seeing all data at once (or specialized merge logic). They fall back to loading all partitions into memory. This will be addressed in a future release with operator-aware merge functions.</li>
         <li><strong>Pruning requires literal constants</strong> &mdash; the partition pruning pass only handles comparisons against literal values (e.g., <code>date &gt; 2024.01.01</code>), not computed expressions (e.g., <code>date &gt; (today - 30)</code>).</li>
-        <li><strong>No pruning for symbol-partitioned tables</strong> &mdash; partition keys of type <code>RAY_MC_SYM</code> are stored as symbol intern IDs. The optimizer cannot compare these against literal constants at optimization time, so all partitions are visited. Date and integer partition types support pruning.</li>
         <li><strong>Single partition column</strong> &mdash; pruning works on the single partition key inferred from directory names. Multi-column partition keys are not supported.</li>
         <li><strong>Thread-local memory pressure</strong> &mdash; <code>ray_mem_pressure()</code> only reads the calling thread&rsquo;s heap statistics, not the global total across all worker threads. It is not currently used in the streaming hot path.</li>
         <li><strong>Container memory detection</strong> &mdash; on Linux, <code>sysconf(_SC_PHYS_PAGES)</code> reports host physical RAM, not the container&rsquo;s cgroup memory limit. A future release will read <code>/sys/fs/cgroup/memory.max</code> when available.</li>
