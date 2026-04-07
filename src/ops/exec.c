@@ -1563,11 +1563,13 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
             ray_release(flat);
         } else if (RAY_IS_PARTED(col->type)) {
             ray_t** segs = (ray_t**)ray_data(col);
-            if (seg_idx < col->len && segs[seg_idx]) {
-                ray_retain(segs[seg_idx]);
-                seg_tbl = ray_table_add_col(seg_tbl, name_id, segs[seg_idx]);
-                ray_release(segs[seg_idx]);
+            if (seg_idx >= col->len || !segs[seg_idx]) {
+                ray_release(seg_tbl);
+                return ray_error("schema", NULL);
             }
+            ray_retain(segs[seg_idx]);
+            seg_tbl = ray_table_add_col(seg_tbl, name_id, segs[seg_idx]);
+            ray_release(segs[seg_idx]);
         } else {
             ray_retain(col);
             seg_tbl = ray_table_add_col(seg_tbl, name_id, col);
