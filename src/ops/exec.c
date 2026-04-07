@@ -1747,10 +1747,17 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
                     base = (int8_t)RAY_PARTED_BASETYPE(col->type);
                 }
                 ray_t* ecol = ray_vec_new(base, 0);
-                if (ecol) {
-                    empty_tbl = ray_table_add_col(empty_tbl, name_id, ecol);
-                    ray_release(ecol);
+                if (!ecol || RAY_IS_ERR(ecol)) {
+                    /* ray_vec_new rejects RAY_LIST (type 0) and other
+                     * non-standard types; fall back to a raw 0-length
+                     * block with the correct type tag. */
+                    ecol = ray_alloc(0);
+                    if (!ecol || RAY_IS_ERR(ecol)) continue;
+                    ecol->type = base;
+                    ecol->len = 0;
                 }
+                empty_tbl = ray_table_add_col(empty_tbl, name_id, ecol);
+                ray_release(ecol);
             }
             g->table = empty_tbl;
             g->selection = NULL;
