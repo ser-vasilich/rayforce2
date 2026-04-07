@@ -844,12 +844,12 @@ git commit --allow-empty -m "perf: verified zero regression on non-parted table 
 **Step 1: Review all changes**
 
 Ensure:
-- [ ] `seg_mask` memory is freed in `ray_graph_free()` (only if owned, not shared)
-- [ ] No memory leaks in segment loop (each partial released after merge)
-- [ ] Progress tracking resets properly between queries
-- [ ] Cancel flag cleared at `ray_execute` entry (already existing)
-- [ ] `ray_mem_pressure()` is called but does not block (informational for Phase 2)
-- [ ] No new compiler warnings with `-Wall -Wextra -Werror`
+- [x] `seg_mask` memory is freed in `ray_graph_free()` (only if owned, not shared)
+- [x] No memory leaks in segment loop (each partial released after merge)
+- [x] Progress tracking resets properly between queries
+- [x] Cancel flag cleared at `ray_execute` entry (already existing)
+- [x] `ray_mem_pressure()` is called but does not block (informational for Phase 2)
+- [x] No new compiler warnings with `-Wall -Wextra -Werror`
 
 **Step 2: Full test suite**
 
