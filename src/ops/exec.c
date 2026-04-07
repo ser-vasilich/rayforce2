@@ -1532,6 +1532,10 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
         if (col->type == RAY_MAPCOMMON) {
             /* Materialize partition key for this segment: broadcast key
              * value across seg_rows elements. */
+            if (col->len < 2) {
+                ray_release(seg_tbl);
+                return ray_error("schema", NULL);
+            }
             ray_t** mc_ptrs = (ray_t**)ray_data(col);
             ray_t* kv = mc_ptrs[0];  /* key_values */
             if (!kv || seg_idx >= kv->len) {

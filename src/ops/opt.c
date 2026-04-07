@@ -1663,6 +1663,7 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
         ray_t* lit = const_ext->literal;
 
         /* Read partition keys from MAPCOMMON: [key_values, row_counts] */
+        if (mc_col->len < 2) continue;
         ray_t** mc_ptrs = (ray_t**)ray_data(mc_col);
         ray_t* key_values = mc_ptrs[0];
         if (!key_values) continue;
@@ -1709,7 +1710,7 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
         bool any_active = false;
         for (int64_t p = 0; p < n_parts; p++) {
             int64_t pkey = 0;
-            if (key_values->type == RAY_DATE || key_values->type == RAY_I32) {
+            if (key_values->type == RAY_DATE || key_values->type == RAY_I32 || key_values->type == RAY_TIME) {
                 int32_t v32;
                 memcpy(&v32, (char*)ray_data(key_values) + p * sizeof(int32_t), sizeof(int32_t));
                 pkey = v32;
