@@ -31,7 +31,15 @@
 #include "store/part.h"
 #include "store/serde.h"
 #include "core/ipc.h"
+#include "core/platform.h"
+#include "core/runtime.h"
+#include "mem/sys.h"
 #include "table/sym.h"
+
+#ifndef _WIN32
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+#endif
 #include "table/table.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -1632,6 +1640,154 @@ static MunitResult test_ipc_compress_zeros(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- IPC server lifecycle ----------------------------------------------- */
+
+static MunitResult test_ipc_server_lifecycle(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    ray_ipc_server_t srv;
+    ray_err_t err = ray_ipc_server_init(&srv, 0);  /* ephemeral port */
+    munit_assert_int(err, ==, RAY_OK);
+    munit_assert_true(srv.running);
+    munit_assert_int(srv.listen_fd, !=, RAY_INVALID_SOCK);
+
+    /* Verify we can retrieve the OS-assigned port */
+    struct sockaddr_in addr;
+    socklen_t alen = sizeof(addr);
+    int rc = getsockname(srv.listen_fd, (struct sockaddr*)&addr, &alen);
+    munit_assert_int(rc, ==, 0);
+    uint16_t port = ntohs(addr.sin_port);
+    munit_assert_int(port, >, 0);
+
+    ray_ipc_server_destroy(&srv);
+    munit_assert_false(srv.running);
+    return MUNIT_OK;
+}
+
+/* ---- IPC sync round-trip ------------------------------------------------ */
+
+/* Helper: get ephemeral port from listen socket */
+static uint16_t get_listen_port(ray_sock_t fd) {
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr*)&addr, &len) < 0) return 0;
+    return ntohs(addr.sin_port);
+}
+
+/* Server poll thread context — carries a VM for eval */
+typedef struct {
+    ray_ipc_server_t *srv;
+    ray_vm_t         *vm;
+} ipc_thread_ctx_t;
+
+static void server_thread_fn(void* arg) {
+    ipc_thread_ctx_t* ctx = (ipc_thread_ctx_t*)arg;
+    /* Set up TLS VM so ray_eval_str works in this thread */
+    __VM = ctx->vm;
+    while (ctx->srv->running)
+        ray_ipc_poll(ctx->srv, 10);
+}
+
+static MunitResult test_ipc_sync_roundtrip(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* Full runtime needed for ray_eval_str in server thread */
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_err_t err = ray_ipc_server_init(&srv, 0);
+    munit_assert_int(err, ==, RAY_OK);
+
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    /* Create a VM for the server thread */
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+
+    /* Start server poll thread */
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    /* Client: connect */
+    int64_t h = ray_ipc_connect("127.0.0.1", port);
+    munit_assert_int(h, >=, 0);
+
+    /* Client: send sync query "(+ 1 2)" — expects result 3 */
+    ray_t* msg = ray_str("(+ 1 2)", 7);
+    ray_t* result = ray_ipc_send(h, msg);
+    ray_release(msg);
+
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_true(ray_is_atom(result));
+    munit_assert_int(result->type, ==, -RAY_I64);
+    munit_assert_int(result->i64, ==, 3);
+    ray_release(result);
+
+    /* Client: close */
+    ray_ipc_close(h);
+
+    /* Stop server */
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
+/* ---- IPC async send ----------------------------------------------------- */
+
+static MunitResult test_ipc_async_send(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    /* Full runtime needed for eval on server side */
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_ipc_server_init(&srv, 0);
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    int64_t h = ray_ipc_connect("127.0.0.1", port);
+    munit_assert_int(h, >=, 0);
+
+    /* Send async — should not block or error */
+    ray_t* msg = ray_str("(+ 1 1)", 7);
+    ray_err_t rc = ray_ipc_send_async(h, msg);
+    ray_release(msg);
+    munit_assert_int(rc, ==, RAY_OK);
+
+    /* Small delay to let server process the async message */
+    usleep(50000);  /* 50ms */
+
+    ray_ipc_close(h);
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1666,6 +1822,9 @@ static MunitTest store_tests[] = {
     { "/ipc/compress_rt",        test_ipc_compress_rt,        NULL, NULL, 0, NULL },
     { "/ipc/compress_threshold", test_ipc_compress_threshold,  NULL, NULL, 0, NULL },
     { "/ipc/compress_zeros",     test_ipc_compress_zeros,      NULL, NULL, 0, NULL },
+    { "/ipc/server_lifecycle",   test_ipc_server_lifecycle,    NULL, NULL, 0, NULL },
+    { "/ipc/sync_roundtrip",     test_ipc_sync_roundtrip,      NULL, NULL, 0, NULL },
+    { "/ipc/async_send",         test_ipc_async_send,          NULL, NULL, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
