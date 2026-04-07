@@ -28,7 +28,7 @@ make test
 
 Core abstraction is `ray_t` — a 32-byte block header. Every object (atom, vector, list, table) is a `ray_t` with data following at byte 32.
 
-**Memory**: buddy allocator with thread-local arenas, slab cache for small allocations, COW ref counting. Arena (bump) allocator (`ray_arena_t`) for bulk short-lived allocations — blocks carry `RAY_ATTR_ARENA` flag, making retain/release no-ops; entire arena freed at once. Memory budget auto-detected at init (80% of physical RAM via `sysconf`/`GlobalMemoryStatusEx`): `ray_mem_budget()` returns the budget, `ray_mem_pressure()` checks if current usage exceeds it.
+**Memory**: buddy allocator with thread-local arenas, slab cache for small allocations, COW ref counting. Arena (bump) allocator (`ray_arena_t`) for bulk short-lived allocations — blocks carry `RAY_ATTR_ARENA` flag, making retain/release no-ops; entire arena freed at once. Memory budget auto-detected at init (80% of physical RAM via `sysconf`/`GlobalMemoryStatusEx`): `ray_mem_budget()` returns the budget, `ray_mem_pressure()` checks if the calling thread's heap usage exceeds it (thread-local stats only; does not reflect other worker threads).
 
 **Null**: `RAY_NULL_OBJ` — static singleton (`type == RAY_NULL`, `RAY_ATTR_ARENA`), always a valid pointer. Returned by side-effect builtins (println, show). `RAY_IS_NULL(p)` tests for it. `is_null_atom(x)` recognizes all null forms: `RAY_NULL_OBJ`, sentinel nulls (`0Nl`/`0Ni`/`0Nd`/`0Nt`/`0Np`/`0Nf`). All nulls are falsy in `if` and equal via `==`. Sentinel nulls propagate through arithmetic; `RAY_NULL_OBJ` produces type errors.
 

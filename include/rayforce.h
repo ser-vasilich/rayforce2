@@ -176,7 +176,7 @@ void     ray_free(ray_t* v);
 /* ===== Memory Budget API ===== */
 
 int64_t  ray_mem_budget(void);      /* returns memory budget in bytes */
-bool     ray_mem_pressure(void);    /* true if usage exceeds budget */
+bool     ray_mem_pressure(void);    /* true if calling thread's usage exceeds budget */
 
 /* ===== COW / Ref Counting API ===== */
 
