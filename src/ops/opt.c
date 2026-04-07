@@ -1610,15 +1610,22 @@ static void pass_projection_pushdown(ray_graph_t* g, ray_op_t* root) {
 
 static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
     if (!g || !root) return;
-    (void)root; /* linear scan over all nodes, root unused */
+    (void)root;
 
     for (uint32_t i = 0; i < g->node_count; i++) {
         ray_op_t* n = &g->nodes[i];
         if (n->flags & OP_FLAG_DEAD) continue;
         if (n->opcode != OP_FILTER || n->arity != 2) continue;
 
+        ray_op_t* data_in = n->inputs[0];
         ray_op_t* pred = n->inputs[1];
-        if (!pred || pred->opcode != OP_EQ || pred->arity != 2) continue;
+        if (!pred || pred->arity != 2) continue;
+        (void)data_in;
+
+        uint16_t cmp_op = pred->opcode;
+        if (cmp_op != OP_EQ && cmp_op != OP_NE &&
+            cmp_op != OP_LT && cmp_op != OP_GT &&
+            cmp_op != OP_LE && cmp_op != OP_GE) continue;
 
         ray_op_t* lhs = pred->inputs[0];
         ray_op_t* rhs = pred->inputs[1];
@@ -1626,17 +1633,128 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
 
         ray_op_t* scan_node = NULL;
         ray_op_t* const_node = NULL;
+        bool swapped = false;
         if (lhs->opcode == OP_SCAN && rhs->opcode == OP_CONST) {
             scan_node = lhs; const_node = rhs;
         } else if (rhs->opcode == OP_SCAN && lhs->opcode == OP_CONST) {
-            scan_node = rhs; const_node = lhs;
+            scan_node = rhs; const_node = lhs; swapped = true;
         } else continue;
 
         if (scan_node->out_type != RAY_MAPCOMMON) continue;
 
-        /* Mark hint: most partitions can be skipped */
+        ray_op_ext_t* scan_ext = find_ext(g, scan_node->id);
+        if (!scan_ext) continue;
+
+        /* Resolve table */
+        uint16_t stored_table_id = 0;
+        memcpy(&stored_table_id, scan_ext->base.pad, sizeof(uint16_t));
+        ray_t* tbl;
+        if (stored_table_id > 0 && g->tables && (stored_table_id - 1) < g->n_tables)
+            tbl = g->tables[stored_table_id - 1];
+        else
+            tbl = g->table;
+        if (!tbl) continue;
+
+        ray_t* mc_col = ray_table_get_col(tbl, scan_ext->sym);
+        if (!mc_col || mc_col->type != RAY_MAPCOMMON) continue;
+
+        /* Extract constant value */
+        ray_op_ext_t* const_ext = find_ext(g, const_node->id);
+        if (!const_ext || !const_ext->literal) continue;
+        ray_t* lit = const_ext->literal;
+
+        /* Read partition keys from MAPCOMMON: [key_values, row_counts] */
+        ray_t** mc_ptrs = (ray_t**)ray_data(mc_col);
+        ray_t* key_values = mc_ptrs[0];
+        if (!key_values) continue;
+        int64_t n_parts = key_values->len;
+        if (n_parts <= 0) continue;
+
+        /* Allocate seg_mask bitmap */
+        uint32_t n_words = (uint32_t)((n_parts + 63) / 64);
+        uint64_t* mask = (uint64_t*)ray_sys_alloc(n_words * sizeof(uint64_t));
+        if (!mask) continue;
+        memset(mask, 0, n_words * sizeof(uint64_t));
+
+        /* Extract constant for comparison.
+         * Atoms use negative type codes and store values in the header. */
+        int64_t const_val = 0;
+        int8_t lt = lit->type < 0 ? (int8_t)(-lit->type) : lit->type;
+        if (lt == RAY_I64 || lt == RAY_DATE || lt == RAY_TIMESTAMP) {
+            if (lit->type < 0)
+                const_val = lit->i64;  /* atom: value in header */
+            else
+                memcpy(&const_val, ray_data(lit), sizeof(int64_t));
+        } else if (lt == RAY_I32 || lt == RAY_TIME) {
+            int32_t v32;
+            if (lit->type < 0)
+                v32 = lit->i32;
+            else
+                memcpy(&v32, ray_data(lit), sizeof(int32_t));
+            const_val = v32;
+        }
+
+        /* Effective comparison: if swapped, reverse direction */
+        uint16_t eff_op = cmp_op;
+        if (swapped) {
+            if (cmp_op == OP_LT) eff_op = OP_GT;
+            else if (cmp_op == OP_GT) eff_op = OP_LT;
+            else if (cmp_op == OP_LE) eff_op = OP_GE;
+            else if (cmp_op == OP_GE) eff_op = OP_LE;
+        }
+
+        bool any_active = false;
+        for (int64_t p = 0; p < n_parts; p++) {
+            int64_t pkey = 0;
+            if (key_values->type == RAY_DATE || key_values->type == RAY_I32) {
+                int32_t v32;
+                memcpy(&v32, (char*)ray_data(key_values) + p * sizeof(int32_t), sizeof(int32_t));
+                pkey = v32;
+            } else {
+                memcpy(&pkey, (char*)ray_data(key_values) + p * sizeof(int64_t), sizeof(int64_t));
+            }
+
+            bool pass = false;
+            switch (eff_op) {
+                case OP_EQ: pass = (pkey == const_val); break;
+                case OP_NE: pass = (pkey != const_val); break;
+                case OP_LT: pass = (pkey <  const_val); break;
+                case OP_GT: pass = (pkey >  const_val); break;
+                case OP_LE: pass = (pkey <= const_val); break;
+                case OP_GE: pass = (pkey >= const_val); break;
+            }
+            if (pass) {
+                mask[p / 64] |= (1ULL << (p % 64));
+                any_active = true;
+            }
+        }
+
+        if (!any_active) {
+            ray_sys_free(mask);
+            n->est_rows = 0;
+            continue;
+        }
+
+        /* Attach seg_mask to OP_SCAN nodes reading parted columns from same table */
+        for (uint32_t s = 0; s < g->node_count; s++) {
+            ray_op_t* sn = &g->nodes[s];
+            if (sn->flags & OP_FLAG_DEAD || sn->opcode != OP_SCAN) continue;
+            if (sn == scan_node) continue;
+
+            ray_op_ext_t* sn_ext = find_ext(g, sn->id);
+            if (!sn_ext) continue;
+
+            uint16_t sn_tid = 0;
+            memcpy(&sn_tid, sn_ext->base.pad, sizeof(uint16_t));
+            if (sn_tid != stored_table_id) continue;
+
+            ray_t* sn_col = ray_table_get_col(tbl, sn_ext->sym);
+            if (!sn_col || !RAY_IS_PARTED(sn_col->type)) continue;
+
+            sn_ext->seg_mask = mask;
+        }
+
         n->est_rows = 1;
-        (void)const_node; /* value used at runtime, not needed here */
     }
 }
 

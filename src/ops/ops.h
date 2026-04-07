@@ -350,6 +350,7 @@ typedef struct ray_op_ext {
             uint8_t     n_index;      /* number of index columns */
         } pivot;
     };
+    uint64_t* seg_mask;   /* partition pruning bitmap (NULL = all active) */
 } ray_op_ext_t;
 
 /* Operation graph */

@@ -370,6 +370,102 @@ static MunitResult test_partition_pruning_smoke(const void* params, void* data) 
     return MUNIT_OK;
 }
 
+/*
+ * Test: partition pruning produces correct seg_mask bitmap.
+ *
+ * Build a parted table with 4 partitions keyed by I64 values [100, 200, 300, 400].
+ * Filter: pkey >= 300.  Expected: bits 2,3 set (300,400), bits 0,1 clear (100,200).
+ */
+static MunitResult test_partition_pruning_mask(const void* params, void* data) {
+    (void)params; (void)data;
+    ray_heap_init();
+    (void)ray_sym_init();
+
+    /* Build MAPCOMMON column with 4 I64 partition keys */
+    ray_t* key_values = ray_vec_new(RAY_I64, 4);
+    munit_assert_ptr_not_null(key_values);
+    key_values->len = 4;
+    int64_t keys[] = {100, 200, 300, 400};
+    memcpy(ray_data(key_values), keys, sizeof(keys));
+
+    ray_t* row_counts = ray_vec_new(RAY_I64, 4);
+    munit_assert_ptr_not_null(row_counts);
+    row_counts->len = 4;
+    int64_t counts[] = {5, 5, 5, 5};
+    memcpy(ray_data(row_counts), counts, sizeof(counts));
+
+    /* MAPCOMMON: stores [key_values, row_counts] as pointer array */
+    ray_t* mapcommon = ray_alloc(2 * sizeof(ray_t*));
+    munit_assert_ptr_not_null(mapcommon);
+    mapcommon->type = RAY_MAPCOMMON;
+    mapcommon->len = 2; /* 2 pointers */
+    ((ray_t**)ray_data(mapcommon))[0] = key_values;
+    ((ray_t**)ray_data(mapcommon))[1] = row_counts;
+
+    /* Build 4 segments for data column */
+    ray_t* segs[4];
+    for (int i = 0; i < 4; i++) {
+        segs[i] = ray_vec_new(RAY_I64, 5);
+        munit_assert_ptr_not_null(segs[i]);
+        segs[i]->len = 5;
+        int64_t* d = (int64_t*)ray_data(segs[i]);
+        for (int j = 0; j < 5; j++) d[j] = (i + 1) * 10 + j;
+    }
+
+    /* Build parted data column */
+    ray_t* val_parted = ray_alloc(4 * sizeof(ray_t*));
+    munit_assert_ptr_not_null(val_parted);
+    val_parted->type = RAY_PARTED_BASE + RAY_I64;
+    val_parted->len = 4;
+    for (int i = 0; i < 4; i++)
+        ((ray_t**)ray_data(val_parted))[i] = segs[i];
+
+    /* Build table: pkey (MAPCOMMON), val (parted I64) */
+    int64_t sym_pkey = ray_sym_intern("pkey", 4);
+    int64_t sym_val  = ray_sym_intern("val", 3);
+
+    ray_t* tbl = ray_table_new(2);
+    tbl = ray_table_add_col(tbl, sym_pkey, mapcommon);
+    tbl = ray_table_add_col(tbl, sym_val, val_parted);
+
+    /* Build DAG: FILTER(SCAN(val), GE(SCAN(pkey), CONST(300))) */
+    ray_graph_t* g = ray_graph_new(tbl);
+    munit_assert_ptr_not_null(g);
+
+    ray_op_t* scan_val  = ray_scan(g, "val");
+    ray_op_t* scan_pkey = ray_scan(g, "pkey");
+    ray_op_t* c300      = ray_const_i64(g, 300);
+    ray_op_t* ge_pred   = ray_ge(g, scan_pkey, c300);
+    ray_op_t* filt      = ray_filter(g, scan_val, ge_pred);
+
+    /* Optimize — should produce seg_mask */
+    ray_op_t* opt = ray_optimize(g, filt);
+    munit_assert_ptr_not_null(opt);
+
+    /* Find the ext node for scan_val — it should have seg_mask set */
+    ray_op_ext_t* val_ext = NULL;
+    for (uint32_t i = 0; i < g->ext_count; i++) {
+        if (g->ext_nodes[i] && g->ext_nodes[i]->base.id == scan_val->id) {
+            val_ext = g->ext_nodes[i];
+            break;
+        }
+    }
+    munit_assert_ptr_not_null(val_ext);
+    munit_assert_ptr_not_null(val_ext->seg_mask);
+
+    /* Verify bitmap: bits 2,3 set (keys 300,400 >= 300), bits 0,1 clear */
+    uint64_t expected = (1ULL << 2) | (1ULL << 3);
+    munit_assert_true(val_ext->seg_mask[0] == expected);
+
+    ray_graph_free(g);
+    ray_release(mapcommon);
+    ray_release(val_parted);
+    ray_release(tbl);
+    ray_sym_destroy();
+    ray_heap_destroy();
+    return MUNIT_OK;
+}
+
 static MunitTest tests[] = {
     { "/filter_reorder_type", test_filter_reorder_by_type, NULL, NULL, 0, NULL },
     { "/filter_and_split",    test_filter_and_split,       NULL, NULL, 0, NULL },
@@ -378,6 +474,7 @@ static MunitTest tests[] = {
     { "/pushdown_group",      test_pushdown_past_group,    NULL, NULL, 0, NULL },
     { "/projection_pushdown", test_projection_pushdown,   NULL, NULL, 0, NULL },
     { "/partition_pruning",   test_partition_pruning_smoke, NULL, NULL, 0, NULL },
+    { "/partition_pruning_mask", test_partition_pruning_mask, NULL, NULL, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL }
 };
 

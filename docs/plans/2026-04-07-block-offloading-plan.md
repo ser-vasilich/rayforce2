@@ -178,12 +178,12 @@ git commit -m "feat: ray_seg_iter_t — segment iterator for parted column strea
 
 ---
 
-## Task 3: Partition Pruning — Produce seg_mask
+## Task 3: Partition Pruning — Produce seg_mask [x]
 
 **Files:**
-- Modify: `src/ops/ops.h` (add `seg_mask` field to `ray_op_ext_t`)
-- Modify: `src/ops/opt.c:1611-1641` (replace stub `pass_partition_pruning` with bitmap producer)
-- Test: `test/test_opt.c` (add pruning test)
+- [x] Modify: `src/ops/ops.h` (add `seg_mask` field to `ray_op_ext_t`)
+- [x] Modify: `src/ops/opt.c:1611-1641` (replace stub `pass_partition_pruning` with bitmap producer)
+- [x] Test: `test/test_opt.c` (add pruning test)
 
 **Step 1: Add `seg_mask` to `ray_op_ext_t`**
 

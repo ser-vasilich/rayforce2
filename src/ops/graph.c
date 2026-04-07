@@ -230,6 +230,20 @@ void ray_graph_free(ray_graph_t* g) {
             }
         }
     }
+    /* Free seg_mask bitmaps (shared across ext nodes — deduplicate) */
+    for (uint32_t i = 0; i < g->ext_count; i++) {
+        ray_op_ext_t* ext = g->ext_nodes[i];
+        if (ext && ext->seg_mask) {
+            uint64_t* mask = ext->seg_mask;
+            ext->seg_mask = NULL;
+            /* Clear same pointer from other ext nodes */
+            for (uint32_t j = i + 1; j < g->ext_count; j++) {
+                if (g->ext_nodes[j] && g->ext_nodes[j]->seg_mask == mask)
+                    g->ext_nodes[j]->seg_mask = NULL;
+            }
+            ray_sys_free(mask);
+        }
+    }
     /* Free extended nodes */
     for (uint32_t i = 0; i < g->ext_count; i++) {
         ray_sys_free(g->ext_nodes[i]);
