@@ -1760,11 +1760,11 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
 
     /* Streaming mode: find seg_mask from optimizer (if any) */
     uint64_t* seg_mask = NULL;
-    uint32_t  seg_mask_words = 0;
+    int64_t   seg_mask_count = 0;
     for (uint32_t e = 0; e < g->ext_count; e++) {
         if (g->ext_nodes[e] && g->ext_nodes[e]->seg_mask) {
             seg_mask = g->ext_nodes[e]->seg_mask;
-            seg_mask_words = g->ext_nodes[e]->seg_mask_words;
+            seg_mask_count = g->ext_nodes[e]->seg_mask_count;
             break;
         }
     }
@@ -1773,11 +1773,8 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
      * MAPCOMMON key count disagrees with the parted column segment
      * count, which is a schema error.  Surface it rather than
      * silently dropping data. */
-    if (seg_mask) {
-        uint32_t needed = (uint32_t)((seg_count + 63) / 64);
-        if (seg_mask_words < needed)
-            return ray_error("seg_mask/segment count mismatch", NULL);
-    }
+    if (seg_mask && seg_mask_count != (int64_t)seg_count)
+        return ray_error("seg_mask/segment count mismatch", NULL);
 
     ray_t* saved_table = g->table;
     ray_t* result = NULL;

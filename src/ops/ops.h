@@ -351,7 +351,7 @@ typedef struct ray_op_ext {
         } pivot;
     };
     uint64_t* seg_mask;   /* partition pruning bitmap (NULL = all active) */
-    uint32_t  seg_mask_words; /* number of uint64_t words in seg_mask */
+    int64_t   seg_mask_count; /* number of partitions the mask covers */
 } ray_op_ext_t;
 
 /* Operation graph */
