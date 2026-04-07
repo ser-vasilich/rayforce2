@@ -2301,7 +2301,8 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         }
     }
 
-    /* Propagate str_pool / sym_dict from source columns */
+    /* Propagate str_pool / sym_dict from source columns.
+     * LIST columns: the gather copied raw ray_t* pointers; retain each. */
     for (int64_t c = 0; c < ncols; c++) {
         if (!new_cols[c]) continue;
         ray_t* col = ray_table_get_col_idx(tbl, c);
@@ -2310,6 +2311,11 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         if (col->type == RAY_SYM && col->sym_dict) {
             ray_retain(col->sym_dict);
             new_cols[c]->sym_dict = col->sym_dict;
+        }
+        if (col->type == RAY_LIST) {
+            ray_t** ptrs = (ray_t**)ray_data(new_cols[c]);
+            for (int64_t r = 0; r < gather_rows; r++)
+                if (ptrs[r]) ray_retain(ptrs[r]);
         }
     }
 
@@ -2538,7 +2544,8 @@ ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
         }
     }
 
-    /* Propagate str_pool / sym_dict from source columns */
+    /* Propagate str_pool / sym_dict from source columns.
+     * LIST columns: the gather copied raw ray_t* pointers; retain each. */
     for (int64_t c = 0; c < ncols; c++) {
         if (!new_cols[c]) continue;
         ray_t* col = ray_table_get_col_idx(tbl, c);
@@ -2547,6 +2554,11 @@ ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
         if (col->type == RAY_SYM && col->sym_dict) {
             ray_retain(col->sym_dict);
             new_cols[c]->sym_dict = col->sym_dict;
+        }
+        if (col->type == RAY_LIST) {
+            ray_t** ptrs = (ray_t**)ray_data(new_cols[c]);
+            for (int64_t r = 0; r < nrows; r++)
+                if (ptrs[r]) ray_retain(ptrs[r]);
         }
     }
 

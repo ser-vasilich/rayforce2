@@ -157,6 +157,8 @@ static inline int64_t read_by_esz(const void* data, int64_t row, uint8_t esz) {
 static inline ray_t* col_vec_new(const ray_t* src, int64_t cap) {
     if (src->type == RAY_SYM)
         return ray_sym_vec_new(src->attrs & RAY_SYM_W_MASK, cap);
+    if (src->type == RAY_LIST)
+        return ray_list_new(cap);
     return ray_vec_new(src->type, cap);
 }
 
