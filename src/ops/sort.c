@@ -2240,19 +2240,28 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         if (col->type == RAY_LIST) {
             /* LIST: element-wise gather with retain (not memcpy-safe) */
             nc = ray_list_new(gather_rows);
-            if (!nc || RAY_IS_ERR(nc)) { new_cols[c] = NULL; continue; }
+        } else {
+            nc = col_vec_new(col, gather_rows);
+        }
+        if (!nc || RAY_IS_ERR(nc)) {
+            for (int64_t j = 0; j < c; j++)
+                if (new_cols[j]) ray_release(new_cols[j]);
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+            for (uint8_t k = 0; k < n_sort; k++)
+                if (sort_owned[k] && sort_vecs[k] && !RAY_IS_ERR(sort_vecs[k]))
+                    ray_release(sort_vecs[k]);
+            ray_release(idx_vec);
+            return nc ? nc : ray_error("oom", NULL);
+        }
+        if (col->type == RAY_LIST) {
             ray_t** src_ptrs = (ray_t**)ray_data(col);
             ray_t** dst_ptrs = (ray_t**)ray_data(nc);
             for (int64_t r = 0; r < gather_rows; r++) {
                 dst_ptrs[r] = src_ptrs[sorted_idx[r]];
                 if (dst_ptrs[r]) ray_retain(dst_ptrs[r]);
             }
-            nc->len = gather_rows;
-        } else {
-            nc = col_vec_new(col, gather_rows);
-            if (!nc || RAY_IS_ERR(nc)) { new_cols[c] = NULL; continue; }
-            nc->len = gather_rows;
         }
+        nc->len = gather_rows;
         new_cols[c] = nc;
         valid_ncols++;
     }
@@ -2500,28 +2509,26 @@ ray_t* sort_table_by_keys(ray_t* tbl, ray_t* keys, uint8_t descending) {
         col_names[c] = ray_table_col_name(tbl, c);
         if (!col) { new_cols[c] = NULL; continue; }
         ray_t* nc;
-        if (col->type == RAY_LIST) {
-            /* LIST: element-wise gather with retain (not memcpy-safe) */
+        if (col->type == RAY_LIST)
             nc = ray_list_new(nrows);
-            if (!nc || RAY_IS_ERR(nc)) { new_cols[c] = NULL; continue; }
+        else
+            nc = col_vec_new(col, nrows);
+        if (!nc || RAY_IS_ERR(nc)) {
+            for (int64_t j = 0; j < c; j++)
+                if (new_cols[j]) ray_release(new_cols[j]);
+            if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
+            ray_release(idx);
+            return nc ? nc : ray_error("oom", NULL);
+        }
+        if (col->type == RAY_LIST) {
             ray_t** src_ptrs = (ray_t**)ray_data(col);
             ray_t** dst_ptrs = (ray_t**)ray_data(nc);
             for (int64_t r = 0; r < nrows; r++) {
                 dst_ptrs[r] = src_ptrs[idx_data[r]];
                 if (dst_ptrs[r]) ray_retain(dst_ptrs[r]);
             }
-            nc->len = nrows;
-        } else {
-            nc = col_vec_new(col, nrows);
-            if (!nc || RAY_IS_ERR(nc)) {
-                for (int64_t j = 0; j < c; j++)
-                    if (new_cols[j]) ray_release(new_cols[j]);
-                if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
-                ray_release(idx);
-                return nc ? nc : ray_error("oom", NULL);
-            }
-            nc->len = nrows;
         }
+        nc->len = nrows;
         new_cols[c] = nc;
         valid_ncols++;
     }
