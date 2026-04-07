@@ -189,6 +189,40 @@
 <span class="hl-comment">; AAPL     400</span>
 <span class="hl-comment">; GOOG     125</span></code></pre>
 
+      <h3 id="select-sort">Sorting with <code>asc:</code> and <code>desc:</code></h3>
+      <p>Sort the result by one or more columns. Use <code>asc:</code> for ascending and <code>desc:</code> for descending order:</p>
+      <pre><code><span class="hl-comment">; Sort by price ascending</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">asc:</span> <span class="hl-sym">price</span>})
+
+<span class="hl-comment">; Sort by price descending</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">desc:</span> <span class="hl-sym">price</span>})</code></pre>
+
+      <p>Sort by multiple columns by passing a symbol vector:</p>
+      <pre><code><span class="hl-comment">; Sort by sym ascending, then price ascending</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">asc:</span> [<span class="hl-sym">sym</span> <span class="hl-sym">price</span>]})</code></pre>
+
+      <p>Mix ascending and descending with separate clauses. Sort priority follows the order of clauses in the dictionary:</p>
+      <pre><code><span class="hl-comment">; Primary: sym ascending. Secondary: price descending.</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">asc:</span> <span class="hl-sym">sym</span> <span class="hl-sym">desc:</span> <span class="hl-sym">price</span>})</code></pre>
+
+      <h3 id="select-take">Limiting Rows with <code>take:</code></h3>
+      <p>Limit the number of rows in the result. Positive values take from the beginning, negative from the end:</p>
+      <pre><code><span class="hl-comment">; First 5 rows</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">take:</span> <span class="hl-num">5</span>})
+
+<span class="hl-comment">; Last 3 rows</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">take:</span> <span class="hl-num">-3</span>})</code></pre>
+
+      <p>For a range slice, pass a two-element vector <code>[start count]</code>:</p>
+      <pre><code><span class="hl-comment">; Skip 10 rows, then take 5</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> t <span class="hl-sym">take:</span> [<span class="hl-num">10</span> <span class="hl-num">5</span>]})</code></pre>
+
+      <h3 id="select-combined">Combining Clauses</h3>
+      <p>All clauses can be combined. They apply in this order: <code>where:</code> &rarr; <code>by:</code> / projection &rarr; <code>asc:</code>/<code>desc:</code> &rarr; <code>take:</code></p>
+      <pre><code><span class="hl-comment">; Filter, sort, and limit in one query</span>
+(<span class="hl-kw">select</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (<span class="hl-fn">&gt;</span> price <span class="hl-num">100</span>) <span class="hl-sym">desc:</span> <span class="hl-sym">price</span> <span class="hl-sym">take:</span> <span class="hl-num">10</span>})
+<span class="hl-comment">; Top 10 most expensive trades above $100</span></code></pre>
+
       <!-- ============================================================ -->
       <h2 id="update">Update</h2>
       <p>The <code>update</code> form modifies columns in-place on a quoted table variable. It supports the same <code>where:</code> and <code>by:</code> clauses as <code>select</code>.</p>
@@ -313,8 +347,8 @@
         <tbody>
           <tr>
             <td><code>select</code></td>
-            <td><code>(select {from: t col: expr where: pred by: key})</code></td>
-            <td>Query with projection, filtering, and grouping</td>
+            <td><code>(select {from: t col: expr where: pred by: key asc: col desc: col take: n})</code></td>
+            <td>Query with projection, filtering, grouping, sorting, and limiting</td>
           </tr>
           <tr>
             <td><code>update</code></td>

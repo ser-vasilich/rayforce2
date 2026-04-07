@@ -208,24 +208,36 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 
     ray_t* where_expr = dict_get(dict, "where");
     ray_t* by_expr = dict_get(dict, "by");
+    ray_t* take_expr = dict_get(dict, "take");
 
-    /* Collect output columns (keys that are not from/where/by) */
+    /* Collect output columns (keys that are not reserved) */
     int64_t dict_n = ray_len(dict);
     ray_t** dict_elems = (ray_t**)ray_data(dict);
     int64_t from_id  = ray_sym_intern("from",  4);
     int64_t where_id = ray_sym_intern("where", 5);
     int64_t by_id    = ray_sym_intern("by",    2);
+    int64_t take_id  = ray_sym_intern("take",  4);
+    int64_t asc_id   = ray_sym_intern("asc",   3);
+    int64_t desc_id  = ray_sym_intern("desc",  4);
+
+    /* Check for asc/desc presence */
+    bool has_sort = false;
+    for (int64_t i = 0; i + 1 < dict_n; i += 2) {
+        int64_t kid = dict_elems[i]->i64;
+        if (kid == asc_id || kid == desc_id) { has_sort = true; break; }
+    }
 
     /* Count output columns */
     int n_out = 0;
     for (int64_t i = 0; i + 1 < dict_n; i += 2) {
         int64_t kid = dict_elems[i]->i64;
-        if (kid != from_id && kid != where_id && kid != by_id)
+        if (kid != from_id && kid != where_id && kid != by_id &&
+            kid != take_id && kid != asc_id && kid != desc_id)
             n_out++;
     }
 
-    /* Simple case: no output cols, no where, no by → return table as-is */
-    if (n_out == 0 && !where_expr && !by_expr)
+    /* Simple case: no clauses at all → return table as-is */
+    if (n_out == 0 && !where_expr && !by_expr && !take_expr && !has_sort)
         return tbl;
 
     /* Build DAG */
@@ -308,7 +320,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             ray_t* agg_results[16];
             for (int64_t i = 0; i + 1 < dict_n && n_agg_out < 16; i += 2) {
                 int64_t kid = dict_elems[i]->i64;
-                if (kid == from_id || kid == where_id || kid == by_id) continue;
+                if (kid == from_id || kid == where_id || kid == by_id || kid == take_id || kid == asc_id || kid == desc_id) continue;
                 ray_t* val_expr_item = dict_elems[i + 1];
                 if (!is_agg_expr(val_expr_item)) continue;
 
@@ -500,7 +512,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 
         for (int64_t i = 0; i + 1 < dict_n; i += 2) {
             int64_t kid = dict_elems[i]->i64;
-            if (kid == from_id || kid == where_id || kid == by_id) continue;
+            if (kid == from_id || kid == where_id || kid == by_id || kid == take_id || kid == asc_id || kid == desc_id) continue;
 
             ray_t* val_expr = dict_elems[i + 1];
             if (is_agg_expr(val_expr) && n_aggs < 16) {
@@ -810,7 +822,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
         uint8_t nc = 0;
         for (int64_t i = 0; i + 1 < dict_n; i += 2) {
             int64_t kid = dict_elems[i]->i64;
-            if (kid == from_id || kid == where_id || kid == by_id) continue;
+            if (kid == from_id || kid == where_id || kid == by_id || kid == take_id || kid == asc_id || kid == desc_id) continue;
             if (nc < 16) {
                 col_ops[nc] = compile_expr_dag(g, dict_elems[i + 1]);
                 if (!col_ops[nc]) { ray_graph_free(g); ray_release(tbl); return ray_error("domain", NULL); }
@@ -820,11 +832,81 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
         root = ray_select(g, root, col_ops, nc);
     }
 
+    /* Sort: collect asc/desc columns in dict iteration order.
+     * Values are unevaluated — a SYM atom is a column name, a SYM vector
+     * is multiple column names.  No ray_eval needed. */
+    if (has_sort) {
+        ray_op_t* sort_keys[16];
+        uint8_t   sort_descs[16];
+        uint8_t   n_sort = 0;
+        for (int64_t i = 0; i + 1 < dict_n && n_sort < 16; i += 2) {
+            int64_t kid = dict_elems[i]->i64;
+            uint8_t is_desc = 0;
+            if (kid == asc_id) is_desc = 0;
+            else if (kid == desc_id) is_desc = 1;
+            else continue;
+            ray_t* val = dict_elems[i + 1];
+            if (val->type == -RAY_SYM) {
+                /* Single column name */
+                ray_t* s = ray_sym_str(val->i64);
+                sort_keys[n_sort] = ray_scan(g, ray_str_ptr(s));
+                sort_descs[n_sort] = is_desc;
+                n_sort++;
+            } else if (ray_is_vec(val) && val->type == RAY_SYM) {
+                /* Multiple column names */
+                for (int64_t c = 0; c < val->len && n_sort < 16; c++) {
+                    int64_t sid = ray_read_sym(ray_data(val), c, val->type, val->attrs);
+                    ray_t* s = ray_sym_str(sid);
+                    sort_keys[n_sort] = ray_scan(g, ray_str_ptr(s));
+                    sort_descs[n_sort] = is_desc;
+                    n_sort++;
+                }
+            } else {
+                ray_graph_free(g); ray_release(tbl);
+                return ray_error("domain", NULL);
+            }
+        }
+        if (n_sort > 0)
+            root = ray_sort_op(g, root, sort_keys, sort_descs, NULL, n_sort);
+    }
+
+    /* Take: positive atom → head (first N), negative atom → tail (last N),
+     * two-element vector [start count] → applied post-execution via ray_take */
+    ray_t* take_range = NULL;  /* non-NULL if range take needed after execute */
+    if (take_expr) {
+        ray_t* tv = ray_eval(take_expr);
+        if (!tv || RAY_IS_ERR(tv)) { ray_graph_free(g); ray_release(tbl); return tv ? tv : ray_error("domain", NULL); }
+        if (ray_is_atom(tv) && (tv->type == -RAY_I64 || tv->type == -RAY_I32)) {
+            int64_t n_take = (tv->type == -RAY_I64) ? tv->i64 : tv->i32;
+            ray_release(tv);
+            if (n_take >= 0)
+                root = ray_head(g, root, n_take);
+            else
+                root = ray_tail(g, root, -n_take);
+        } else if (ray_is_vec(tv) && (tv->type == RAY_I64 || tv->type == RAY_I32) && tv->len == 2) {
+            take_range = tv;  /* apply after DAG execution */
+        } else {
+            ray_release(tv);
+            ray_graph_free(g); ray_release(tbl);
+            return ray_error("domain", NULL);
+        }
+    }
+
     /* Optimize and execute */
     root = ray_optimize(g, root);
     ray_t* result = ray_execute(g, root);
 
     ray_graph_free(g);
+
+    /* Post-process: range take [start count] applied after execution */
+    if (take_range && result && !RAY_IS_ERR(result)) {
+        ray_t* sliced = ray_take(result, take_range);
+        ray_release(result);
+        ray_release(take_range);
+        result = sliced;
+    } else if (take_range) {
+        ray_release(take_range);
+    }
 
     /* Post-process: reorder GROUP BY BOOL results to match first-occurrence
      * order in the original table (exec.c radix sort puts false before true) */
@@ -897,7 +979,8 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
             int n_user = 0;
             for (int64_t i = 0; i + 1 < dict_n; i += 2) {
                 int64_t kid = dict_elems[i]->i64;
-                if (kid != from_id && kid != where_id && kid != by_id && n_user < 16)
+                if (kid != from_id && kid != where_id && kid != by_id &&
+                    kid != take_id && kid != asc_id && kid != desc_id && n_user < 16)
                     user_names[n_user++] = kid;
             }
             /* Rename agg columns (after key columns) using table API */
