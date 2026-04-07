@@ -1617,10 +1617,8 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
         if (n->flags & OP_FLAG_DEAD) continue;
         if (n->opcode != OP_FILTER || n->arity != 2) continue;
 
-        ray_op_t* data_in = n->inputs[0];
         ray_op_t* pred = n->inputs[1];
         if (!pred || pred->arity != 2) continue;
-        (void)data_in;
 
         uint16_t cmp_op = pred->opcode;
         if (cmp_op != OP_EQ && cmp_op != OP_NE &&
@@ -1677,7 +1675,8 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
         memset(mask, 0, n_words * sizeof(uint64_t));
 
         /* Extract constant for comparison.
-         * Atoms use negative type codes and store values in the header. */
+         * Atoms use negative type codes and store values in the header.
+         * Only integer/date/time types are supported for pruning. */
         int64_t const_val = 0;
         int8_t lt = lit->type < 0 ? (int8_t)(-lit->type) : lit->type;
         if (lt == RAY_I64 || lt == RAY_DATE || lt == RAY_TIMESTAMP) {
@@ -1692,6 +1691,8 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
             else
                 memcpy(&v32, ray_data(lit), sizeof(int32_t));
             const_val = v32;
+        } else {
+            continue; /* unsupported type for partition pruning */
         }
 
         /* Effective comparison: if swapped, reverse direction */
@@ -1736,6 +1737,7 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
         }
 
         /* Attach seg_mask to OP_SCAN nodes reading parted columns from same table */
+        bool mask_owned = false;
         for (uint32_t s = 0; s < g->node_count; s++) {
             ray_op_t* sn = &g->nodes[s];
             if (sn->flags & OP_FLAG_DEAD || sn->opcode != OP_SCAN) continue;
@@ -1751,8 +1753,16 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
             ray_t* sn_col = ray_table_get_col(tbl, sn_ext->sym);
             if (!sn_col || !RAY_IS_PARTED(sn_col->type)) continue;
 
-            sn_ext->seg_mask = mask;
+            if (sn_ext->seg_mask) {
+                /* AND with existing mask (conjunctive filters) */
+                for (uint32_t w = 0; w < n_words; w++)
+                    sn_ext->seg_mask[w] &= mask[w];
+            } else {
+                sn_ext->seg_mask = mask;
+                mask_owned = true;
+            }
         }
+        if (!mask_owned) ray_sys_free(mask);
 
         n->est_rows = 1;
     }

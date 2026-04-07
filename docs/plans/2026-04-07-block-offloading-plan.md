@@ -549,7 +549,7 @@ git commit -m "wip: segment-streaming scan + execute loop (needs merge functions
 
 ---
 
-## Task 5: Result Merge — Filter/Project (Concatenation)
+## Task 5: Result Merge — Filter/Project (Concatenation) [x]
 
 **Files:**
 - Create: forward declaration in `src/ops/internal.h`
@@ -836,7 +836,7 @@ git commit --allow-empty -m "perf: verified zero regression on non-parted table 
 
 ---
 
-## Task 10: Cleanup and Final Commit
+## Task 10: Cleanup and Final Commit [x]
 
 **Files:**
 - All modified files — review pass

@@ -28,14 +28,15 @@ make test
 
 Core abstraction is `ray_t` — a 32-byte block header. Every object (atom, vector, list, table) is a `ray_t` with data following at byte 32.
 
-**Memory**: buddy allocator with thread-local arenas, slab cache for small allocations, COW ref counting. Arena (bump) allocator (`ray_arena_t`) for bulk short-lived allocations — blocks carry `RAY_ATTR_ARENA` flag, making retain/release no-ops; entire arena freed at once.
+**Memory**: buddy allocator with thread-local arenas, slab cache for small allocations, COW ref counting. Arena (bump) allocator (`ray_arena_t`) for bulk short-lived allocations — blocks carry `RAY_ATTR_ARENA` flag, making retain/release no-ops; entire arena freed at once. Memory budget auto-detected at init (80% of physical RAM via `sysconf`/`GlobalMemoryStatusEx`): `ray_mem_budget()` returns the budget, `ray_mem_pressure()` checks if current usage exceeds it.
 
 **Null**: `RAY_NULL_OBJ` — static singleton (`type == RAY_NULL`, `RAY_ATTR_ARENA`), always a valid pointer. Returned by side-effect builtins (println, show). `RAY_IS_NULL(p)` tests for it. `is_null_atom(x)` recognizes all null forms: `RAY_NULL_OBJ`, sentinel nulls (`0Nl`/`0Ni`/`0Nd`/`0Nt`/`0Np`/`0Nf`). All nulls are falsy in `if` and equal via `==`. Sentinel nulls propagate through arithmetic; `RAY_NULL_OBJ` produces type errors.
 
 **Execution pipeline**:
 1. Build lazy DAG: `ray_graph_new(df)` → `ray_scan/ray_add/ray_filter/...` → `ray_execute(g, root)`
-2. Optimizer: type inference → constant fold → SIP → factorize → predicate pushdown → filter reorder → fusion → DCE
+2. Optimizer: type inference → constant fold → SIP → factorize → predicate pushdown → partition pruning → filter reorder → fusion → DCE
 3. Fused executor: bytecode over register slots, morsel-by-morsel (1024 elements)
+4. Segment streaming: for parted tables, `ray_execute` loops over partition segments — builds a flat per-segment table (`build_segment_table`), executes the DAG on it, and merges partial results via `ray_result_merge()` (column concatenation). Only DAGs with streamable ops (element-wise, filter, project) use this path; non-streamable DAGs (joins, group, sort) fall back to flat materialization. `op_streamable()` whitelists safe opcodes.
 
 **Strings**: two representations — `RAY_SYM` (dictionary-encoded symbol columns, integer indices into global intern table) and `RAY_STR` (variable-length 16-byte `ray_str_t` elements: strings <= 12 bytes stored inline, longer strings in a per-vector pool with 4-byte prefix for fast comparison rejection). All string opcodes (comparisons, STRLEN, UPPER/LOWER/TRIM, SUBSTR, REPLACE, CONCAT, IF) support both types. String transformation opcodes (STRLEN, UPPER/LOWER/TRIM, SUBSTR, REPLACE, CONCAT) propagate nulls: null input rows produce null output rows (CONCAT is null if any argument is null). Access via `ray_str_vec_get()`; executor uses `str_resolve()` to get element array + pool pointer. Hash via `ray_str_t_hash()`, compare via `ray_str_t_cmp()`/`ray_str_t_eq()`. During execution, `col_propagate_str_pool()` shares the source pool with the destination vector; both src and dst must be RAY_STR.
 
@@ -66,6 +67,7 @@ Core abstraction is `ray_t` — a 32-byte block header. Every object (atom, vect
 - **SIMD first**: performance work must prefer SIMD approaches. Profile before optimizing, benchmark after.
 - **One-word file names**: no compound names like `exec_internal.h` or `sort_exec.c`. Use `internal.h`, `sort.c`.
 - **Layer separation**: `lang/` = front-end only (parse/compile/eval/env/format). `ops/` = all execution + builtins. `core/` = runtime infrastructure (pool/profile/morsel). Never put builtins in `lang/`.
+- **Streamable ops**: new element-wise opcodes must be added to `op_streamable()` in `exec.c` to enable segment-streaming execution on parted tables. Non-streamable ops (joins, aggregations, sorts, graph ops) cause fallback to flat materialization.
 
 ## Key File Paths
 

@@ -1459,10 +1459,8 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
  * ============================================================================ */
 
 /* Merge two partial results from partition-streamed execution.
- * Default: table/vector concatenation (filter/project/scan).
- * OP_GROUP and OP_SORT cases added in later tasks. */
-ray_t* ray_result_merge(ray_t* accum, ray_t* partial, uint16_t root_opcode) {
-    (void)root_opcode;
+ * Concatenates table columns or vectors across segments. */
+ray_t* ray_result_merge(ray_t* accum, ray_t* partial) {
     if (!accum || RAY_IS_ERR(accum)) {
         if (partial && !RAY_IS_ERR(partial)) ray_retain(partial);
         return partial;
@@ -1536,7 +1534,10 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
             int8_t kv_type = kv->type;
             size_t esz = (size_t)ray_sym_elem_size(kv_type, kv->attrs);
             ray_t* flat = ray_vec_new(kv_type, seg_rows);
-            if (!flat || RAY_IS_ERR(flat)) continue;
+            if (!flat || RAY_IS_ERR(flat)) {
+                ray_release(seg_tbl);
+                return ray_error("oom", NULL);
+            }
             flat->len = seg_rows;
             const char* src = (const char*)ray_data(kv) + (size_t)seg_idx * esz;
             char* dst = (char*)ray_data(flat);
@@ -1720,11 +1721,35 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         }
 
         /* Merge partial into accumulator */
-        ray_t* merged = ray_result_merge(result, partial, root->opcode);
+        ray_t* merged = ray_result_merge(result, partial);
         ray_release(result);
         ray_release(partial);
         if (!merged || RAY_IS_ERR(merged)) return merged;
         result = merged;
+    }
+
+    /* All segments pruned: return empty table matching schema */
+    if (!result && g->table && g->table->type == RAY_TABLE) {
+        int64_t ncols = ray_table_ncols(saved_table);
+        ray_t* empty = ray_table_new(ncols);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t name_id = ray_table_col_name(saved_table, c);
+            ray_t* col = ray_table_get_col_idx(saved_table, c);
+            if (!col) continue;
+            int8_t base = col->type;
+            if (col->type == RAY_MAPCOMMON) {
+                ray_t** mc = (ray_t**)ray_data(col);
+                base = mc[0] ? mc[0]->type : RAY_I64;
+            } else if (RAY_IS_PARTED(col->type)) {
+                base = (int8_t)RAY_PARTED_BASETYPE(col->type);
+            }
+            ray_t* ecol = ray_vec_new(base, 0);
+            if (ecol) {
+                empty = ray_table_add_col(empty, name_id, ecol);
+                ray_release(ecol);
+            }
+        }
+        return empty;
     }
 
     return result;

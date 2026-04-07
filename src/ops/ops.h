@@ -379,48 +379,6 @@ typedef struct {
     uint8_t* null_bits;    /* current morsel null bitmap (or NULL) */
 } ray_morsel_t;
 
-/* ===== Segment Iterator (parted column streaming) ===== */
-
-typedef struct {
-    ray_t**   segs;        /* segment pointer array (from parted column data) */
-    uint32_t  n_segs;      /* total segment count */
-    uint32_t  cur_seg;     /* current segment index (starts at 0) */
-    uint64_t* seg_mask;    /* pruning bitmap: bit N set = segment N active. NULL = all active */
-} ray_seg_iter_t;
-
-/* Init from a parted column. seg_mask may be NULL (all active). */
-static inline void ray_seg_iter_init(ray_seg_iter_t* si, ray_t* parted, uint64_t* mask) {
-    si->segs    = (ray_t**)ray_data(parted);
-    si->n_segs  = (uint32_t)parted->len;
-    si->cur_seg = 0;
-    si->seg_mask = mask;
-}
-
-/* Advance to next active segment. Returns NULL when exhausted. */
-static inline ray_t* ray_seg_iter_next(ray_seg_iter_t* si) {
-    while (si->cur_seg < si->n_segs) {
-        uint32_t idx = si->cur_seg++;
-        if (si->seg_mask) {
-            if (!(si->seg_mask[idx / 64] & (1ULL << (idx % 64))))
-                continue; /* pruned */
-        }
-        ray_t* seg = si->segs[idx];
-        if (seg && seg->len > 0) return seg;
-    }
-    return NULL;
-}
-
-/* Total rows across active (non-pruned) segments. */
-static inline int64_t ray_seg_iter_total_rows(ray_seg_iter_t* si) {
-    int64_t total = 0;
-    for (uint32_t i = 0; i < si->n_segs; i++) {
-        if (si->seg_mask && !(si->seg_mask[i / 64] & (1ULL << (i % 64))))
-            continue;
-        if (si->segs[i]) total += si->segs[i]->len;
-    }
-    return total;
-}
-
 /* ===== Selection Bitmap (RAY_SEL) ===== */
 
 /* Segment flags — one per morsel (RAY_MORSEL_ELEMS rows) */
