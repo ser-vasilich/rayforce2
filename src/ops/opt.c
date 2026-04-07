@@ -1707,7 +1707,6 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
             else if (cmp_op == OP_GE) eff_op = OP_LE;
         }
 
-        bool any_active = false;
         for (int64_t p = 0; p < n_parts; p++) {
             int64_t pkey = 0;
             if (key_values->type == RAY_DATE || key_values->type == RAY_I32 || key_values->type == RAY_TIME) {
@@ -1728,19 +1727,14 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
                 case OP_GE: pass = (pkey >= const_val); break;
                 default: break;
             }
-            if (pass) {
+            if (pass)
                 mask[p / 64] |= (1ULL << (p % 64));
-                any_active = true;
-            }
         }
 
-        if (!any_active) {
-            ray_sys_free(mask);
-            n->est_rows = 0;
-            continue;
-        }
-
-        /* Attach seg_mask to OP_SCAN nodes reading parted columns from same table */
+        /* Attach seg_mask to OP_SCAN nodes reading parted columns from same table.
+         * When !any_active the mask is all-zeros — attach it anyway so the
+         * segment loop in ray_execute skips all segments and hits the
+         * empty-table path instead of reading every partition. */
         bool mask_owned = false;
         for (uint32_t s = 0; s < g->node_count; s++) {
             ray_op_t* sn = &g->nodes[s];

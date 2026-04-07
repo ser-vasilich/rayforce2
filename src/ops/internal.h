@@ -628,6 +628,5 @@ ray_t* materialize_mapcommon_head(ray_t* mc, int64_t n);
 ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_count);
 ray_t* broadcast_scalar(ray_t* atom, int64_t nrows);
 ray_t* exec_node(ray_graph_t* g, ray_op_t* op);
-ray_t* ray_result_merge(ray_t* accum, ray_t* partial);
 
 #endif /* RAY_EXEC_INTERNAL_H */

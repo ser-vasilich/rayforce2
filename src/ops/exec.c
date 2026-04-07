@@ -1461,7 +1461,7 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
 
 /* Merge two partial results from partition-streamed execution.
  * Concatenates table columns or vectors across segments. */
-ray_t* ray_result_merge(ray_t* accum, ray_t* partial) {
+static ray_t* ray_result_merge(ray_t* accum, ray_t* partial) {
     if (!accum || RAY_IS_ERR(accum)) {
         if (partial && !RAY_IS_ERR(partial)) ray_retain(partial);
         return partial;
@@ -1733,7 +1733,9 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     /* Detect streaming mode: check if g->table has parted columns.
      * All non-MAPCOMMON columns must be parted; a flat (non-parted)
      * column would be duplicated across every segment table, producing
-     * wrong results after concatenation merge. */
+     * wrong results after concatenation merge.
+     * All parted columns must agree on segment count — a mismatch is
+     * a malformed table and is rejected upfront. */
     int32_t seg_count = 0;
     if (g->table) {
         bool has_flat = false;
@@ -1743,6 +1745,8 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
             if (RAY_IS_PARTED(col->type)) {
                 if (seg_count == 0)
                     seg_count = (int32_t)col->len;
+                else if ((int32_t)col->len != seg_count)
+                    return ray_error("schema", NULL);
             } else if (col->type != RAY_MAPCOMMON) {
                 has_flat = true;
             }
