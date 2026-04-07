@@ -1782,7 +1782,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
      * count, which is a schema error.  Surface it rather than
      * silently dropping data. */
     if (seg_mask && seg_mask_count != (int64_t)seg_count)
-        return ray_error("seg_mask/segment count mismatch", NULL);
+        return ray_error("schema", NULL);
 
     ray_t* saved_table = g->table;
     ray_t* result = NULL;

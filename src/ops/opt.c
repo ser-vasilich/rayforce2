@@ -1726,6 +1726,7 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
                 case OP_GT: pass = (pkey >  const_val); break;
                 case OP_LE: pass = (pkey <= const_val); break;
                 case OP_GE: pass = (pkey >= const_val); break;
+                default: break;
             }
             if (pass) {
                 mask[p / 64] |= (1ULL << (p % 64));
