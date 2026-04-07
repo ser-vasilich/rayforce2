@@ -167,7 +167,7 @@
       <p>Multiple filter predicates on the partition column are combined with AND &mdash; each narrows the set of active partitions further.</p>
 
       <div class="info-box">
-        <strong>Pruning applies to all partition types.</strong> Date-partitioned (<code>YYYY.MM.DD</code>), integer-partitioned, and symbol-partitioned tables all support pruning. Symbol partition keys and constants both use the same intern ID space, so equality and ordering comparisons work correctly.
+        <strong>Pruning applies to all partition types.</strong> Date-partitioned (<code>YYYY.MM.DD</code>), integer-partitioned, and symbol-partitioned tables all support pruning. Symbol partition keys in <code>MAPCOMMON</code> are stored as 64-bit intern IDs (the key_values vector is always <code>RAY_SYM_W64</code>), and SYM atom constants also carry the intern ID, so equality comparisons work correctly.
       </div>
 
       <!-- ====== MEMORY BUDGET ====== -->

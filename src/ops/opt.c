@@ -1678,7 +1678,10 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
 
         /* Extract constant for comparison.
          * Atoms use negative type codes and store values in the header.
-         * RAY_SYM uses int64_t intern IDs, same representation as RAY_I64. */
+         * RAY_SYM atoms store intern IDs as i64 in the header.
+         * MAPCOMMON key_values for RAY_MC_SYM are always W64 (created by
+         * ray_vec_new(RAY_SYM,...) which defaults to RAY_SYM_W64), so the
+         * 8-byte read in the key comparison loop below is correct. */
         int64_t const_val = 0;
         int8_t lt = lit->type < 0 ? (int8_t)(-lit->type) : lit->type;
         if (lt == RAY_I64 || lt == RAY_TIMESTAMP || lt == RAY_SYM) {
