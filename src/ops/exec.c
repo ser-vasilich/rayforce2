@@ -1769,16 +1769,23 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         }
     }
 
+    /* Validate mask covers all segments — a mismatch means the
+     * MAPCOMMON key count disagrees with the parted column segment
+     * count, which is a schema error.  Surface it rather than
+     * silently dropping data. */
+    if (seg_mask) {
+        uint32_t needed = (uint32_t)((seg_count + 63) / 64);
+        if (seg_mask_words < needed)
+            return ray_error("seg_mask/segment count mismatch", NULL);
+    }
+
     ray_t* saved_table = g->table;
     ray_t* result = NULL;
 
     for (int32_t s = 0; s < seg_count; s++) {
-        /* Check pruning mask — segments beyond the mask are pruned */
-        if (seg_mask) {
-            if ((uint32_t)(s / 64) >= seg_mask_words
-                || !(seg_mask[s / 64] & (1ULL << (s % 64))))
-                continue;
-        }
+        /* Check pruning mask */
+        if (seg_mask && !(seg_mask[s / 64] & (1ULL << (s % 64))))
+            continue;
 
         /* Check cancellation */
         if (pool && atomic_load_explicit(&pool->cancelled, memory_order_relaxed)) {
