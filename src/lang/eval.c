@@ -1939,6 +1939,11 @@ static void ray_register_builtins(void) {
     register_unary("os-get-var", RAY_FN_NONE, ray_getenv_fn);
     register_binary("os-set-var", RAY_FN_NONE, ray_setenv_fn);
 
+    /* IPC builtins */
+    register_unary("hopen",     RAY_FN_NONE, ray_hopen_fn);
+    register_unary("hclose",    RAY_FN_NONE, ray_hclose_fn);
+    register_binary("hsend",    RAY_FN_NONE, ray_hsend_fn);
+
     /* quote — special form (unevaluated argument) */
     register_vary("quote",       RAY_FN_SPECIAL_FORM, ray_quote_fn);
 

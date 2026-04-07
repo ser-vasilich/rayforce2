@@ -28,6 +28,7 @@
 #include "store/serde.h"
 #include "store/splay.h"
 #include "store/part.h"
+#include "core/ipc.h"
 #include <time.h>
 #if !defined(_WIN32)
 #include <unistd.h>
@@ -473,4 +474,56 @@ ray_t* ray_sysinfo_fn(ray_t* x) {
 #endif
 
     return dict;
+}
+
+/* ══════════════════════════════════════════
+ * IPC builtins
+ * ══════════════════════════════════════════ */
+
+/* (hopen "host:port") → i64 handle */
+ray_t* ray_hopen_fn(ray_t* x) {
+    if (!ray_is_atom(x) || x->type != -RAY_STR)
+        return ray_error("type", NULL);
+
+    const char* s = ray_str_ptr(x);
+    size_t slen = ray_str_len(x);
+
+    /* Parse "host:port" — find last colon for port */
+    const char* colon = NULL;
+    for (size_t i = 0; i < slen; i++)
+        if (s[i] == ':') colon = s + i;
+    if (!colon) return ray_error("domain", NULL);
+
+    /* Extract host (need null-terminated copy) */
+    size_t host_len = (size_t)(colon - s);
+    char host[256];
+    if (host_len >= sizeof(host)) return ray_error("domain", NULL);
+    memcpy(host, s, host_len);
+    host[host_len] = '\0';
+
+    /* Parse port */
+    int port = atoi(colon + 1);
+    if (port <= 0 || port > 65535) return ray_error("domain", NULL);
+
+    int64_t h = ray_ipc_connect(host, (uint16_t)port);
+    if (h < 0) return ray_error("io", NULL);
+
+    return make_i64(h);
+}
+
+/* (hclose handle) → null */
+ray_t* ray_hclose_fn(ray_t* x) {
+    if (!ray_is_atom(x) || (x->type != -RAY_I64 && x->type != -RAY_I32))
+        return ray_error("type", NULL);
+    int64_t h = (x->type == -RAY_I64) ? x->i64 : x->i32;
+    ray_ipc_close(h);
+    return RAY_NULL_OBJ;
+}
+
+/* (hsend handle msg) → result */
+ray_t* ray_hsend_fn(ray_t* handle, ray_t* msg) {
+    if (!ray_is_atom(handle) || (handle->type != -RAY_I64 && handle->type != -RAY_I32))
+        return ray_error("type", NULL);
+    int64_t h = (handle->type == -RAY_I64) ? handle->i64 : handle->i32;
+    return ray_ipc_send(h, msg);
 }
