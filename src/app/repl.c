@@ -30,6 +30,7 @@
 #include "lang/format.h"
 #include "app/repl.h"
 #include "app/term.h"
+#include "core/ipc.h"
 #include "lang/env.h"
 #include "lang/eval.h"
 #include "lang/nfo.h"
@@ -566,6 +567,10 @@ static void run_interactive(ray_repl_t* repl) {
     print_banner();
 
     for (;;) {
+        /* Poll IPC between REPL inputs */
+        if (repl->ipc_srv)
+            ray_ipc_poll(repl->ipc_srv, 0);
+
         ray_t* line = ray_term_read(term);
         if (!line) break; /* EOF / Ctrl-D */
 
@@ -756,6 +761,8 @@ static void run_piped(ray_repl_t* repl) {
         /* Evaluate when brackets are balanced */
         if (count_unmatched(accum, accum_len) == 0) {
             eval_and_print(NULL, accum, false, repl->timeit);
+            if (repl->ipc_srv)
+                ray_ipc_poll(repl->ipc_srv, 0);
             accum_len = 0;
         }
     }
@@ -764,6 +771,12 @@ static void run_piped(ray_repl_t* repl) {
     if (accum_len > 0) {
         accum[accum_len] = '\0';
         eval_and_print(NULL, accum, false, repl->timeit);
+    }
+
+    /* If IPC server is active, keep running after stdin exhausted */
+    if (repl->ipc_srv) {
+        while (repl->ipc_srv->running)
+            ray_ipc_poll(repl->ipc_srv, 100);
     }
 }
 

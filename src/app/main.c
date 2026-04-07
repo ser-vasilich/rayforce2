@@ -22,9 +22,11 @@
  */
 
 #include "app/repl.h"
+#include "core/ipc.h"
 #include "core/runtime.h"
 #include <rayforce.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -35,32 +37,52 @@ int main(int argc, char** argv) {
     int rc = 0;
     int interactive = 0;
     const char* file = NULL;
+    uint16_t port = 0;
 
-    /* Parse args: [-i] [file.rfl] */
+    /* Parse args: [-i] [-p PORT] [file.rfl] */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--interactive") == 0)
             interactive = 1;
+        else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc)
+            port = (uint16_t)atoi(argv[++i]);
         else
             file = argv[i];
+    }
+
+    /* Start IPC server if port specified */
+    ray_ipc_server_t ipc_srv_storage;
+    ray_ipc_server_t* ipc_srv = NULL;
+    if (port > 0) {
+        if (ray_ipc_server_init(&ipc_srv_storage, port) == RAY_OK) {
+            ipc_srv = &ipc_srv_storage;
+            fprintf(stderr, "listening on port %u\n", port);
+        } else {
+            fprintf(stderr, "failed to listen on port %u\n", port);
+        }
     }
 
     /* Load script if specified */
     if (file) {
         rc = ray_repl_run_file(file);
-        /* Oneshot: file without -i → execute and exit (like Python/rayforce) */
-        if (!interactive) goto done;
+        if (!interactive && !ipc_srv) goto done;
     }
 
-    /* REPL: interactive TTY, piped stdin, or -i after script */
+    /* REPL or pure server mode */
     {
         ray_repl_t* repl = ray_repl_create();
         if (repl) {
+            repl->ipc_srv = ipc_srv;
             ray_repl_run(repl);
             ray_repl_destroy(repl);
+        } else if (ipc_srv) {
+            /* No REPL possible — run pure server loop */
+            while (ipc_srv->running)
+                ray_ipc_poll(ipc_srv, 100);
         }
     }
 
 done:
+    if (ipc_srv) ray_ipc_server_destroy(ipc_srv);
     ray_runtime_destroy(rt);
     return rc;
 }
