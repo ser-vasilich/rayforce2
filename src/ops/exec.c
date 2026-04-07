@@ -1728,17 +1728,31 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         result = merged;
     }
 
-    /* All segments pruned: execute DAG on empty segment to get correct
-     * output schema (handles SELECT/PROJECT that reshape columns). */
+    /* All segments pruned: execute DAG on empty table to get correct
+     * output schema (handles SELECT/PROJECT that reshape columns).
+     * Build a fresh 0-row table — do not mutate shared source vectors. */
     if (!result) {
-        ray_t* seg_tbl = build_segment_table(saved_table, 0);
-        if (seg_tbl && !RAY_IS_ERR(seg_tbl)) {
-            /* Zero all column lengths to make an empty input */
-            for (int64_t c = 0; c < ray_table_ncols(seg_tbl); c++) {
-                ray_t* col = ray_table_get_col_idx(seg_tbl, c);
-                if (col) col->len = 0;
+        int64_t ncols = ray_table_ncols(saved_table);
+        ray_t* empty_tbl = ray_table_new(ncols);
+        if (empty_tbl && !RAY_IS_ERR(empty_tbl)) {
+            for (int64_t c = 0; c < ncols; c++) {
+                int64_t name_id = ray_table_col_name(saved_table, c);
+                ray_t* col = ray_table_get_col_idx(saved_table, c);
+                if (!col) continue;
+                int8_t base = col->type;
+                if (col->type == RAY_MAPCOMMON) {
+                    ray_t** mc = (ray_t**)ray_data(col);
+                    base = mc[0] ? mc[0]->type : RAY_I64;
+                } else if (RAY_IS_PARTED(col->type)) {
+                    base = (int8_t)RAY_PARTED_BASETYPE(col->type);
+                }
+                ray_t* ecol = ray_vec_new(base, 0);
+                if (ecol) {
+                    empty_tbl = ray_table_add_col(empty_tbl, name_id, ecol);
+                    ray_release(ecol);
+                }
             }
-            g->table = seg_tbl;
+            g->table = empty_tbl;
             g->selection = NULL;
             result = exec_node(g, root);
             if (g->selection) {
@@ -1746,7 +1760,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
                 g->selection = NULL;
             }
             g->table = saved_table;
-            ray_release(seg_tbl);
+            ray_release(empty_tbl);
         }
     }
 
