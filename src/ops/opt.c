@@ -1681,12 +1681,12 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
          * Only integer/date/time types are supported for pruning. */
         int64_t const_val = 0;
         int8_t lt = lit->type < 0 ? (int8_t)(-lit->type) : lit->type;
-        if (lt == RAY_I64 || lt == RAY_DATE || lt == RAY_TIMESTAMP) {
+        if (lt == RAY_I64 || lt == RAY_TIMESTAMP) {
             if (lit->type < 0)
                 const_val = lit->i64;  /* atom: value in header */
             else
                 memcpy(&const_val, ray_data(lit), sizeof(int64_t));
-        } else if (lt == RAY_I32 || lt == RAY_TIME) {
+        } else if (lt == RAY_I32 || lt == RAY_DATE || lt == RAY_TIME) {
             int32_t v32;
             if (lit->type < 0)
                 v32 = lit->i32;
