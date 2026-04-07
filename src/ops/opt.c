@@ -1757,10 +1757,16 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
 
             if (sn_ext->seg_mask) {
                 /* AND with existing mask (conjunctive filters) */
-                for (uint32_t w = 0; w < n_words; w++)
+                uint32_t min_w = n_words < sn_ext->seg_mask_words
+                               ? n_words : sn_ext->seg_mask_words;
+                for (uint32_t w = 0; w < min_w; w++)
                     sn_ext->seg_mask[w] &= mask[w];
+                /* Zero out words beyond new mask (prune extra segments) */
+                for (uint32_t w = min_w; w < sn_ext->seg_mask_words; w++)
+                    sn_ext->seg_mask[w] = 0;
             } else {
                 sn_ext->seg_mask = mask;
+                sn_ext->seg_mask_words = n_words;
                 mask_owned = true;
             }
         }

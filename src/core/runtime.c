@@ -182,14 +182,14 @@ ray_runtime_t* ray_runtime_create(int argc, char** argv) {
     if (GlobalMemoryStatusEx(&ms))
         rt->mem_budget = (int64_t)(ms.ullTotalPhys * 0.8);
     else
-        rt->mem_budget = (int64_t)4 << 30;
+        rt->mem_budget = (int64_t)(4ULL << 30);
 #else
     long pages = sysconf(_SC_PHYS_PAGES);
     long psize = sysconf(_SC_PAGESIZE);
     if (pages > 0 && psize > 0)
         rt->mem_budget = (int64_t)((double)pages * (double)psize * 0.8);
     else
-        rt->mem_budget = (int64_t)4 << 30;
+        rt->mem_budget = (int64_t)(4ULL << 30);
 #endif
 
     /* Init language (env + builtins) — must be after __VM is set */

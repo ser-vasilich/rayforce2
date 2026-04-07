@@ -1760,9 +1760,11 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
 
     /* Streaming mode: find seg_mask from optimizer (if any) */
     uint64_t* seg_mask = NULL;
+    uint32_t  seg_mask_words = 0;
     for (uint32_t e = 0; e < g->ext_count; e++) {
         if (g->ext_nodes[e] && g->ext_nodes[e]->seg_mask) {
             seg_mask = g->ext_nodes[e]->seg_mask;
+            seg_mask_words = g->ext_nodes[e]->seg_mask_words;
             break;
         }
     }
@@ -1772,7 +1774,8 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
 
     for (int32_t s = 0; s < seg_count; s++) {
         /* Check pruning mask */
-        if (seg_mask && !(seg_mask[s / 64] & (1ULL << (s % 64))))
+        if (seg_mask && ((uint32_t)(s / 64) < seg_mask_words)
+            && !(seg_mask[s / 64] & (1ULL << (s % 64))))
             continue;
 
         /* Check cancellation */
