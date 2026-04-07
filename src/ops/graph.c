@@ -206,6 +206,11 @@ ray_graph_t* ray_graph_new(ray_t* tbl) {
     g->ext_cap = 0;
     g->selection = NULL;
 
+    g->seg_idx = -1;
+    g->seg_count = 0;
+    g->seg_mask = NULL;
+    g->is_streaming = false;
+
     return g;
 }
 

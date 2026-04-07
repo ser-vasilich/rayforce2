@@ -588,26 +588,27 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
             if (col->type == RAY_MAPCOMMON)
                 return materialize_mapcommon(col);
             if (RAY_IS_PARTED(col->type)) {
-                /* Concat parted segments into flat vector (cold path) */
-                int8_t base = (int8_t)RAY_PARTED_BASETYPE(col->type);
-                ray_t** sps = (ray_t**)ray_data(col);
-                uint8_t sba = (base == RAY_SYM && col->len > 0 && sps[0])
-                            ? sps[0]->attrs : 0;
-                int64_t total = ray_parted_nrows(col);
-                ray_t* flat = typed_vec_new(base, sba, total);
-                if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
-                flat->len = total;
-                ray_t** segs = sps;
-                size_t esz = (size_t)ray_sym_elem_size(base, sba);
-                int64_t off = 0;
-                for (int64_t s = 0; s < col->len; s++) {
-                    if (segs[s] && segs[s]->len > 0) {
-                        memcpy((char*)ray_data(flat) + off * esz,
-                               ray_data(segs[s]), (size_t)segs[s]->len * esz);
-                        off += segs[s]->len;
+                if (!g->is_streaming) {
+                    /* First parted column encounter: activate streaming mode */
+                    g->is_streaming = true;
+                    g->seg_count = (int32_t)col->len;
+                    /* Inherit seg_mask from any scan ext that has one */
+                    if (!g->seg_mask) {
+                        for (uint32_t e = 0; e < g->ext_count; e++) {
+                            if (g->ext_nodes[e] && g->ext_nodes[e]->seg_mask) {
+                                g->seg_mask = g->ext_nodes[e]->seg_mask;
+                                break;
+                            }
+                        }
                     }
+                    if (g->seg_idx < 0) g->seg_idx = 0;
                 }
-                return flat;
+                /* Return segment at current index */
+                ray_t** segs = (ray_t**)ray_data(col);
+                ray_t* seg = (g->seg_idx < col->len) ? segs[g->seg_idx] : NULL;
+                if (!seg) return ray_error("oom", NULL);
+                ray_retain(seg);
+                return seg;
             }
             ray_retain(col);
             return col;
@@ -1458,6 +1459,48 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
  * ray_execute -- top-level entry point (lazy pool init)
  * ============================================================================ */
 
+/* Merge two partial results from partition-streamed execution.
+ * Default: table/vector concatenation (filter/project/scan).
+ * OP_GROUP and OP_SORT cases added in later tasks. */
+ray_t* ray_result_merge(ray_t* accum, ray_t* partial, uint16_t root_opcode) {
+    (void)root_opcode;
+    if (!accum || RAY_IS_ERR(accum)) {
+        if (partial && !RAY_IS_ERR(partial)) ray_retain(partial);
+        return partial;
+    }
+    if (!partial || RAY_IS_ERR(partial)) {
+        ray_retain(accum);
+        return accum;
+    }
+
+    /* Table merge: concatenate each column */
+    if (accum->type == RAY_TABLE && partial->type == RAY_TABLE) {
+        int64_t ncols = ray_table_ncols(accum);
+        ray_t* merged = ray_table_new(ncols);
+        for (int64_t c = 0; c < ncols; c++) {
+            int64_t name_id = ray_table_col_name(accum, c);
+            ray_t* a_col = ray_table_get_col_idx(accum, c);
+            ray_t* p_col = ray_table_get_col_idx(partial, c);
+            if (!a_col || !p_col) continue;
+            ray_t* combined = ray_vec_concat(a_col, p_col);
+            if (!combined || RAY_IS_ERR(combined)) {
+                ray_release(merged);
+                return combined;
+            }
+            merged = ray_table_add_col(merged, name_id, combined);
+            ray_release(combined);
+        }
+        return merged;
+    }
+
+    /* Vector merge: concatenate directly */
+    if (accum->type != RAY_TABLE && partial->type != RAY_TABLE) {
+        return ray_vec_concat(accum, partial);
+    }
+
+    return ray_error("type", NULL);
+}
+
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     if (!g || !root) return ray_error("nyi", NULL);
 
@@ -1468,17 +1511,67 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     if (pool)
         atomic_store_explicit(&pool->cancelled, 0, memory_order_relaxed);
 
+    /* Probe pass: execute segment 0 to detect streaming mode */
+    g->seg_idx = 0;
+    g->is_streaming = false;
     ray_t* result = exec_node(g, root);
 
-    /* Final compaction: if a lazy selection remains unconsumed (e.g., filter
-     * followed directly by a terminal node), materialize it now. */
-    if (g->selection && result && !RAY_IS_ERR(result)
-        && result->type == RAY_TABLE) {
-        ray_t* compacted = sel_compact(g, result, g->selection);
-        ray_release(result);
-        ray_release(g->selection);
-        g->selection = NULL;
-        result = compacted;
+    if (!g->is_streaming) {
+        /* Non-parted table: existing path, unchanged */
+        if (g->selection && result && !RAY_IS_ERR(result)
+            && result->type == RAY_TABLE) {
+            ray_t* compacted = sel_compact(g, result, g->selection);
+            ray_release(result);
+            ray_release(g->selection);
+            g->selection = NULL;
+            result = compacted;
+        }
+        return result;
     }
+
+    /* Streaming mode detected. Re-start from first active segment. */
+    ray_release(result);
+    result = NULL;
+
+    for (int32_t s = 0; s < g->seg_count; s++) {
+        /* Check pruning mask */
+        if (g->seg_mask) {
+            if (!(g->seg_mask[s / 64] & (1ULL << (s % 64))))
+                continue;
+        }
+
+        /* Check cancellation */
+        if (pool && atomic_load_explicit(&pool->cancelled, memory_order_relaxed)) {
+            ray_release(result);
+            return ray_error("cancel", NULL);
+        }
+
+        /* Set segment index and re-execute DAG */
+        g->seg_idx = s;
+        g->selection = NULL;
+        ray_t* partial = exec_node(g, root);
+
+        if (!partial || RAY_IS_ERR(partial)) {
+            ray_release(result);
+            return partial;
+        }
+
+        /* Compact partial if lazy selection pending */
+        if (g->selection && partial->type == RAY_TABLE) {
+            ray_t* compacted = sel_compact(g, partial, g->selection);
+            ray_release(partial);
+            ray_release(g->selection);
+            g->selection = NULL;
+            partial = compacted;
+        }
+
+        /* Merge partial into accumulator */
+        ray_t* merged = ray_result_merge(result, partial, root->opcode);
+        ray_release(result);
+        ray_release(partial);
+        if (!merged || RAY_IS_ERR(merged)) return merged;
+        result = merged;
+    }
+
     return result;
 }

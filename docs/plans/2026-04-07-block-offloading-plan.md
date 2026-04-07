@@ -376,12 +376,12 @@ git commit -m "feat: partition pruning produces seg_mask bitmap for parted OP_SC
 
 ---
 
-## Task 4: Streaming Scan — Replace Flat Materialization
+## Task 4: Streaming Scan — Replace Flat Materialization [x]
 
 **Files:**
-- Modify: `src/ops/exec.c:568-614` (OP_SCAN case: add segment-streaming path)
-- Modify: `src/ops/exec.c:1461-1484` (ray_execute: add segment loop orchestration)
-- Modify: `src/ops/ops.h` (add fields to `ray_graph_t` for segment state)
+- [x] Modify: `src/ops/exec.c:568-614` (OP_SCAN case: add segment-streaming path)
+- [x] Modify: `src/ops/exec.c:1461-1484` (ray_execute: add segment loop orchestration)
+- [x] Modify: `src/ops/ops.h` (add fields to `ray_graph_t` for segment state)
 
 **Step 1: Add segment state to `ray_graph_t`**
 
