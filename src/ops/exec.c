@@ -1570,20 +1570,46 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
     return seg_tbl;
 }
 
+/* Is this opcode safe for segment streaming with concatenation merge?
+ * Only element-wise, scan, filter, project, and alias ops produce
+ * results that can be correctly concatenated across segments.
+ * Everything else (joins, aggregations, sorts, graph ops, etc.)
+ * requires specialized merge or global state. */
+static bool op_streamable(uint16_t opc) {
+    switch (opc) {
+        /* Data access */
+        case OP_SCAN: case OP_CONST:
+        /* Element-wise unary */
+        case OP_NEG: case OP_ABS: case OP_NOT: case OP_SQRT:
+        case OP_LOG: case OP_EXP: case OP_CEIL: case OP_FLOOR:
+        case OP_ISNULL: case OP_CAST:
+        /* Element-wise binary */
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+        case OP_EQ: case OP_NE: case OP_LT: case OP_LE:
+        case OP_GT: case OP_GE: case OP_AND: case OP_OR:
+        case OP_MIN2: case OP_MAX2: case OP_IF:
+        /* String element-wise */
+        case OP_LIKE: case OP_ILIKE: case OP_UPPER: case OP_LOWER:
+        case OP_STRLEN: case OP_SUBSTR: case OP_REPLACE: case OP_TRIM:
+        case OP_CONCAT:
+        /* Temporal element-wise */
+        case OP_EXTRACT: case OP_DATE_TRUNC:
+        /* Structure */
+        case OP_FILTER: case OP_SELECT: case OP_ALIAS:
+        case OP_MATERIALIZE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Check whether a DAG can be correctly executed via segment streaming
- * with simple concatenation merge. Operations like GROUP, SORT, JOIN
- * require specialized merge and fall back to flat execution until
- * their merge functions are implemented. */
+ * with simple concatenation merge. Every live node must be streamable. */
 static bool dag_can_stream(ray_graph_t* g) {
     for (uint32_t i = 0; i < g->node_count; i++) {
         if (g->nodes[i].flags & OP_FLAG_DEAD) continue;
-        switch (g->nodes[i].opcode) {
-            case OP_GROUP: case OP_SORT: case OP_JOIN:
-            case OP_WINDOW_JOIN: case OP_PIVOT: case OP_WINDOW:
-            case OP_HEAD: case OP_TAIL:
-                return false;
-            default: break;
-        }
+        if (!op_streamable(g->nodes[i].opcode))
+            return false;
     }
     return true;
 }
