@@ -1728,28 +1728,26 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         result = merged;
     }
 
-    /* All segments pruned: return empty table matching schema */
-    if (!result && g->table && g->table->type == RAY_TABLE) {
-        int64_t ncols = ray_table_ncols(saved_table);
-        ray_t* empty = ray_table_new(ncols);
-        for (int64_t c = 0; c < ncols; c++) {
-            int64_t name_id = ray_table_col_name(saved_table, c);
-            ray_t* col = ray_table_get_col_idx(saved_table, c);
-            if (!col) continue;
-            int8_t base = col->type;
-            if (col->type == RAY_MAPCOMMON) {
-                ray_t** mc = (ray_t**)ray_data(col);
-                base = mc[0] ? mc[0]->type : RAY_I64;
-            } else if (RAY_IS_PARTED(col->type)) {
-                base = (int8_t)RAY_PARTED_BASETYPE(col->type);
+    /* All segments pruned: execute DAG on empty segment to get correct
+     * output schema (handles SELECT/PROJECT that reshape columns). */
+    if (!result) {
+        ray_t* seg_tbl = build_segment_table(saved_table, 0);
+        if (seg_tbl && !RAY_IS_ERR(seg_tbl)) {
+            /* Zero all column lengths to make an empty input */
+            for (int64_t c = 0; c < ray_table_ncols(seg_tbl); c++) {
+                ray_t* col = ray_table_get_col_idx(seg_tbl, c);
+                if (col) col->len = 0;
             }
-            ray_t* ecol = ray_vec_new(base, 0);
-            if (ecol) {
-                empty = ray_table_add_col(empty, name_id, ecol);
-                ray_release(ecol);
+            g->table = seg_tbl;
+            g->selection = NULL;
+            result = exec_node(g, root);
+            if (g->selection) {
+                ray_release(g->selection);
+                g->selection = NULL;
             }
+            g->table = saved_table;
+            ray_release(seg_tbl);
         }
-        return empty;
     }
 
     return result;

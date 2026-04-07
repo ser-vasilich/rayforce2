@@ -1692,6 +1692,7 @@ static void pass_partition_pruning(ray_graph_t* g, ray_op_t* root) {
                 memcpy(&v32, ray_data(lit), sizeof(int32_t));
             const_val = v32;
         } else {
+            ray_sys_free(mask);
             continue; /* unsupported type for partition pruning */
         }
 
