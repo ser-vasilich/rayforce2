@@ -1791,6 +1791,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         /* Check cancellation */
         if (pool && atomic_load_explicit(&pool->cancelled, memory_order_relaxed)) {
             g->table = saved_table;
+            if (g->selection) { ray_release(g->selection); g->selection = NULL; }
             ray_release(result);
             return ray_error("cancel", NULL);
         }
@@ -1801,6 +1802,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         ray_t* seg_tbl = build_segment_table(saved_table, s);
         if (!seg_tbl || RAY_IS_ERR(seg_tbl)) {
             g->table = saved_table;
+            if (g->selection) { ray_release(g->selection); g->selection = NULL; }
             ray_release(result);
             return seg_tbl;
         }
@@ -1833,9 +1835,15 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         ray_t* merged = ray_result_merge(result, partial);
         ray_release(result);
         ray_release(partial);
-        if (!merged || RAY_IS_ERR(merged)) return merged;
+        if (!merged || RAY_IS_ERR(merged)) {
+            if (g->selection) { ray_release(g->selection); g->selection = NULL; }
+            return merged;
+        }
         result = merged;
     }
+
+    /* Clean up any lingering selection from the last segment iteration */
+    if (g->selection) { ray_release(g->selection); g->selection = NULL; }
 
     /* All segments pruned: execute DAG on empty table to get correct
      * output schema (handles SELECT/PROJECT that reshape columns).
@@ -1869,6 +1877,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
                 ray_release(ecol);
             }
             g->table = empty_tbl;
+            if (g->selection) ray_release(g->selection);
             g->selection = NULL;
             result = exec_node(g, root);
             if (g->selection) {
