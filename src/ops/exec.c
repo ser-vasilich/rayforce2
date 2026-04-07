@@ -1478,7 +1478,10 @@ ray_t* ray_result_merge(ray_t* accum, ray_t* partial) {
             int64_t name_id = ray_table_col_name(accum, c);
             ray_t* a_col = ray_table_get_col_idx(accum, c);
             ray_t* p_col = ray_table_get_col_idx(partial, c);
-            if (!a_col || !p_col) continue;
+            if (!a_col || !p_col) {
+                ray_release(merged);
+                return ray_error("schema", NULL);
+            }
             ray_t* combined = ray_vec_concat(a_col, p_col);
             if (!combined || RAY_IS_ERR(combined)) {
                 ray_release(merged);
@@ -1530,7 +1533,10 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
              * value across seg_rows elements. */
             ray_t** mc_ptrs = (ray_t**)ray_data(col);
             ray_t* kv = mc_ptrs[0];  /* key_values */
-            if (!kv || seg_idx >= kv->len) continue;
+            if (!kv || seg_idx >= kv->len) {
+                ray_release(seg_tbl);
+                return ray_error("schema", NULL);
+            }
             int8_t kv_type = kv->type;
             size_t esz = (size_t)ray_sym_elem_size(kv_type, kv->attrs);
             ray_t* flat = ray_vec_new(kv_type, seg_rows);
