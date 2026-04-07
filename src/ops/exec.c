@@ -588,27 +588,26 @@ static ray_t* exec_node_inner(ray_graph_t* g, ray_op_t* op) {
             if (col->type == RAY_MAPCOMMON)
                 return materialize_mapcommon(col);
             if (RAY_IS_PARTED(col->type)) {
-                if (!g->is_streaming) {
-                    /* First parted column encounter: activate streaming mode */
-                    g->is_streaming = true;
-                    g->seg_count = (int32_t)col->len;
-                    /* Inherit seg_mask from any scan ext that has one */
-                    if (!g->seg_mask) {
-                        for (uint32_t e = 0; e < g->ext_count; e++) {
-                            if (g->ext_nodes[e] && g->ext_nodes[e]->seg_mask) {
-                                g->seg_mask = g->ext_nodes[e]->seg_mask;
-                                break;
-                            }
-                        }
+                /* Concat parted segments into flat vector (cold path) */
+                int8_t base = (int8_t)RAY_PARTED_BASETYPE(col->type);
+                ray_t** sps = (ray_t**)ray_data(col);
+                uint8_t sba = (base == RAY_SYM && col->len > 0 && sps[0])
+                            ? sps[0]->attrs : 0;
+                int64_t total = ray_parted_nrows(col);
+                ray_t* flat = typed_vec_new(base, sba, total);
+                if (!flat || RAY_IS_ERR(flat)) return ray_error("oom", NULL);
+                flat->len = total;
+                ray_t** segs = sps;
+                size_t esz = (size_t)ray_sym_elem_size(base, sba);
+                int64_t off = 0;
+                for (int64_t s = 0; s < col->len; s++) {
+                    if (segs[s] && segs[s]->len > 0) {
+                        memcpy((char*)ray_data(flat) + off * esz,
+                               ray_data(segs[s]), (size_t)segs[s]->len * esz);
+                        off += segs[s]->len;
                     }
-                    if (g->seg_idx < 0) g->seg_idx = 0;
                 }
-                /* Return segment at current index */
-                ray_t** segs = (ray_t**)ray_data(col);
-                ray_t* seg = (g->seg_idx < col->len) ? segs[g->seg_idx] : NULL;
-                if (!seg) return ray_error("oom", NULL);
-                ray_retain(seg);
-                return seg;
+                return flat;
             }
             ray_retain(col);
             return col;
@@ -1501,6 +1500,36 @@ ray_t* ray_result_merge(ray_t* accum, ray_t* partial, uint16_t root_opcode) {
     return ray_error("type", NULL);
 }
 
+/* Build a flat table containing one segment's columns from a parted table.
+ * For each parted column, extracts segs[seg_idx] as a flat vector.
+ * Non-parted columns are retained as-is. MAPCOMMON columns are skipped. */
+static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
+    int64_t ncols = ray_table_ncols(parted_tbl);
+    ray_t* seg_tbl = ray_table_new(ncols);
+    if (!seg_tbl || RAY_IS_ERR(seg_tbl)) return seg_tbl;
+
+    for (int64_t c = 0; c < ncols; c++) {
+        int64_t name_id = ray_table_col_name(parted_tbl, c);
+        ray_t* col = ray_table_get_col_idx(parted_tbl, c);
+        if (!col) continue;
+        if (col->type == RAY_MAPCOMMON) continue;
+
+        if (RAY_IS_PARTED(col->type)) {
+            ray_t** segs = (ray_t**)ray_data(col);
+            if (seg_idx < col->len && segs[seg_idx]) {
+                ray_retain(segs[seg_idx]);
+                seg_tbl = ray_table_add_col(seg_tbl, name_id, segs[seg_idx]);
+                ray_release(segs[seg_idx]);
+            }
+        } else {
+            ray_retain(col);
+            seg_tbl = ray_table_add_col(seg_tbl, name_id, col);
+            ray_release(col);
+        }
+    }
+    return seg_tbl;
+}
+
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     if (!g || !root) return ray_error("nyi", NULL);
 
@@ -1511,13 +1540,21 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     if (pool)
         atomic_store_explicit(&pool->cancelled, 0, memory_order_relaxed);
 
-    /* Probe pass: execute segment 0 to detect streaming mode */
-    g->seg_idx = 0;
-    g->is_streaming = false;
-    ray_t* result = exec_node(g, root);
+    /* Detect streaming mode: check if g->table has parted columns */
+    int32_t seg_count = 0;
+    if (g->table) {
+        for (int64_t c = 0; c < ray_table_ncols(g->table); c++) {
+            ray_t* col = ray_table_get_col_idx(g->table, c);
+            if (col && RAY_IS_PARTED(col->type)) {
+                seg_count = (int32_t)col->len;
+                break;
+            }
+        }
+    }
 
-    if (!g->is_streaming) {
+    if (seg_count == 0) {
         /* Non-parted table: existing path, unchanged */
+        ray_t* result = exec_node(g, root);
         if (g->selection && result && !RAY_IS_ERR(result)
             && result->type == RAY_TABLE) {
             ray_t* compacted = sel_compact(g, result, g->selection);
@@ -1529,40 +1566,60 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         return result;
     }
 
-    /* Streaming mode detected. Re-start from first active segment. */
-    ray_release(result);
-    result = NULL;
-
-    for (int32_t s = 0; s < g->seg_count; s++) {
-        /* Check pruning mask */
-        if (g->seg_mask) {
-            if (!(g->seg_mask[s / 64] & (1ULL << (s % 64))))
-                continue;
+    /* Streaming mode: find seg_mask from optimizer (if any) */
+    uint64_t* seg_mask = NULL;
+    for (uint32_t e = 0; e < g->ext_count; e++) {
+        if (g->ext_nodes[e] && g->ext_nodes[e]->seg_mask) {
+            seg_mask = g->ext_nodes[e]->seg_mask;
+            break;
         }
+    }
+
+    ray_t* saved_table = g->table;
+    ray_t* result = NULL;
+
+    for (int32_t s = 0; s < seg_count; s++) {
+        /* Check pruning mask */
+        if (seg_mask && !(seg_mask[s / 64] & (1ULL << (s % 64))))
+            continue;
 
         /* Check cancellation */
         if (pool && atomic_load_explicit(&pool->cancelled, memory_order_relaxed)) {
+            g->table = saved_table;
             ray_release(result);
             return ray_error("cancel", NULL);
         }
 
-        /* Set segment index and re-execute DAG */
-        g->seg_idx = s;
+        /* Build flat table for this segment and swap g->table.
+         * All operators (OP_SCAN, GROUP, expr_compile, etc.) see flat
+         * columns via g->table, so no special-casing is needed. */
+        ray_t* seg_tbl = build_segment_table(saved_table, s);
+        if (!seg_tbl || RAY_IS_ERR(seg_tbl)) {
+            g->table = saved_table;
+            ray_release(result);
+            return seg_tbl;
+        }
+        g->table = seg_tbl;
         g->selection = NULL;
+
         ray_t* partial = exec_node(g, root);
 
-        if (!partial || RAY_IS_ERR(partial)) {
-            ray_release(result);
-            return partial;
-        }
-
-        /* Compact partial if lazy selection pending */
-        if (g->selection && partial->type == RAY_TABLE) {
+        /* Compact lazy selection for this segment */
+        if (g->selection && partial && !RAY_IS_ERR(partial)
+            && partial->type == RAY_TABLE) {
             ray_t* compacted = sel_compact(g, partial, g->selection);
             ray_release(partial);
             ray_release(g->selection);
             g->selection = NULL;
             partial = compacted;
+        }
+
+        g->table = saved_table;
+        ray_release(seg_tbl);
+
+        if (!partial || RAY_IS_ERR(partial)) {
+            ray_release(result);
+            return partial;
         }
 
         /* Merge partial into accumulator */

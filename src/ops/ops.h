@@ -365,11 +365,6 @@ typedef struct ray_graph {
     uint32_t       ext_count;   /* number of extended nodes */
     uint32_t       ext_cap;     /* capacity of ext_nodes array */
     ray_t*          selection;   /* RAY_SEL bitmap — lazy filter (NULL = all pass) */
-    /* Segment streaming state (block offloading) */
-    int32_t        seg_idx;      /* current segment index (-1 = not streaming) */
-    int32_t        seg_count;    /* total active segments */
-    uint64_t*      seg_mask;     /* shared pruning mask (from optimizer, or NULL) */
-    bool           is_streaming; /* true if table has parted columns */
 } ray_graph_t;
 
 /* ===== Morsel Iterator ===== */
