@@ -1773,10 +1773,12 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     ray_t* result = NULL;
 
     for (int32_t s = 0; s < seg_count; s++) {
-        /* Check pruning mask */
-        if (seg_mask && ((uint32_t)(s / 64) < seg_mask_words)
-            && !(seg_mask[s / 64] & (1ULL << (s % 64))))
-            continue;
+        /* Check pruning mask — segments beyond the mask are pruned */
+        if (seg_mask) {
+            if ((uint32_t)(s / 64) >= seg_mask_words
+                || !(seg_mask[s / 64] & (1ULL << (s % 64))))
+                continue;
+        }
 
         /* Check cancellation */
         if (pool && atomic_load_explicit(&pool->cancelled, memory_order_relaxed)) {
