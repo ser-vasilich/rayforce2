@@ -109,10 +109,10 @@ git commit -m "feat: memory budget detection in runtime (80% of physical RAM)"
 
 ---
 
-## Task 2: Segment Iterator Structure
+## Task 2: Segment Iterator Structure [x]
 
 **Files:**
-- Modify: `src/ops/ops.h:369` (add `ray_seg_iter_t` struct)
+- [x] Modify: `src/ops/ops.h:369` (add `ray_seg_iter_t` struct)
 
 **Step 1: Add segment iterator struct**
 
