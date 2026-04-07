@@ -1540,6 +1540,10 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
             }
             int8_t kv_type = kv->type;
             size_t esz = (size_t)ray_sym_elem_size(kv_type, kv->attrs);
+            if (esz == 0) {
+                ray_release(seg_tbl);
+                return ray_error("type", NULL);
+            }
             ray_t* flat = ray_vec_new(kv_type, seg_rows);
             if (!flat || RAY_IS_ERR(flat)) {
                 ray_release(seg_tbl);
@@ -1801,6 +1805,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
             return seg_tbl;
         }
         g->table = seg_tbl;
+        if (g->selection) ray_release(g->selection);
         g->selection = NULL;
 
         ray_t* partial = exec_node(g, root);
@@ -1819,6 +1824,7 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         ray_release(seg_tbl);
 
         if (!partial || RAY_IS_ERR(partial)) {
+            if (g->selection) { ray_release(g->selection); g->selection = NULL; }
             ray_release(result);
             return partial;
         }
@@ -1874,5 +1880,6 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
         }
     }
 
+    if (!result) return ray_error("oom", NULL);
     return result;
 }
