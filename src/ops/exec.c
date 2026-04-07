@@ -22,6 +22,7 @@
  */
 
 #include "ops/internal.h"
+#include "mem/sys.h"
 
 /* Global profiler instance (zero-initialized = inactive) */
 ray_profile_t g_ray_profile;
@@ -1571,9 +1572,11 @@ static ray_t* build_segment_table(ray_t* parted_tbl, int32_t seg_idx) {
             seg_tbl = ray_table_add_col(seg_tbl, name_id, segs[seg_idx]);
             ray_release(segs[seg_idx]);
         } else {
-            ray_retain(col);
-            seg_tbl = ray_table_add_col(seg_tbl, name_id, col);
-            ray_release(col);
+            /* Non-parted, non-MAPCOMMON column in a parted table:
+             * streaming should have been rejected by ray_execute().
+             * Error here as defense-in-depth to avoid silent duplication. */
+            ray_release(seg_tbl);
+            return ray_error("schema", NULL);
         }
     }
     return seg_tbl;
@@ -1614,25 +1617,99 @@ static bool op_streamable(uint16_t opc) {
     }
 }
 
-/* Check whether a DAG can be correctly executed via segment streaming
- * with simple concatenation merge. Every live node must be streamable.
- * OP_CONST is allowed only for scalar (atom) literals — vector constants
- * have total-row length and would mismatch per-segment data. */
-static bool dag_can_stream(ray_graph_t* g) {
-    for (uint32_t i = 0; i < g->node_count; i++) {
-        if (g->nodes[i].flags & OP_FLAG_DEAD) continue;
-        uint16_t opc = g->nodes[i].opcode;
-        if (opc == OP_CONST) {
-            /* Scalar constants are safe; vector constants are not */
-            ray_op_ext_t* ext = find_ext(g, g->nodes[i].id);
-            if (ext && ext->literal && !ray_is_atom(ext->literal))
-                return false;
-            continue;
-        }
-        if (!op_streamable(opc))
-            return false;
+/* Walk the root's input subtree to check if it reaches a default-table
+ * OP_SCAN.  Returns true if found, false otherwise.  Also rejects the
+ * subtree (sets *ok = false) on vector constants or secondary-table scans.
+ *
+ * Several streamable ops store extra operands in ext nodes rather than in
+ * the standard inputs[] array.  These hidden children must be walked too:
+ *   OP_SELECT  — ext->sort.columns[0..n_cols-1]
+ *   OP_IF      — else branch: g->nodes[(uint32_t)(uintptr_t)ext->literal]
+ *   OP_SUBSTR  — length arg:  g->nodes[(uint32_t)(uintptr_t)ext->literal]
+ *   OP_REPLACE — replacement: g->nodes[(uint32_t)(uintptr_t)ext->literal]
+ *   OP_CONCAT  — args 2+:    g->nodes[trail[i-2]] (uint32_t[] after ext) */
+static bool subtree_has_default_scan(ray_graph_t* g, ray_op_t* op, bool* ok,
+                                     uint64_t* visited) {
+    if (!op || !*ok) return false;
+    /* Skip already-visited nodes (DAGs may share subexpressions). */
+    uint32_t nid = op->id;
+    if (nid < g->node_count) {
+        if (visited[nid / 64] & (1ULL << (nid % 64))) return false;
+        visited[nid / 64] |= (1ULL << (nid % 64));
     }
-    return true;
+    uint16_t opc = op->opcode;
+    if (opc == OP_CONST) {
+        ray_op_ext_t* ext = find_ext(g, op->id);
+        if (ext && ext->literal && !ray_is_atom(ext->literal))
+            *ok = false;           /* vector constant — can't stream */
+        return false;
+    }
+    if (opc == OP_SCAN) {
+        ray_op_ext_t* ext = find_ext(g, op->id);
+        if (ext) {
+            uint16_t stored_id = 0;
+            memcpy(&stored_id, ext->base.pad, sizeof(uint16_t));
+            if (stored_id > 0) { *ok = false; return false; }
+            return true;           /* default-table scan */
+        }
+        return false;
+    }
+    if (!op_streamable(opc)) { *ok = false; return false; }
+    bool found = false;
+    for (uint8_t i = 0; i < op->arity && i < 2; i++)
+        found |= subtree_has_default_scan(g, op->inputs[i], ok, visited);
+
+    /* Walk hidden operands stored in ext nodes */
+    if (opc == OP_SELECT) {
+        ray_op_ext_t* ext = find_ext(g, op->id);
+        if (ext) {
+            for (uint8_t c = 0; c < ext->sort.n_cols && *ok; c++)
+                found |= subtree_has_default_scan(g, ext->sort.columns[c], ok, visited);
+        }
+    } else if (opc == OP_IF || opc == OP_SUBSTR || opc == OP_REPLACE) {
+        /* 3rd operand stored as node index in ext->literal */
+        ray_op_ext_t* ext = find_ext(g, op->id);
+        if (ext) {
+            uint32_t child_id = (uint32_t)(uintptr_t)ext->literal;
+            if (child_id < g->node_count)
+                found |= subtree_has_default_scan(g, &g->nodes[child_id], ok, visited);
+        }
+    } else if (opc == OP_CONCAT) {
+        /* n_args in ext->sym, args 2+ as uint32_t[] trailing after ext */
+        ray_op_ext_t* ext = find_ext(g, op->id);
+        if (ext) {
+            int n_args = (int)ext->sym;
+            uint32_t* trail = (uint32_t*)((char*)(ext + 1));
+            for (int i = 2; i < n_args && *ok; i++) {
+                if (trail[i - 2] < g->node_count)
+                    found |= subtree_has_default_scan(g, &g->nodes[trail[i - 2]], ok, visited);
+            }
+        }
+    }
+    return found;
+}
+
+/* Check whether a DAG rooted at `root` can be correctly executed via
+ * segment streaming with simple concatenation merge.
+ * Every node in the root's subtree must be streamable, and at least one
+ * OP_SCAN must read from the default table (stored_table_id == 0).
+ * OP_CONST is allowed only for scalar (atom) literals — vector constants
+ * have total-row length and would mismatch per-segment data.
+ * OP_SCAN nodes referencing secondary tables (stored_table_id > 0)
+ * disqualify streaming, since the loop only swaps g->table.
+ * DAGs that never scan the default table (e.g. a bare OP_CONST behind
+ * passthrough ops) are rejected to avoid duplicating table-independent
+ * results across partitions. */
+static bool dag_can_stream(ray_graph_t* g, ray_op_t* root) {
+    uint32_t n_words = (g->node_count + 63) / 64;
+    uint64_t  stack_buf[16];                  /* covers DAGs up to 1024 nodes */
+    uint64_t* visited = (n_words <= 16) ? stack_buf : (uint64_t*)ray_sys_alloc(n_words * 8);
+    if (!visited) return false;
+    memset(visited, 0, n_words * 8);
+    bool ok = true;
+    bool has_default_scan = subtree_has_default_scan(g, root, &ok, visited);
+    if (visited != stack_buf) ray_sys_free(visited);
+    return ok && has_default_scan;
 }
 
 ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
@@ -1645,19 +1722,28 @@ ray_t* ray_execute(ray_graph_t* g, ray_op_t* root) {
     if (pool)
         atomic_store_explicit(&pool->cancelled, 0, memory_order_relaxed);
 
-    /* Detect streaming mode: check if g->table has parted columns */
+    /* Detect streaming mode: check if g->table has parted columns.
+     * All non-MAPCOMMON columns must be parted; a flat (non-parted)
+     * column would be duplicated across every segment table, producing
+     * wrong results after concatenation merge. */
     int32_t seg_count = 0;
     if (g->table) {
+        bool has_flat = false;
         for (int64_t c = 0; c < ray_table_ncols(g->table); c++) {
             ray_t* col = ray_table_get_col_idx(g->table, c);
-            if (col && RAY_IS_PARTED(col->type)) {
-                seg_count = (int32_t)col->len;
-                break;
+            if (!col) continue;
+            if (RAY_IS_PARTED(col->type)) {
+                if (seg_count == 0)
+                    seg_count = (int32_t)col->len;
+            } else if (col->type != RAY_MAPCOMMON) {
+                has_flat = true;
             }
         }
+        if (has_flat)
+            seg_count = 0;  /* fall back to flat materialization */
     }
 
-    if (seg_count == 0 || !dag_can_stream(g)) {
+    if (seg_count == 0 || !dag_can_stream(g, root)) {
         /* Non-parted table or DAG contains ops that need specialized merge:
          * use existing flat-materialization path. */
         ray_t* result = exec_node(g, root);

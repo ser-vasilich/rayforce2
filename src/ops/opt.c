@@ -1465,15 +1465,15 @@ static ray_op_t* pass_filter_reorder(ray_graph_t* g, ray_op_t* root) {
  * pass can clean it up.
  * -------------------------------------------------------------------------- */
 
-static void pass_projection_pushdown(ray_graph_t* g, ray_op_t* root) {
-    if (!g || !root) return;
+static bool pass_projection_pushdown(ray_graph_t* g, ray_op_t* root) {
+    if (!g || !root) return false;
     uint32_t nc = g->node_count;
 
     bool live_stack[256];
     bool* live = nc <= 256 ? live_stack : (bool*)ray_sys_alloc(nc * sizeof(bool));
     uint32_t q_stack[256];
     uint32_t* q = nc <= 256 ? q_stack : (uint32_t*)ray_sys_alloc(nc * sizeof(uint32_t));
-    if (!live || !q) { if (nc > 256) { ray_sys_free(live); ray_sys_free(q); } return; }
+    if (!live || !q) { if (nc > 256) { ray_sys_free(live); ray_sys_free(q); } return false; }
     memset(live, 0, nc * sizeof(bool));
 
     /* BFS from root */
@@ -1599,6 +1599,7 @@ static void pass_projection_pushdown(ray_graph_t* g, ray_op_t* root) {
     }
 
     if (nc > 256) { ray_sys_free(live); ray_sys_free(q); }
+    return true;
 }
 
 /* --------------------------------------------------------------------------
@@ -1803,11 +1804,14 @@ ray_op_t* ray_optimize(ray_graph_t* g, ray_op_t* root) {
     ray_profile_tick("filter reorder");
 
     /* Pass 7: Projection pushdown (mark unreachable nodes dead) */
-    pass_projection_pushdown(g, root);
+    bool proj_ok = pass_projection_pushdown(g, root);
     ray_profile_tick("projection pushdown");
 
-    /* Pass 8: Partition pruning (set est_rows hints for mapcommon filters) */
-    pass_partition_pruning(g, root);
+    /* Pass 8: Partition pruning (set est_rows hints for mapcommon filters).
+     * Only safe to run if projection pushdown completed: pruning walks all
+     * nodes and would attach seg_masks to disconnected branches otherwise. */
+    if (proj_ok)
+        pass_partition_pruning(g, root);
     ray_profile_tick("partition pruning");
 
     /* Pass 9: Fusion */
