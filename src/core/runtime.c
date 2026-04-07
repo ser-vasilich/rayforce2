@@ -27,6 +27,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 /* Forward-declare lang init/destroy to avoid eval.h ray_vm_t conflict */
 extern ray_err_t ray_lang_init(void);
@@ -170,11 +175,41 @@ ray_runtime_t* ray_runtime_create(int argc, char** argv) {
     rt->vms[0]->id = 0;
     __VM = rt->vms[0];
 
+    /* Detect memory budget: 80% of physical RAM */
+#ifdef _WIN32
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms))
+        rt->mem_budget = (int64_t)(ms.ullTotalPhys * 0.8);
+    else
+        rt->mem_budget = (int64_t)(4ULL << 30);
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long psize = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && psize > 0)
+        rt->mem_budget = (int64_t)((double)pages * (double)psize * 0.8);
+    else
+        rt->mem_budget = (int64_t)(4ULL << 30);
+#endif
+
     /* Init language (env + builtins) — must be after __VM is set */
     ray_lang_init();
 
     __RUNTIME = rt;
     return rt;
+}
+
+/* ===== Memory Budget API ===== */
+
+int64_t ray_mem_budget(void) {
+    return __RUNTIME ? __RUNTIME->mem_budget : 0;
+}
+
+bool ray_mem_pressure(void) {
+    if (!__RUNTIME) return false;
+    ray_mem_stats_t st;
+    ray_mem_stats(&st);
+    return (int64_t)(st.bytes_allocated + st.direct_bytes) > __RUNTIME->mem_budget;
 }
 
 void ray_runtime_destroy(ray_runtime_t* rt) {

@@ -38,6 +38,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 
+/* Forward-declare runtime lifecycle for mem_budget test */
+typedef struct ray_runtime_s ray_runtime_t;
+extern ray_runtime_t* ray_runtime_create(int argc, char** argv);
+extern void           ray_runtime_destroy(ray_runtime_t* rt);
+
 #define TMP_COL_PATH  "/tmp/rayforce_test_col.dat"
 #define TMP_SPLAY_DIR "/tmp/rayforce_test_splay"
 
@@ -1560,6 +1565,24 @@ static MunitResult test_serde_null_roundtrip(const void* params, void* fixture) 
     return MUNIT_OK;
 }
 
+/* ---- test_mem_budget --------------------------------------------------- */
+
+static MunitResult test_mem_budget(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+    /* Uses its own runtime since store_setup only does heap/sym init */
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    int64_t budget = ray_mem_budget();
+    /* Budget should be > 0 (detected from OS) */
+    munit_assert_int((int)(budget > 0), ==, 1);
+    /* At startup with minimal allocations, should not be under pressure */
+    munit_assert_false(ray_mem_pressure());
+
+    ray_runtime_destroy(rt);
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1590,6 +1613,7 @@ static MunitTest store_tests[] = {
     { "/read_splayed_bad_sym",   test_read_splayed_bad_sym_fatal, store_setup, store_teardown, 0, NULL },
     { "/serde_long_str_roundtrip", test_serde_long_str_roundtrip, store_setup, store_teardown, 0, NULL },
     { "/serde_null_roundtrip", test_serde_null_roundtrip, store_setup, store_teardown, 0, NULL },
+    { "/mem_budget",          test_mem_budget,          NULL,        NULL,            0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 

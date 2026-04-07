@@ -173,6 +173,11 @@ ray_t*    ray_alloc(size_t data_size);
  * when the owning heap flushes foreign blocks. */
 void     ray_free(ray_t* v);
 
+/* ===== Memory Budget API ===== */
+
+int64_t  ray_mem_budget(void);      /* returns memory budget in bytes */
+bool     ray_mem_pressure(void);    /* true if usage exceeds budget */
+
 /* ===== COW / Ref Counting API ===== */
 
 void     ray_retain(ray_t* v);
