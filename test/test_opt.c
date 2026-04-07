@@ -458,9 +458,6 @@ static MunitResult test_partition_pruning_mask(const void* params, void* data) {
     munit_assert_true(val_ext->seg_mask[0] == expected);
 
     ray_graph_free(g);
-    ray_release(key_values);
-    ray_release(row_counts);
-    for (int i = 0; i < 4; i++) ray_release(segs[i]);
     ray_release(mapcommon);
     ray_release(val_parted);
     ray_release(tbl);
