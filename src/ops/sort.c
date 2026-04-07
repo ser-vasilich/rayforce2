@@ -2246,6 +2246,7 @@ ray_t* exec_sort(ray_graph_t* g, ray_op_t* op, ray_t* tbl, int64_t limit) {
         if (!nc || RAY_IS_ERR(nc)) {
             for (int64_t j = 0; j < c; j++)
                 if (new_cols[j]) ray_release(new_cols[j]);
+            ray_release(result);
             if (sorted_keys_hdr) scratch_free(sorted_keys_hdr);
             for (uint8_t k = 0; k < n_sort; k++)
                 if (sort_owned[k] && sort_vecs[k] && !RAY_IS_ERR(sort_vecs[k]))
