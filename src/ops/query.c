@@ -2509,10 +2509,23 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
         ray_t* right_agg_col = (agg_src_col >= 0) ? ray_table_get_col(right_tbl, agg_src_col) : NULL;
         if (agg_src_col >= 0 && !right_agg_col) return ray_error("domain", NULL);
 
+        /* Validate aggregation column is a numeric type */
+        int8_t agg_type = right_agg_col ? right_agg_col->type : RAY_I64;
+        if (right_agg_col) {
+            switch (agg_type) {
+            case RAY_I64: case RAY_I32: case RAY_I16: case RAY_U8:
+            case RAY_F64: case RAY_F32: case RAY_BOOL:
+            case RAY_DATE: case RAY_TIME: case RAY_TIMESTAMP:
+                break;
+            default:
+                for (int i = 0; i < 4; i++) ray_release(eargs[i]);
+                return ray_error("type", NULL);
+            }
+        }
+
         /* For each left row, find matching right rows within the time window */
         /* intervals is a list of [lo, hi] pairs, one per left row */
-        int is_f64 = (right_agg_col && right_agg_col->type == RAY_F64);
-        int8_t agg_type = right_agg_col ? right_agg_col->type : RAY_I64;
+        int is_float = (right_agg_col && (agg_type == RAY_F64 || agg_type == RAY_F32));
         ray_t* result_agg = ray_vec_new(agg_type, left_nrows);
         if (RAY_IS_ERR(result_agg)) return result_agg;
 
@@ -2563,8 +2576,10 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
 
                 /* Apply aggregation */
                 if (right_agg_col) {
-                    if (is_f64) {
-                        double v = ((double*)ray_data(right_agg_col))[rr];
+                    if (is_float) {
+                        double v = (agg_type == RAY_F32)
+                            ? (double)((float*)ray_data(right_agg_col))[rr]
+                            : ((double*)ray_data(right_agg_col))[rr];
                         if (!found || (agg_op == OP_MIN && v < best_val_f) ||
                             (agg_op == OP_MAX && v > best_val_f))
                             best_val_f = v;
@@ -2580,9 +2595,14 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
 
             /* Store result — write with correct element width */
             if (found) {
-                if (is_f64) {
-                    double v = best_val_f;
-                    result_agg = ray_vec_append(result_agg, &v);
+                if (is_float) {
+                    if (agg_type == RAY_F32) {
+                        float v = (float)best_val_f;
+                        result_agg = ray_vec_append(result_agg, &v);
+                    } else {
+                        double v = best_val_f;
+                        result_agg = ray_vec_append(result_agg, &v);
+                    }
                 } else {
                     int64_t idx = result_agg->len;
                     uint8_t zero[8] = {0};
