@@ -305,10 +305,10 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         switch (op->opcode) {
             case OP_SUM:   result = in_type == RAY_F64 ? ray_f64(merged.sum_f) : ray_i64(merged.sum_i); break;
             case OP_PROD:  result = in_type == RAY_F64 ? ray_f64(merged.prod_f) : ray_i64(merged.prod_i); break;
-            case OP_MIN:   result = in_type == RAY_F64 ? ray_f64(merged.cnt > 0 ? merged.min_f : 0.0) : ray_i64(merged.cnt > 0 ? merged.min_i : 0); break;
-            case OP_MAX:   result = in_type == RAY_F64 ? ray_f64(merged.cnt > 0 ? merged.max_f : 0.0) : ray_i64(merged.cnt > 0 ? merged.max_i : 0); break;
+            case OP_MIN:   result = merged.cnt > 0 ? (in_type == RAY_F64 ? ray_f64(merged.min_f) : ray_i64(merged.min_i)) : ray_typed_null(-in_type); break;
+            case OP_MAX:   result = merged.cnt > 0 ? (in_type == RAY_F64 ? ray_f64(merged.max_f) : ray_i64(merged.max_i)) : ray_typed_null(-in_type); break;
             case OP_COUNT: result = ray_i64(merged.cnt); break;
-            case OP_AVG:   result = in_type == RAY_F64 ? ray_f64(merged.cnt > 0 ? merged.sum_f / merged.cnt : 0.0) : ray_f64(merged.cnt > 0 ? (double)merged.sum_i / merged.cnt : 0.0); break;
+            case OP_AVG:   result = merged.cnt > 0 ? ray_f64(in_type == RAY_F64 ? merged.sum_f / merged.cnt : (double)merged.sum_i / merged.cnt) : ray_typed_null(-RAY_F64); break;
             case OP_FIRST: result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.first_f) : ray_i64(merged.first_i)) : ray_typed_null(-in_type); break;
             case OP_LAST:  result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.last_f) : ray_i64(merged.last_i)) : ray_typed_null(-in_type); break;
             case OP_VAR: case OP_VAR_POP:
@@ -340,10 +340,10 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
     switch (op->opcode) {
         case OP_SUM:   return in_type == RAY_F64 ? ray_f64(acc.sum_f) : ray_i64(acc.sum_i);
         case OP_PROD:  return in_type == RAY_F64 ? ray_f64(acc.prod_f) : ray_i64(acc.prod_i);
-        case OP_MIN:   return in_type == RAY_F64 ? ray_f64(acc.cnt > 0 ? acc.min_f : 0.0) : ray_i64(acc.cnt > 0 ? acc.min_i : 0);
-        case OP_MAX:   return in_type == RAY_F64 ? ray_f64(acc.cnt > 0 ? acc.max_f : 0.0) : ray_i64(acc.cnt > 0 ? acc.max_i : 0);
+        case OP_MIN:   return acc.cnt > 0 ? (in_type == RAY_F64 ? ray_f64(acc.min_f) : ray_i64(acc.min_i)) : ray_typed_null(-in_type);
+        case OP_MAX:   return acc.cnt > 0 ? (in_type == RAY_F64 ? ray_f64(acc.max_f) : ray_i64(acc.max_i)) : ray_typed_null(-in_type);
         case OP_COUNT: return ray_i64(acc.cnt);
-        case OP_AVG:   return in_type == RAY_F64 ? ray_f64(acc.cnt > 0 ? acc.sum_f / acc.cnt : 0.0) : ray_f64(acc.cnt > 0 ? (double)acc.sum_i / acc.cnt : 0.0);
+        case OP_AVG:   return acc.cnt > 0 ? ray_f64(in_type == RAY_F64 ? acc.sum_f / acc.cnt : (double)acc.sum_i / acc.cnt) : ray_typed_null(-RAY_F64);
         case OP_FIRST: return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.first_f) : ray_i64(acc.first_i)) : ray_typed_null(-in_type);
         case OP_LAST:  return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.last_f) : ray_i64(acc.last_i)) : ray_typed_null(-in_type);
         case OP_VAR: case OP_VAR_POP:
@@ -3118,7 +3118,7 @@ ht_path:;
         /* Pre-allocate nullmaps for agg result vectors (parallel safety) */
         bool nullmap_prep_ok[n_aggs];
         for (uint8_t a = 0; a < n_aggs; a++)
-            nullmap_prep_ok[a] = (grp_prepare_nullmap(agg_outs[a].vec) == RAY_OK);
+            nullmap_prep_ok[a] = agg_cols[a] && (grp_prepare_nullmap(agg_outs[a].vec) == RAY_OK);
 
         /* Phase 3: parallel key gather + agg result building from inline rows */
         {
@@ -3158,8 +3158,10 @@ ht_path:;
         }
 
         /* Finalize null flags after parallel execution */
-        for (uint8_t a = 0; a < n_aggs; a++)
+        for (uint8_t a = 0; a < n_aggs; a++) {
+            if (!agg_cols[a]) continue;
             grp_finalize_nulls(agg_outs[a].vec);
+        }
 
         /* Add key columns to result */
         for (uint8_t k = 0; k < n_keys; k++) {
