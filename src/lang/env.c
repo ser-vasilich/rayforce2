@@ -28,13 +28,17 @@
 
 /* ---- Function constructors ---- */
 
-/* Builtin name stored inline in nullmap[0..15] (max 15 chars + null).
- * Used by serde for wire serialization and format for display. */
+/* Builtin name stored inline in nullmap.
+ * Binary ops: nullmap[0..1] = opcode (set later by RAY_FN_SET_OPCODE),
+ *             nullmap[2..15] = name (max 13 chars + null).
+ * Unary/vary: nullmap[0..15] = name (max 15 chars + null). No opcode. */
 static void fn_set_name(ray_t* obj, const char* name) {
-    memset(obj->nullmap, 0, 16);
+    int off = (obj->type == RAY_BINARY) ? 2 : 0;
+    int max = 16 - off - 1;
     size_t len = strlen(name);
-    if (len > 15) len = 15;
-    memcpy(obj->nullmap, name, len);
+    if ((int)len > max) len = (size_t)max;
+    memcpy(obj->nullmap + off, name, len);
+    obj->nullmap[off + len] = 0;
 }
 
 ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {

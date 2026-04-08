@@ -22,6 +22,7 @@
  */
 
 #include "lang/format.h"
+#include "lang/env.h"
 #include "table/sym.h"
 #include "lang/eval.h"  /* RAY_ATTR_DICT */
 #include "ops/ops.h"    /* RAY_LAZY, ray_lazy_materialize */
@@ -951,7 +952,7 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
     } else if (type == RAY_LAMBDA) {
         fmt_puts(b, "lambda");
     } else if (type == RAY_UNARY || type == RAY_BINARY || type == RAY_VARY) {
-        const char* name = (const char*)obj->nullmap;
+        const char* name = ray_fn_name(obj);
         if (name[0]) fmt_puts(b, name);
         else fmt_puts(b, type == RAY_UNARY ? "builtin/1" : type == RAY_BINARY ? "builtin/2" : "builtin/n");
     } else if (type == RAY_LAZY) {

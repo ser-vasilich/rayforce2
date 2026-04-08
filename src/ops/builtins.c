@@ -80,7 +80,7 @@ void ray_lang_print(FILE* fp, ray_t* val) {
                 (long)ray_table_nrows(val), (long)ray_table_ncols(val));
         break;
     case RAY_UNARY: case RAY_BINARY: case RAY_VARY: {
-        const char* name = (const char*)val->nullmap;
+        const char* name = ray_fn_name(val);
         fprintf(fp, "%s", name[0] ? name : "builtin");
         break;
     }

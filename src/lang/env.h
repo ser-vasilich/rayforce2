@@ -33,9 +33,10 @@ ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn);
 ray_t* ray_fn_binary(const char* name, uint8_t fn_attrs, ray_binary_fn fn);
 ray_t* ray_fn_vary(const char* name, uint8_t fn_attrs, ray_vary_fn fn);
 
-/* Read builtin name from nullmap (null-terminated, max 15 chars) */
+/* Read builtin name from nullmap. Binary ops store opcode at [0..1],
+ * name at [2..15]. Unary/vary store name at [0..15]. */
 static inline const char* ray_fn_name(const ray_t* fn) {
-    return (const char*)fn->nullmap;
+    return (const char*)fn->nullmap + (fn->type == RAY_BINARY ? 2 : 0);
 }
 
 /* Global environment: symbol -> function object dict */
