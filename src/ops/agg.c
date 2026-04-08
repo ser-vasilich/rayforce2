@@ -257,12 +257,12 @@ ray_t* ray_min_fn(ray_t* x) {
     double fmin = 0; int64_t imin = 0;
     for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
-        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         if (elems[i]->type == -RAY_F64) has_float = 1;
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         double v = as_f64(elems[i]);
         if (!found || v < fmin) { fmin = v; imin = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; found = 1; }
     }
-    if (!found) return ray_typed_null(-RAY_F64);
+    if (!found) return ray_typed_null(has_float ? -RAY_F64 : -RAY_I64);
     return has_float ? make_f64(fmin) : make_i64(imin);
 }
 
@@ -325,12 +325,12 @@ ray_t* ray_max_fn(ray_t* x) {
     double fmax = 0; int64_t imax = 0;
     for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
-        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         if (elems[i]->type == -RAY_F64) has_float = 1;
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         double v = as_f64(elems[i]);
         if (!found || v > fmax) { fmax = v; imax = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; found = 1; }
     }
-    if (!found) return ray_typed_null(-RAY_F64);
+    if (!found) return ray_typed_null(has_float ? -RAY_F64 : -RAY_I64);
     return has_float ? make_f64(fmax) : make_i64(imax);
 }
 
