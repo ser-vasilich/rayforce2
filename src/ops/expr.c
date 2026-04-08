@@ -975,6 +975,16 @@ static bool vec_may_have_nulls(ray_t* v) {
     return (v->attrs & (RAY_ATTR_HAS_NULLS | RAY_ATTR_SLICE)) != 0;
 }
 
+/* Resolve data pointer for a vector, accounting for slices.
+ * For slices, returns the parent's data and adjusts *offset. */
+static void* resolve_vec_data(ray_t* v, int64_t* offset) {
+    if (v->attrs & RAY_ATTR_SLICE) {
+        *offset += v->slice_offset;
+        return ray_data(v->slice_parent);
+    }
+    return ray_data(v);
+}
+
 /* For comparisons: force result to false for any element where either input is null. */
 static void clear_null_comparisons(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
@@ -1198,28 +1208,32 @@ static void binary_range(ray_op_t* op, int8_t out_type,
 
     int64_t lsym_buf[n], rsym_buf[n]; /* stack VLA for narrow RAY_SYM (n<=1024) */
     if (!l_scalar) {
-        void* lbase = (char*)ray_data(lhs) + start * ray_sym_elem_size(lhs->type, lhs->attrs);
+        int64_t l_off = start;
+        void* l_data = resolve_vec_data(lhs, &l_off);
+        void* lbase = (char*)l_data + l_off * ray_sym_elem_size(lhs->type, lhs->attrs);
         if (lhs->type == RAY_F64) lp_f64 = (double*)lbase;
         else if (lhs->type == RAY_I64 || lhs->type == RAY_TIMESTAMP) lp_i64 = (int64_t*)lbase;
         else if (RAY_IS_SYM(lhs->type)) {
             uint8_t w = lhs->attrs & RAY_SYM_W_MASK;
             if (w == RAY_SYM_W64) lp_i64 = (int64_t*)lbase;
             else if (w == RAY_SYM_W32) lp_u32 = (uint32_t*)lbase;
-            else { for (int64_t j = 0; j < n; j++) lsym_buf[j] = ray_read_sym(ray_data(lhs), start+j, lhs->type, lhs->attrs); lp_i64 = lsym_buf; }
+            else { for (int64_t j = 0; j < n; j++) lsym_buf[j] = ray_read_sym(l_data, l_off+j, lhs->type, lhs->attrs); lp_i64 = lsym_buf; }
         }
         else if (lhs->type == RAY_I32 || lhs->type == RAY_DATE || lhs->type == RAY_TIME) lp_i32 = (int32_t*)lbase;
         else if (lhs->type == RAY_I16) lp_i16 = (int16_t*)lbase;
         else if (lhs->type == RAY_BOOL || lhs->type == RAY_U8) lp_bool = (uint8_t*)lbase;
     }
     if (!r_scalar) {
-        void* rbase = (char*)ray_data(rhs) + start * ray_sym_elem_size(rhs->type, rhs->attrs);
+        int64_t r_off = start;
+        void* r_data = resolve_vec_data(rhs, &r_off);
+        void* rbase = (char*)r_data + r_off * ray_sym_elem_size(rhs->type, rhs->attrs);
         if (rhs->type == RAY_F64) rp_f64 = (double*)rbase;
         else if (rhs->type == RAY_I64 || rhs->type == RAY_TIMESTAMP) rp_i64 = (int64_t*)rbase;
         else if (RAY_IS_SYM(rhs->type)) {
             uint8_t w = rhs->attrs & RAY_SYM_W_MASK;
             if (w == RAY_SYM_W64) rp_i64 = (int64_t*)rbase;
             else if (w == RAY_SYM_W32) rp_u32 = (uint32_t*)rbase;
-            else { for (int64_t j = 0; j < n; j++) rsym_buf[j] = ray_read_sym(ray_data(rhs), start+j, rhs->type, rhs->attrs); rp_i64 = rsym_buf; }
+            else { for (int64_t j = 0; j < n; j++) rsym_buf[j] = ray_read_sym(r_data, r_off+j, rhs->type, rhs->attrs); rp_i64 = rsym_buf; }
         }
         else if (rhs->type == RAY_I32 || rhs->type == RAY_DATE || rhs->type == RAY_TIME) rp_i32 = (int32_t*)rbase;
         else if (rhs->type == RAY_I16) rp_i16 = (int16_t*)rbase;
@@ -1437,8 +1451,10 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
             else l_i64_val = lhs->i64;
         } else {
             int8_t t = lhs->type;
-            if (t == RAY_F64) l_f64_val = ((double*)ray_data(lhs))[0];
-            else l_i64_val = read_col_i64(ray_data(lhs), 0, t, lhs->attrs);
+            int64_t elem = 0;
+            void* data = resolve_vec_data(lhs, &elem);
+            if (t == RAY_F64) l_f64_val = ((double*)data)[elem];
+            else l_i64_val = read_col_i64(data, elem, t, lhs->attrs);
         }
     }
     if (r_scalar) {
@@ -1449,8 +1465,10 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
             else r_i64_val = rhs->i64;
         } else {
             int8_t t = rhs->type;
-            if (t == RAY_F64) r_f64_val = ((double*)ray_data(rhs))[0];
-            else r_i64_val = read_col_i64(ray_data(rhs), 0, t, rhs->attrs);
+            int64_t elem = 0;
+            void* data = resolve_vec_data(rhs, &elem);
+            if (t == RAY_F64) r_f64_val = ((double*)data)[elem];
+            else r_i64_val = read_col_i64(data, elem, t, rhs->attrs);
         }
     }
 
