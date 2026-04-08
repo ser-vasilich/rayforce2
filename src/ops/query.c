@@ -1109,7 +1109,7 @@ ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
     /* Both are integer types (i64, i32, i16) → integer xbar */
     if (is_numeric(col) && is_numeric(bucket) && !is_float_op(col, bucket)) {
         int64_t a = as_i64(col), b = as_i64(bucket);
-        if (b == 0 || is_null_atom(col) || is_null_atom(bucket))
+        if (b == 0 || RAY_ATOM_IS_NULL(col) || RAY_ATOM_IS_NULL(bucket))
             return ray_error("domain", NULL);
         int64_t q = a / b;
         if ((a ^ b) < 0 && q * b != a) q--;
@@ -1138,7 +1138,7 @@ ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
         } else {
             b = as_i64(bucket);
         }
-        if (b == 0 || is_null_atom(bucket)) return ray_error("domain", NULL);
+        if (b == 0 || RAY_ATOM_IS_NULL(bucket)) return ray_error("domain", NULL);
         int64_t q = a / b;
         if ((a ^ b) < 0 && q * b != a) q--;
         int64_t result = q * b;
@@ -1951,11 +1951,7 @@ ray_t* ray_insert_fn(ray_t** args, int64_t n) {
         /* Append new row value(s) — atom for single row, vector for multi-row */
         if (!row_elems[c]) {
             /* NULL = null value for this column type */
-            ray_t* null_atom = NULL;
-            if (ct == RAY_I64) null_atom = ray_i64(INT64_MIN);
-            else if (ct == RAY_F64) { double nan_val = NAN; null_atom = ray_f64(nan_val); }
-            else if (ct == RAY_SYM) null_atom = ray_sym(INT64_MIN);
-            else null_atom = ray_i64(0);
+            ray_t* null_atom = ray_typed_null(-ct);
             new_col = append_atom_to_col(new_col, null_atom);
             ray_release(null_atom);
         } else if (ray_is_atom(row_elems[c])) {

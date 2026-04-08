@@ -147,7 +147,7 @@ static MunitResult test_fmt_bool_false(const void* params, void* fixture) {
 static MunitResult test_fmt_null_i64(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    ray_t* result = ray_fmt(ray_i64(INT64_MIN), 1);
+    ray_t* result = ray_fmt(ray_typed_null(-RAY_I64), 1);
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
     const char* s = ray_str_ptr(result);
@@ -161,7 +161,7 @@ static MunitResult test_fmt_null_i64(const void* params, void* fixture) {
 static MunitResult test_fmt_null_f64(const void* params, void* fixture) {
     (void)params; (void)fixture;
 
-    ray_t* result = ray_fmt(ray_f64(NAN), 1);
+    ray_t* result = ray_fmt(ray_typed_null(-RAY_F64), 1);
     munit_assert_ptr_not_null(result);
     munit_assert_false(RAY_IS_ERR(result));
     const char* s = ray_str_ptr(result);

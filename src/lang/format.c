@@ -174,22 +174,18 @@ static void fmt_u8(fmt_buf_t* b, uint8_t val) {
 
 
 static void fmt_i16(fmt_buf_t* b, int16_t val) {
-    if (val == INT16_MIN) { fmt_puts(b, "0Nh"); return; }
     fmt_printf(b, "%d", (int)val);
 }
 
 static void fmt_i32(fmt_buf_t* b, int32_t val) {
-    if (val == INT32_MIN) { fmt_puts(b, "0Ni"); return; }
     fmt_printf(b, "%d", (int)val);
 }
 
 static void fmt_i64(fmt_buf_t* b, int64_t val) {
-    if (val == INT64_MIN) { fmt_puts(b, "0Nl"); return; }
     fmt_printf(b, "%" PRId64, val);
 }
 
 static void fmt_f64(fmt_buf_t* b, double val) {
-    if (isnan(val)) { fmt_puts(b, "0Nf"); return; }
     if (val == -0.0 && signbit(val)) val = 0.0; /* normalize -0.0 */
     if (val == 0.0) {
         /* Zero: format as "0.0" (after trailing-zero strip) */
@@ -250,7 +246,6 @@ static void fmt_guid(fmt_buf_t* b, const uint8_t* bytes) {
 }
 
 static void fmt_sym(fmt_buf_t* b, int64_t sym_id) {
-    if (sym_id == INT64_MIN) { fmt_puts(b, "0Ns"); return; }
     ray_t* s = ray_sym_str(sym_id);
     if (s && !RAY_IS_ERR(s)) {
         const char* p = ray_str_ptr(s);
@@ -342,14 +337,12 @@ static void ts_to_parts(int64_t ns, int* y, int* mo, int* d,
 }
 
 static void fmt_date(fmt_buf_t* b, int32_t val) {
-    if (val == INT32_MIN) { fmt_puts(b, "0Nd"); return; }
     int y, m, d;
     date_to_ymd(val, &y, &m, &d);
     fmt_printf(b, "%04d.%02d.%02d", y, m, d);
 }
 
 static void fmt_time(fmt_buf_t* b, int32_t val) {
-    if (val == INT32_MIN) { fmt_puts(b, "0Nt"); return; }
     int h, m, s, ms;
     time_to_hms(val, &h, &m, &s, &ms);
     if (val < 0) fmt_putc(b, '-');
@@ -357,7 +350,6 @@ static void fmt_time(fmt_buf_t* b, int32_t val) {
 }
 
 static void fmt_timestamp(fmt_buf_t* b, int64_t val) {
-    if (val == INT64_MIN) { fmt_puts(b, "0Np"); return; }
     int y, mo, d, h, mi, s, ns;
     ts_to_parts(val, &y, &mo, &d, &h, &mi, &s, &ns);
     fmt_printf(b, "%04d.%02d.%02dD%02d:%02d:%02d.%09d", y, mo, d, h, mi, s, ns);
@@ -922,6 +914,21 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
 
     int8_t type = obj->type;
     if (type < 0) {
+        /* Typed null atom: null bit set → display as 0Nx */
+        if (RAY_ATOM_IS_NULL(obj)) {
+            switch (-type) {
+            case RAY_I16:       fmt_puts(b, "0Nh"); return;
+            case RAY_I32:       fmt_puts(b, "0Ni"); return;
+            case RAY_I64:       fmt_puts(b, "0Nl"); return;
+            case RAY_F64:       fmt_puts(b, "0Nf"); return;
+            case RAY_F32:       fmt_puts(b, "0Ne"); return;
+            case RAY_DATE:      fmt_puts(b, "0Nd"); return;
+            case RAY_TIME:      fmt_puts(b, "0Nt"); return;
+            case RAY_TIMESTAMP: fmt_puts(b, "0Np"); return;
+            case RAY_SYM:       fmt_puts(b, "0Ns"); return;
+            default:            fmt_puts(b, "null"); return;
+            }
+        }
         /* Atom: type is negated */
         switch (-type) {
         case RAY_BOOL: fmt_bool(b, obj->b8); break;

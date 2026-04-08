@@ -210,7 +210,7 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
     /* When the probed result is a null atom, the fn already chose the correct
      * result type (e.g., division returns left-operand-typed null).  Skip the
      * wider-wins promotion so the null sentinel lands in the right vector type. */
-    int e0_null = is_null_atom(e0);
+    int e0_null = RAY_ATOM_IS_NULL(e0);
 
     /* When the probed result is a boolean (from comparison ops like ==, <, etc.),
      * preserve the bool output type — do not promote to wider integer type. */
@@ -317,31 +317,28 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
             void* rdata = rv ? ray_data(right) : NULL;
             int64_t lsv = ls ? SCALAR_INT(left) : 0;
             int64_t rsv = rs ? SCALAR_INT(right) : 0;
-            /* Null sentinel for the input width */
-            int64_t lnull = (esz_l==8) ? INT64_MIN : (esz_l==4) ? (int64_t)INT32_MIN :
-                            (esz_l==2) ? (int64_t)INT16_MIN : 0;
-            int64_t rnull = (esz_r==8) ? INT64_MIN : (esz_r==4) ? (int64_t)INT32_MIN :
-                            (esz_r==2) ? (int64_t)INT16_MIN : 0;
-            /* Output null sentinel */
             int out_esz = ray_elem_size(out_type);
+            int l_atom_null = ls && RAY_ATOM_IS_NULL(left);
+            int r_atom_null = rs && RAY_ATOM_IS_NULL(right);
 
             #define LA(i) (ldata ? READ_INT(ldata, esz_l, i) : lsv)
             #define RA(i) (rdata ? READ_INT(rdata, esz_r, i) : rsv)
-            #define ISNULL_L(v) (ls ? (lsv==lnull) : (v)==lnull)
-            #define ISNULL_R(v) (rs ? (rsv==rnull) : (v)==rnull)
+            #define ISNULL_L(i) (l_atom_null || (lv && ray_vec_is_null(left, i)))
+            #define ISNULL_R(i) (r_atom_null || (rv && ray_vec_is_null(right, i)))
 
             /* Compute into i64 temp, then store at output width */
             for (int64_t i = 0; i < len; i++) {
                 int64_t a = LA(i), b = RA(i);
                 int64_t r;
-                int null = ISNULL_L(a) || ISNULL_R(b);
+                int null = ISNULL_L(i) || ISNULL_R(i);
                 if (null) {
                 store_null:
-                    /* Store type-appropriate null */
-                    if (out_esz == 8)      ((int64_t*)ray_data(vec))[i] = INT64_MIN;
-                    else if (out_esz == 4)  ((int32_t*)ray_data(vec))[i] = INT32_MIN;
-                    else if (out_esz == 2)  ((int16_t*)ray_data(vec))[i] = INT16_MIN;
+                    /* Store zero and mark null in bitmap */
+                    if (out_esz == 8)      ((int64_t*)ray_data(vec))[i] = 0;
+                    else if (out_esz == 4)  ((int32_t*)ray_data(vec))[i] = 0;
+                    else if (out_esz == 2)  ((int16_t*)ray_data(vec))[i] = 0;
                     else                    ((uint8_t*)ray_data(vec))[i] = 0;
+                    ray_vec_set_null(vec, i, true);
                     continue;
                 }
                 switch (dag_opcode) {
@@ -985,7 +982,7 @@ ray_t* ray_cond_fn(ray_t** args, int64_t n) {
         cond = ray_lazy_materialize(cond);
     if (RAY_IS_ERR(cond)) return cond;
     /* All null forms are falsy */
-    if (is_null_atom(cond)) {
+    if (RAY_ATOM_IS_NULL(cond)) {
         ray_release(cond);
         return (n >= 3) ? ray_eval(args[2]) : make_i64(0);
     }
@@ -1369,7 +1366,7 @@ op_jmpf: {
     ip += 2;
     ray_t *cond = POP();
     int truthy = 0;
-    if (is_null_atom(cond)) truthy = 0;
+    if (RAY_ATOM_IS_NULL(cond)) truthy = 0;
     else if (cond->type == -RAY_BOOL) truthy = cond->b8;
     else if (cond->type == -RAY_I64) truthy = cond->i64 != 0;
     else truthy = 1;

@@ -216,14 +216,14 @@ static ray_t* parse_number(ray_parser_t *p) {
     /* Null literal: 0N{h,i,d,t,p,l,f,s} */
     if (!is_neg && p->pos[0] == '0' && p->pos[1] == 'N') {
         switch (p->pos[2]) {
-        case 'h': p->pos += 3; return ray_i16(INT16_MIN);
-        case 'i': p->pos += 3; return ray_i32(INT32_MIN);
-        case 'd': p->pos += 3; return ray_date(INT32_MIN);
-        case 't': p->pos += 3; return ray_time(INT32_MIN);
-        case 'p': p->pos += 3; return ray_timestamp(INT64_MIN);
-        case 'l': p->pos += 3; return ray_i64(INT64_MIN);
-        case 'f': p->pos += 3; return ray_f64(__builtin_nan(""));
-        case 's': p->pos += 3; { ray_t* s = ray_sym(INT64_MIN); return s; }
+        case 'h': p->pos += 3; return ray_typed_null(-RAY_I16);
+        case 'i': p->pos += 3; return ray_typed_null(-RAY_I32);
+        case 'd': p->pos += 3; return ray_typed_null(-RAY_DATE);
+        case 't': p->pos += 3; return ray_typed_null(-RAY_TIME);
+        case 'p': p->pos += 3; return ray_typed_null(-RAY_TIMESTAMP);
+        case 'l': p->pos += 3; return ray_typed_null(-RAY_I64);
+        case 'f': p->pos += 3; return ray_typed_null(-RAY_F64);
+        case 's': p->pos += 3; return ray_typed_null(-RAY_SYM);
         }
     }
 
@@ -457,7 +457,7 @@ static ray_t* parse_symbol(ray_parser_t *p) {
     while (PA(*p->pos) == PA_ALPHA || PA(*p->pos) == PA_DIGIT || *p->pos == '_' || *p->pos == '.')
         p->pos++;
     size_t len = (size_t)(p->pos - start);
-    if (len == 0) return ray_sym(INT64_MIN); /* empty symbol */
+    if (len == 0) return ray_typed_null(-RAY_SYM); /* empty symbol */
     int64_t id = ray_sym_intern(start, len);
     return ray_sym(id);
 }
@@ -612,7 +612,11 @@ static ray_t* parse_vector(ray_parser_t *p) {
             default: goto boxed_list;
         }
         vec->len = count;
-        for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+        for (int32_t i = 0; i < count; i++) {
+            if (RAY_ATOM_IS_NULL(elems[i]))
+                ray_vec_set_null(vec, i, true);
+            ray_release(elems[i]);
+        }
         return vec;
     }
 
@@ -629,7 +633,11 @@ static ray_t* parse_vector(ray_parser_t *p) {
                                                  : (double)elems[i]->i64;
         }
         vec->len = count;
-        for (int32_t i = 0; i < count; i++) ray_release(elems[i]);
+        for (int32_t i = 0; i < count; i++) {
+            if (RAY_ATOM_IS_NULL(elems[i]))
+                ray_vec_set_null(vec, i, true);
+            ray_release(elems[i]);
+        }
         return vec;
     }
 

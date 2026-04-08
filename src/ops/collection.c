@@ -351,14 +351,13 @@ ray_t* ray_apply_fn(ray_t** args, int64_t n) {
 
 /* Helper: compare two atoms for equality (value-based) */
 int atom_eq(ray_t* a, ray_t* b) {
+    int a_null = RAY_ATOM_IS_NULL(a);
+    int b_null = RAY_ATOM_IS_NULL(b);
+    if (a_null && b_null) return 1;
+    if (a_null || b_null) return 0;
     if (a->type != b->type) {
-        if (is_numeric(a) && is_numeric(b)) {
-            int a_null = is_null_atom(a);
-            int b_null = is_null_atom(b);
-            if (a_null && b_null) return 1;
-            if (a_null || b_null) return 0;
+        if (is_numeric(a) && is_numeric(b))
             return as_f64(a) == as_f64(b);
-        }
         return 0;
     }
     switch (a->type) {
@@ -443,7 +442,7 @@ ray_t* ray_distinct_fn(ray_t* x) {
 
         for (int64_t i = 0; i < len; i++) {
             /* Skip null values */
-            if (is_null_atom(elems[i])) continue;
+            if (RAY_ATOM_IS_NULL(elems[i])) continue;
             int dup = 0;
             for (int64_t j = 0; j < count; j++) {
                 if (atom_eq(out[j], elems[i])) { dup = 1; break; }
@@ -1196,7 +1195,7 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
                 return items[i + 1];
             }
         }
-        return make_i64(INT64_MIN); /* 0Nl for missing key */
+        return ray_typed_null(-RAY_I64); /* 0Nl for missing key */
     }
 
     /* String indexing: (at "hello" 1) → 'e', (at "hello" [0 4]) → "ho" */
@@ -1261,7 +1260,7 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
     /* Typed vector: extract element directly */
     if (ray_is_vec(vec)) {
         int64_t len = ray_len(vec);
-        if (i < 0 || i >= len) return make_i64(INT64_MIN); /* out of bounds → 0Nl */
+        if (i < 0 || i >= len) return ray_typed_null(-RAY_I64); /* out of bounds → 0Nl */
         int alloc = 0;
         ray_t* elem = collection_elem(vec, i, &alloc);
         /* collection_elem always allocates for typed vecs, so elem is owned */
@@ -1270,7 +1269,7 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
 
     if (!is_list(vec)) return ray_error("type", NULL);
     int64_t len = ray_len(vec);
-    if (i < 0 || i >= len) return make_i64(INT64_MIN); /* out of bounds → 0Nl */
+    if (i < 0 || i >= len) return ray_typed_null(-RAY_I64); /* out of bounds → 0Nl */
     ray_t* elem = ((ray_t**)ray_data(vec))[i];
     ray_retain(elem);
     return elem;
@@ -1288,7 +1287,7 @@ ray_t* ray_find_fn(ray_t* vec, ray_t* val) {
         for (size_t i = 0; i < slen; i++) {
             if (s[i] == c) return make_i64((int64_t)i);
         }
-        return make_i64(INT64_MIN);
+        return ray_typed_null(-RAY_I64);
     }
     /* Vector val: (find vec [v1 v2]) → [idx1 idx2] */
     if (is_collection(val)) {
@@ -1324,7 +1323,7 @@ ray_t* ray_find_fn(ray_t* vec, ray_t* val) {
         if (atom_eq(elems[i], val)) { if (_bx) ray_release(_bx); return make_i64(i); }
     }
     if (_bx) ray_release(_bx);
-    return make_i64(INT64_MIN); /* 0Nl = not found */
+    return ray_typed_null(-RAY_I64); /* 0Nl = not found */
 }
 
 /* (til n) — generate integer sequence [0, 1, ..., n-1] */

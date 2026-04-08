@@ -37,22 +37,21 @@ ray_t* ray_sum_fn(ray_t* x) {
         ray_retain(x); return x;
     }
     if (ray_is_vec(x)) {
-        /* Direct reduction for small-type and null-sentinel vectors */
+        /* Direct reduction — null bitmap skipping */
         if (x->type == RAY_I32) {
             int64_t n = x->len;
             int32_t* d = (int32_t*)ray_data(x);
             int64_t sum = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT32_MIN) sum += d[i];
+                if (!ray_vec_is_null(x, i)) sum += d[i];
             return make_i32((int32_t)sum);
         }
         if (x->type == RAY_I16 || x->type == RAY_U8) {
-            /* i16/u8 sum promotes to i64 to avoid overflow */
             int64_t n = x->len, sum = 0;
             if (x->type == RAY_I16) {
                 int16_t* d = (int16_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++)
-                    if (d[i] != INT16_MIN) sum += d[i];
+                    if (!ray_vec_is_null(x, i)) sum += d[i];
             } else {
                 uint8_t* d = (uint8_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++) sum += d[i];
@@ -64,7 +63,7 @@ ray_t* ray_sum_fn(ray_t* x) {
             int64_t* d = (int64_t*)ray_data(x);
             int64_t sum = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT64_MIN) sum += d[i];
+                if (!ray_vec_is_null(x, i)) sum += d[i];
             return make_i64(sum);
         }
         if (x->type == RAY_F64) {
@@ -72,7 +71,7 @@ ray_t* ray_sum_fn(ray_t* x) {
             double* d = (double*)ray_data(x);
             double sum = 0.0;
             for (int64_t i = 0; i < n; i++)
-                if (!isnan(d[i])) sum += d[i];
+                if (!ray_vec_is_null(x, i)) sum += d[i];
             return make_f64(sum);
         }
         if (x->type == RAY_TIME) {
@@ -80,7 +79,7 @@ ray_t* ray_sum_fn(ray_t* x) {
             int32_t* d = (int32_t*)ray_data(x);
             int64_t sum = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT32_MIN) sum += d[i];
+                if (!ray_vec_is_null(x, i)) sum += d[i];
             return ray_time(sum);
         }
         if (x->type == RAY_TIMESTAMP) {
@@ -88,7 +87,7 @@ ray_t* ray_sum_fn(ray_t* x) {
             int64_t* d = (int64_t*)ray_data(x);
             int64_t sum = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT64_MIN) sum += d[i];
+                if (!ray_vec_is_null(x, i)) sum += d[i];
             return ray_timestamp(sum);
         }
         if (x->type == RAY_DATE) return ray_error("type", NULL);
@@ -142,7 +141,7 @@ ray_t* ray_count_fn(ray_t* x) {
 ray_t* ray_avg_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_AVG);
     if (ray_is_atom(x)) {
-        if (is_null_atom(x)) return make_f64(NAN);
+        if (RAY_ATOM_IS_NULL(x)) return ray_typed_null(-RAY_F64);
         if (is_numeric(x)) return make_f64(as_f64(x));
         ray_retain(x); return x;
     }
@@ -155,15 +154,15 @@ ray_t* ray_avg_fn(ray_t* x) {
             if (x->type == RAY_I64) {
                 int64_t* d = (int64_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++)
-                    if (d[i] != INT64_MIN) { sum += (double)d[i]; cnt++; }
+                    if (!ray_vec_is_null(x, i)) { sum += (double)d[i]; cnt++; }
             } else if (x->type == RAY_I32) {
                 int32_t* d = (int32_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++)
-                    if (d[i] != INT32_MIN) { sum += (double)d[i]; cnt++; }
+                    if (!ray_vec_is_null(x, i)) { sum += (double)d[i]; cnt++; }
             } else if (x->type == RAY_I16) {
                 int16_t* d = (int16_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++)
-                    if (d[i] != INT16_MIN) { sum += (double)d[i]; cnt++; }
+                    if (!ray_vec_is_null(x, i)) { sum += (double)d[i]; cnt++; }
             } else {
                 uint8_t* d = (uint8_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++) { sum += (double)d[i]; cnt++; }
@@ -176,7 +175,7 @@ ray_t* ray_avg_fn(ray_t* x) {
             double sum = 0.0;
             int64_t cnt = 0;
             for (int64_t i = 0; i < n; i++)
-                if (!isnan(d[i])) { sum += d[i]; cnt++; }
+                if (!ray_vec_is_null(x, i)) { sum += d[i]; cnt++; }
             if (cnt == 0) return make_f64(NAN);
             return make_f64(sum / (double)cnt);
         }
@@ -203,17 +202,13 @@ ray_t* ray_min_fn(ray_t* x) {
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
         int64_t n = x->len;
-        if (n == 0) return make_i64(INT64_MIN); /* empty → null */
+        if (n == 0) return ray_typed_null(-RAY_I64);
         if (x->type == RAY_I32 || x->type == RAY_DATE || x->type == RAY_TIME) {
             int32_t* d = (int32_t*)ray_data(x);
             int32_t m = INT32_MAX; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT32_MIN) { if (!found || d[i] < m) m = d[i]; found = 1; }
-            if (!found) {
-                if (x->type == RAY_TIME) return ray_time(INT32_MIN);
-                if (x->type == RAY_DATE) return ray_date(INT32_MIN);
-                return make_i32(INT32_MIN);
-            }
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] < m) m = d[i]; found = 1; }
+            if (!found) return ray_typed_null(-x->type);
             if (x->type == RAY_TIME) return ray_time(m);
             if (x->type == RAY_DATE) return ray_date(m);
             return make_i32(m);
@@ -222,23 +217,23 @@ ray_t* ray_min_fn(ray_t* x) {
             int64_t* d = (int64_t*)ray_data(x);
             int64_t m = INT64_MAX; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT64_MIN) { if (!found || d[i] < m) m = d[i]; found = 1; }
-            if (!found) return (x->type == RAY_TIMESTAMP) ? ray_timestamp(INT64_MIN) : make_i64(INT64_MIN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] < m) m = d[i]; found = 1; }
+            if (!found) return ray_typed_null(-x->type);
             return (x->type == RAY_TIMESTAMP) ? ray_timestamp(m) : make_i64(m);
         }
         if (x->type == RAY_F64) {
             double* d = (double*)ray_data(x);
             double m = 0; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (!isnan(d[i])) { if (!found || d[i] < m) m = d[i]; found = 1; }
-            return found ? make_f64(m) : make_f64(NAN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] < m) m = d[i]; found = 1; }
+            return found ? make_f64(m) : ray_typed_null(-RAY_F64);
         }
         if (x->type == RAY_I16) {
             int16_t* d = (int16_t*)ray_data(x);
             int16_t m = INT16_MAX; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT16_MIN) { if (!found || d[i] < m) m = d[i]; found = 1; }
-            return found ? make_i16(m) : make_i16(INT16_MIN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] < m) m = d[i]; found = 1; }
+            return found ? make_i16(m) : ray_typed_null(-RAY_I16);
         }
         if (x->type == RAY_U8) {
             uint8_t* d = (uint8_t*)ray_data(x);
@@ -275,17 +270,13 @@ ray_t* ray_max_fn(ray_t* x) {
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
         int64_t n = x->len;
-        if (n == 0) return make_i64(INT64_MIN);
+        if (n == 0) return ray_typed_null(-RAY_I64);
         if (x->type == RAY_I32 || x->type == RAY_DATE || x->type == RAY_TIME) {
             int32_t* d = (int32_t*)ray_data(x);
             int32_t m = INT32_MIN; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT32_MIN) { if (!found || d[i] > m) m = d[i]; found = 1; }
-            if (!found) {
-                if (x->type == RAY_TIME) return ray_time(INT32_MIN);
-                if (x->type == RAY_DATE) return ray_date(INT32_MIN);
-                return make_i32(INT32_MIN);
-            }
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] > m) m = d[i]; found = 1; }
+            if (!found) return ray_typed_null(-x->type);
             if (x->type == RAY_TIME) return ray_time(m);
             if (x->type == RAY_DATE) return ray_date(m);
             return make_i32(m);
@@ -294,23 +285,23 @@ ray_t* ray_max_fn(ray_t* x) {
             int64_t* d = (int64_t*)ray_data(x);
             int64_t m = INT64_MIN; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT64_MIN) { if (!found || d[i] > m) m = d[i]; found = 1; }
-            if (!found) return (x->type == RAY_TIMESTAMP) ? ray_timestamp(INT64_MIN) : make_i64(INT64_MIN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] > m) m = d[i]; found = 1; }
+            if (!found) return ray_typed_null(-x->type);
             return (x->type == RAY_TIMESTAMP) ? ray_timestamp(m) : make_i64(m);
         }
         if (x->type == RAY_F64) {
             double* d = (double*)ray_data(x);
             double m = 0; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (!isnan(d[i])) { if (!found || d[i] > m) m = d[i]; found = 1; }
-            return found ? make_f64(m) : make_f64(NAN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] > m) m = d[i]; found = 1; }
+            return found ? make_f64(m) : ray_typed_null(-RAY_F64);
         }
         if (x->type == RAY_I16) {
             int16_t* d = (int16_t*)ray_data(x);
             int16_t m = INT16_MIN; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] != INT16_MIN) { if (!found || d[i] > m) m = d[i]; found = 1; }
-            return found ? make_i16(m) : make_i16(INT16_MIN);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] > m) m = d[i]; found = 1; }
+            return found ? make_i16(m) : ray_typed_null(-RAY_I16);
         }
         if (x->type == RAY_U8) {
             uint8_t* d = (uint8_t*)ray_data(x);
@@ -361,7 +352,7 @@ ray_t* ray_first_fn(ray_t* x) {
         return result;
     }
     if (ray_is_vec(x)) {
-        if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
+        if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty vec */
         /* For SYM, GUID, STR and other non-numeric types, use collection_elem directly */
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
             x->type == RAY_GUID || x->type == RAY_STR) {
@@ -375,7 +366,7 @@ ray_t* ray_first_fn(ray_t* x) {
         return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return ray_error("type", NULL);
-    if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty list */
+    if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty list */
     ray_t* elem = ((ray_t**)ray_data(x))[0];
     ray_retain(elem);
     return elem;
@@ -401,7 +392,7 @@ ray_t* ray_last_fn(ray_t* x) {
         return result;
     }
     if (ray_is_vec(x)) {
-        if (ray_len(x) == 0) return make_i64(INT64_MIN); /* 0Nl for empty vec */
+        if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty vec */
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
             x->type == RAY_GUID || x->type == RAY_STR) {
             int alloc = 0;
@@ -415,7 +406,7 @@ ray_t* ray_last_fn(ray_t* x) {
     }
     if (!is_list(x)) return ray_error("type", NULL);
     int64_t len = ray_len(x);
-    if (len == 0) return make_i64(INT64_MIN); /* 0Nl for empty list */
+    if (len == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty list */
     ray_t* elem = ((ray_t**)ray_data(x))[len - 1];
     ray_retain(elem);
     return elem;
@@ -457,7 +448,7 @@ ray_t* ray_med_fn(ray_t* x) {
     if (RAY_IS_ERR(x)) return x;
     /* Scalar: median of single value → f64 */
     if (ray_is_atom(x)) {
-        if (is_null_atom(x)) return make_f64(NAN);
+        if (RAY_ATOM_IS_NULL(x)) return ray_typed_null(-RAY_F64);
         if (is_numeric(x)) return make_f64(as_f64(x));
         return ray_error("type", NULL);
     }
@@ -519,32 +510,33 @@ ray_t* ray_dev_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
     if (RAY_IS_ERR(x)) return x;
     if (ray_is_atom(x)) {
-        if (is_null_atom(x)) return make_f64(NAN);
+        if (RAY_ATOM_IS_NULL(x)) return ray_typed_null(-RAY_F64);
         if (is_numeric(x)) return make_f64(0.0);
         return ray_error("type", NULL);
     }
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return make_f64(NAN);
-        /* Build f64 scratch with null sentinels → NaN */
+        /* Build f64 scratch — null bitmap elements become NaN */
         ray_t* scratch = ray_alloc(len * sizeof(double));
         if (!scratch) return ray_error("oom", NULL);
         scratch->type = RAY_F64; scratch->len = len;
         double* vals = (double*)ray_data(scratch);
         if (x->type == RAY_I64) {
             int64_t* d = (int64_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = (d[i] == INT64_MIN) ? NAN : (double)d[i];
+            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
         } else if (x->type == RAY_I32) {
             int32_t* d = (int32_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = (d[i] == INT32_MIN) ? NAN : (double)d[i];
+            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
         } else if (x->type == RAY_I16) {
             int16_t* d = (int16_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = (d[i] == INT16_MIN) ? NAN : (double)d[i];
+            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
         } else if (x->type == RAY_U8) {
             uint8_t* d = (uint8_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
         } else if (x->type == RAY_F64) {
-            memcpy(vals, ray_data(x), (size_t)len * sizeof(double));
+            double* d = (double*)ray_data(x);
+            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : d[i];
         } else {
             ray_release(scratch);
             return ray_error("type", NULL);
@@ -561,13 +553,13 @@ ray_t* ray_dev_fn(ray_t* x) {
     int64_t cnt = 0;
     for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
-        if (!is_null_atom(elems[i])) { sum += as_f64(elems[i]); cnt++; }
+        if (!RAY_ATOM_IS_NULL(elems[i])) { sum += as_f64(elems[i]); cnt++; }
     }
     if (cnt == 0) return make_f64(NAN);
     double mean = sum / (double)cnt;
     double var = 0.0;
     for (int64_t i = 0; i < len; i++) {
-        if (!is_null_atom(elems[i])) { double d = as_f64(elems[i]) - mean; var += d * d; }
+        if (!RAY_ATOM_IS_NULL(elems[i])) { double d = as_f64(elems[i]) - mean; var += d * d; }
     }
     return make_f64(sqrt(var / (double)cnt));
 }

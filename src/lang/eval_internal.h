@@ -111,38 +111,19 @@ static inline int is_float_op(ray_t* a, ray_t* b) {
  * Null/type helpers
  * ══════════════════════════════════════════ */
 
-/* Null sentinel checks */
-static inline int is_null_atom(ray_t* x) {
-    if (RAY_IS_NULL(x))       return 1;
-    switch (-x->type) {
-    case RAY_I64: case RAY_TIMESTAMP: case RAY_SYM:
-        return x->i64 == INT64_MIN;
-    case RAY_I32: case RAY_DATE: case RAY_TIME:
-        return x->i32 == INT32_MIN;
-    case RAY_I16:
-        return x->i16 == INT16_MIN;
-    case RAY_F64:
-        return isnan(x->f64);
-    default:
-        return 0;
-    }
-}
+/* RAY_ATOM_IS_NULL and ray_typed_null are in rayforce.h */
 
-/* Return the null value for the promoted result type of two operands */
+/* Return a typed null for the promoted result type of two operands */
 static inline ray_t* null_for_promoted(ray_t* a, ray_t* b) {
-    /* If either is f64, or one is f64 and other is int, result is f64 null */
     if (a->type == -RAY_F64 || b->type == -RAY_F64)
-        return make_f64(NAN);
-    /* Promote: i16 < i32 < i64.  Result type is the wider of the two */
+        return ray_typed_null(-RAY_F64);
     if (a->type == -RAY_I64 || b->type == -RAY_I64)
-        return make_i64(INT64_MIN);
+        return ray_typed_null(-RAY_I64);
     if (a->type == -RAY_I32 || b->type == -RAY_I32)
-        return make_i32(INT32_MIN);
+        return ray_typed_null(-RAY_I32);
     if (a->type == -RAY_I16 || b->type == -RAY_I16)
-        return make_i16(INT16_MIN);
-    if (a->type == -RAY_U8 || b->type == -RAY_U8)
-        return make_i64(INT64_MIN);
-    return make_i64(INT64_MIN);
+        return ray_typed_null(-RAY_I16);
+    return ray_typed_null(-RAY_I64);
 }
 
 /* ══════════════════════════════════════════
@@ -287,6 +268,10 @@ static inline int64_t elem_as_i64(ray_t* elem) {
 /* Store a scalar result into a typed vector at position i.
  * Returns 0 on success, -1 if the element type doesn't match. */
 static inline int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
+    if (RAY_ATOM_IS_NULL(elem)) {
+        ray_vec_set_null(vec, i, true);
+        return 0;
+    }
     switch (vec->type) {
         case RAY_I64:       ((int64_t*)ray_data(vec))[i]  = elem_as_i64(elem); return 0;
         case RAY_F64:       ((double*)ray_data(vec))[i]    = (elem->type == -RAY_F64) ? elem->f64 : (double)elem_as_i64(elem); return 0;
@@ -294,7 +279,6 @@ static inline int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
         case RAY_I16:       ((int16_t*)ray_data(vec))[i]   = (int16_t)elem_as_i64(elem); return 0;
         case RAY_BOOL:      ((bool*)ray_data(vec))[i]      = elem->b8;  return 0;
         case RAY_U8:        ((uint8_t*)ray_data(vec))[i]   = (uint8_t)elem_as_i64(elem); return 0;
-        /* RAY_CHAR removed -- char vectors no longer exist */
         case RAY_DATE:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
         case RAY_TIME:      ((int32_t*)ray_data(vec))[i]   = (int32_t)elem_as_i64(elem); return 0;
         case RAY_TIMESTAMP: ((int64_t*)ray_data(vec))[i]   = elem_as_i64(elem); return 0;

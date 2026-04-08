@@ -583,12 +583,9 @@ ray_t* ray_alloc(size_t data_size) {
         if (RAY_LIKELY(h->slabs[idx].count > 0)) {
             ray_t* v = h->slabs[idx].stack[--h->slabs[idx].count];
 
-            /* Zero header fields without full memset (hot path).
-             * order + rc are set below; type/len/attrs/mmod must be 0. */
-            v->type = 0;
-            v->len  = 0;
-            v->attrs = 0;
-            v->mmod = 0;
+            /* Zero full 32-byte header (hot path).
+             * Nullmap (bytes 0-15) must be cleared for null-bit correctness. */
+            memset(v, 0, 32);
             v->order = order;
             if (RAY_UNLIKELY(ray_rc_sync))
                 ray_atomic_store(&v->rc, 1);

@@ -459,6 +459,26 @@ static int cast_match(const char* tname, size_t tlen, const char* target) {
 
 ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
     if (type_sym->type != -RAY_SYM) return ray_error("type", NULL);
+    /* Null propagation: casting a typed null atom produces a typed null of target type */
+    if (ray_is_atom(val) && RAY_ATOM_IS_NULL(val)) {
+        ray_t* s2 = ray_sym_str(type_sym->i64);
+        if (!s2) return ray_error("domain", NULL);
+        const char* tn = ray_str_ptr(s2);
+        size_t tl = ray_str_len(s2);
+        int8_t tt = 0;
+        if (cast_match(tn, tl, "I64") || cast_match(tn, tl, "i64")) tt = -RAY_I64;
+        else if (cast_match(tn, tl, "I32") || cast_match(tn, tl, "i32")) tt = -RAY_I32;
+        else if (cast_match(tn, tl, "I16") || cast_match(tn, tl, "i16")) tt = -RAY_I16;
+        else if (cast_match(tn, tl, "F64") || cast_match(tn, tl, "f64")) tt = -RAY_F64;
+        else if (cast_match(tn, tl, "symbol") || cast_match(tn, tl, "sym")) tt = -RAY_SYM;
+        else if (cast_match(tn, tl, "date")) tt = -RAY_DATE;
+        else if (cast_match(tn, tl, "time")) tt = -RAY_TIME;
+        else if (cast_match(tn, tl, "timestamp")) tt = -RAY_TIMESTAMP;
+        else if (cast_match(tn, tl, "BOOL") || cast_match(tn, tl, "bool")) tt = -RAY_BOOL;
+        ray_release(s2);
+        if (tt) return ray_typed_null(tt);
+        return ray_typed_null(val->type);
+    }
     ray_t* s = ray_sym_str(type_sym->i64);
     if (!s) return ray_error("domain", NULL);
     const char* tname = ray_str_ptr(s);
@@ -1366,7 +1386,7 @@ ray_t* ray_dict_fn(ray_t* keys, ray_t* vals) {
             dict = ray_list_append(dict, v);
             if (alloc) ray_release(v);
         } else {
-            ray_t* null_val = ray_i64(INT64_MIN);
+            ray_t* null_val = ray_typed_null(-RAY_I64);
             dict = ray_list_append(dict, null_val);
             ray_release(null_val);
         }
@@ -1378,16 +1398,7 @@ ray_t* ray_dict_fn(ray_t* keys, ray_t* vals) {
 /* (nil? x) -> true if x is null */
 ray_t* ray_nil_fn(ray_t* x) {
     if (!x || RAY_IS_NULL(x)) return ray_bool(true);
-    if (ray_is_atom(x)) {
-        switch (-x->type) {
-        case RAY_I16:  return ray_bool(x->i16 == INT16_MIN);
-        case RAY_I32:  case RAY_DATE: case RAY_TIME:
-            return ray_bool(x->i32 == INT32_MIN);
-        case RAY_I64:  case RAY_TIMESTAMP: case RAY_SYM:
-            return ray_bool(x->i64 == INT64_MIN);
-        case RAY_F64:  return ray_bool(isnan(x->f64));
-        }
-    }
+    if (ray_is_atom(x) && RAY_ATOM_IS_NULL(x)) return ray_bool(true);
     return ray_bool(false);
 }
 
@@ -1999,7 +2010,7 @@ ray_t* ray_fdiv_fn(ray_t* a, ray_t* b) {
     if (!ray_is_atom(a) || !ray_is_atom(b)) return ray_error("type", NULL);
     if (!is_numeric(a) || !is_numeric(b)) return ray_error("type", NULL);
     /* Null propagation */
-    if (is_null_atom(a) || is_null_atom(b)) return make_f64(NAN);
+    if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_F64);
     double fa = as_f64(a), fb = as_f64(b);
     if (fb == 0.0) return make_f64(NAN);
     return make_f64(fa / fb);

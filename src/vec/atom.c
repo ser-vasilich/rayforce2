@@ -163,6 +163,15 @@ ray_t* ray_timestamp(int64_t val) {
     return v;
 }
 
+ray_t* ray_typed_null(int8_t type) {
+    ray_t* v = ray_alloc(0);
+    if (RAY_IS_ERR(v)) return v;
+    v->type = type;
+    v->i64 = 0;
+    v->nullmap[0] |= 1;
+    return v;
+}
+
 /* --------------------------------------------------------------------------
  * GUID atom: 16 bytes stored in a U8 vector, pointer in obj field
  * -------------------------------------------------------------------------- */

@@ -13,7 +13,16 @@ Sentinel values (`INT64_MIN` for 0Nl, `INT32_MIN` for 0Ni, `NaN` for 0Nf, etc.) 
 
 ---
 
-## Task 1: Remove `is_null_atom` and all callers
+## Task 1: Remove `is_null_atom` and all callers — DONE
+
+- [x] Deleted `is_null_atom` from `eval_internal.h`
+- [x] Added `RAY_ATOM_IS_NULL` macro and `ray_typed_null` constructor in `rayforce.h` and `atom.c`
+- [x] Replaced all `is_null_atom` calls with `RAY_ATOM_IS_NULL` across arith.c, cmp.c, agg.c, collection.c, eval.c, query.c, builtins.c
+- [x] Updated `null_for_promoted` to use `ray_typed_null` instead of sentinel values
+- [x] Updated `store_typed_elem` to propagate null bits to vectors
+- [x] Fixed slab fast path in heap.c to zero nullmap on reuse
+- [x] Updated all sentinel null returns (INT64_MIN, INT32_MIN, NaN) in agg.c, collection.c, builtins.c, query.c
+- [x] Updated atomic mapper fast path to use null bitmap instead of sentinel checks
 
 **Files:**
 - `src/lang/eval_internal.h` — delete `is_null_atom` function (line 115-129)
@@ -55,7 +64,11 @@ For `RAY_NULL_OBJ` checks (the void null), keep using `RAY_IS_NULL(x)`.
    - If the check is in aggregation (sum/count/avg etc.) where nulls affect the result → the null bitmap is checked in the morsel loop, remove the per-element check
 4. Build and test
 
-## Task 2: Remove sentinel parsing from parser
+## Task 2: Remove sentinel parsing from parser — DONE
+
+- [x] All typed null literals (0Nl, 0Ni, etc.) now use `ray_typed_null` with null bit
+- [x] Empty symbol backtick uses `ray_typed_null(-RAY_SYM)`
+- [x] Vector literal construction propagates null bits from atoms to vector bitmap
 
 **Files:**
 - `src/lang/parse.c` (lines 220-226, 411, 460)
@@ -79,7 +92,11 @@ The parser creates sentinel atoms for `0Nl`, `0Ni`, `0Nd`, `0Nt`, `0Np`, `0Nf` s
 2. Add a helper: `ray_t* ray_typed_null(int8_t type)` that creates a zeroed atom with null bit set
 3. Empty symbol `\`` → typed null SYM atom (null bit set)
 
-## Task 3: Remove sentinel display from format
+## Task 3: Remove sentinel display from format — DONE
+
+- [x] Atom formatter checks `RAY_ATOM_IS_NULL` to display typed nulls (0Ni, 0Nl, etc.)
+- [x] Removed sentinel value checks (INT32_MIN, INT64_MIN, NaN) from low-level formatters
+- [x] Vector element formatter already uses `ray_vec_is_null` (unchanged)
 
 **Files:**
 - `src/lang/format.c` (lines 182, 187, 386, 389)
