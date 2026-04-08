@@ -229,9 +229,17 @@ static inline void atom_to_str_t(ray_t* atom, ray_str_t* out, const char** out_p
             *out_pool = NULL;
             return;
         }
-        const ray_str_t* elems = (const ray_str_t*)ray_data(atom);
-        *out = elems[0];
-        *out_pool = atom->str_pool ? (const char*)ray_data(atom->str_pool) : NULL;
+        /* Resolve slice to parent data — slices have no data of their own,
+         * and str_pool shares the union with slice_offset. */
+        ray_t* src = atom;
+        int64_t idx = 0;
+        if (atom->attrs & RAY_ATTR_SLICE) {
+            src = atom->slice_parent;
+            idx = atom->slice_offset;
+        }
+        const ray_str_t* elems = (const ray_str_t*)ray_data(src);
+        *out = elems[idx];
+        *out_pool = src->str_pool ? (const char*)ray_data(src->str_pool) : NULL;
         return;
     } else if (RAY_IS_SYM(atom->type) && ray_is_atom(atom)) {
         /* SAFETY: ray_sym_str returns a borrowed pointer into the append-only
