@@ -236,7 +236,12 @@ int64_t ray_ser_raw(uint8_t* buf, ray_t* obj) {
         buf[0] = RAY_SERDE_NULL;
         return 1;
     }
-    if (RAY_IS_ERR(obj)) return 0;
+    if (RAY_IS_ERR(obj)) {
+        buf[0] = (uint8_t)RAY_ERROR;
+        memcpy(buf + 1, obj->sdata, 7);
+        buf[8] = 0;
+        return 1 + 8;
+    }
 
     int8_t type = obj->type;
     buf[0] = (uint8_t)type;
