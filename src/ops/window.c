@@ -104,10 +104,12 @@ static inline int64_t win_read_i64(ray_t* col, int64_t row) {
 }
 
 /* Thread-safe null bit set for parallel window execution.
- * Requires the vector's external nullmap to be pre-allocated. */
+ * Requires the vector's external nullmap to be pre-allocated via win_prepare_nullmap. */
 static inline void win_set_null(ray_t* vec, int64_t idx) {
+    /* Lazily mark the vector as having nulls (atomic for parallel safety) */
+    __atomic_fetch_or(&vec->attrs, RAY_ATTR_HAS_NULLS, __ATOMIC_RELAXED);
     if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
-        /* Inline nullmap: idx < 128, byte-level race on nullmap[] */
+        /* Inline nullmap: idx < 128 */
         int byte_idx = (int)(idx / 8);
         int bit_idx  = (int)(idx % 8);
         __atomic_fetch_or(&vec->nullmap[byte_idx],
@@ -122,13 +124,16 @@ static inline void win_set_null(ray_t* vec, int64_t idx) {
                       (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
 }
 
-/* Pre-allocate external nullmap so parallel threads can set bits safely. */
+/* Pre-allocate external nullmap so parallel threads can set bits safely.
+ * Does NOT set RAY_ATTR_HAS_NULLS — that is set lazily by win_set_null
+ * only when a null is actually written. */
 static void win_prepare_nullmap(ray_t* vec) {
-    vec->attrs |= RAY_ATTR_HAS_NULLS;
     if (vec->len <= 128) return; /* inline nullmap suffices */
     /* Force promotion to external nullmap via a dummy set+clear */
     ray_vec_set_null(vec, 0, true);
     ray_vec_set_null(vec, 0, false);
+    /* Clear the HAS_NULLS flag that ray_vec_set_null just set */
+    vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
 }
 
 /* Resolve a graph op node to a column vector from tbl */
