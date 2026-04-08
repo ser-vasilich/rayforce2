@@ -118,9 +118,9 @@ typedef struct ray_term {
     /* Escape sequence state machine (for event-driven feed) */
     int32_t     esc_state;     /* 0=normal, 1=ESC, 2=ESC[, 3=ESCO, 4=ESC[3, 5=unknown CSI */
     int32_t     esc_buf_len;   /* bytes accumulated in unknown CSI sequence */
-    /* IPC server — when set, ray_term_getc uses the server's event loop
-     * to multiplex stdin with IPC connections (epoll/kqueue). */
-    void*       ipc_srv;    /* ray_ipc_server_t* (opaque to avoid header dep) */
+    /* Event loop fd (epoll on Linux, kqueue on macOS).
+     * Stdin is always registered. IPC adds its sockets to the same fd. */
+    int         poll_fd;
 } ray_term_t;
 
 ray_term_t* ray_term_create(void);

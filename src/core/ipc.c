@@ -604,6 +604,29 @@ ray_err_t ray_ipc_watch_fd(ray_ipc_server_t* srv, int fd)
     return RAY_OK;
 }
 
+void ray_ipc_attach(ray_ipc_server_t* srv, int poll_fd)
+{
+    if (!srv || poll_fd < 0) return;
+
+    /* Add listen socket to the external poll fd */
+#if defined(__linux__)
+    struct epoll_event ev = { .events = EPOLLIN, .data.fd = srv->listen_fd };
+    epoll_ctl(poll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
+#elif defined(__APPLE__)
+    struct kevent kev;
+    EV_SET(&kev, srv->listen_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    kevent(poll_fd, &kev, 1, NULL, 0, NULL);
+#endif
+
+    /* Close old poll fd and use the external one */
+    if (srv->poll_fd >= 0 && srv->poll_fd != poll_fd) {
+#ifndef _WIN32
+        close(srv->poll_fd);
+#endif
+    }
+    srv->poll_fd = poll_fd;
+}
+
 int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
 {
     int ready = 0;

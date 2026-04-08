@@ -29,7 +29,6 @@
 
 
 #include "app/term.h"
-#include "core/ipc.h"
 #include "lang/env.h"
 #include "lang/eval.h"
 #include <stdio.h>
@@ -52,8 +51,12 @@ typedef struct _stat hist_stat_t;
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
 #include <fcntl.h>
+#if defined(__linux__)
+  #include <sys/epoll.h>
+#elif defined(__APPLE__)
+  #include <sys/event.h>
+#endif
 #include <sys/stat.h>
 #define hist_open(p, f, m)  open((p), (f), (m))
 #define hist_read(fd, b, n) read((fd), (b), (n))
@@ -333,6 +336,24 @@ ray_term_t* ray_term_create(void) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->newattr);
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
+    /* Create event loop and register stdin */
+#if defined(__linux__)
+    term->poll_fd = epoll_create1(0);
+    if (term->poll_fd >= 0) {
+        struct epoll_event ev = { .events = EPOLLIN, .data.fd = STDIN_FILENO };
+        epoll_ctl(term->poll_fd, EPOLL_CTL_ADD, STDIN_FILENO, &ev);
+    }
+#elif defined(__APPLE__)
+    term->poll_fd = kqueue();
+    if (term->poll_fd >= 0) {
+        struct kevent kev;
+        EV_SET(&kev, STDIN_FILENO, EVFILT_READ, EV_ADD, 0, 0, NULL);
+        kevent(term->poll_fd, &kev, 1, NULL, 0, NULL);
+    }
+#else
+    term->poll_fd = -1;
+#endif
+
     term->term_width  = 80;
     term->term_height = 24;
     term->last_total_rows = 1;
@@ -348,8 +369,8 @@ void ray_term_destroy(ray_term_t* term) {
     if (g_active_term == term) g_active_term = NULL;
     ray_hist_save(&term->hist, NULL);
     ray_hist_destroy(&term->hist);
-    int flags = fcntl(STDIN_FILENO, F_GETFL);
-    fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
+    if (term->poll_fd >= 0) close(term->poll_fd);
+    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) & ~O_NONBLOCK);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
     ray_free(term->_block);
 }
@@ -363,26 +384,22 @@ int64_t ray_term_getc(ray_term_t* term) {
             continue;
         }
         if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            /* EAGAIN mid-escape: no more bytes in buffer → bare Esc.
-             * Terminal sends escape sequences as a burst; if the kernel
-             * buffer is empty after ESC, there's no sequence following. */
+            /* Empty buffer mid-escape → bare Esc (sequences arrive as burst) */
             if (term->esc_state > 0) {
                 term->esc_state = 0;
                 if (term->comp_cycling) {
                     term->comp_cycling = 0;
                     ray_term_redraw(term);
                 }
-                /* Fall through to wait for next real keystroke */
             }
-
-            if (term->ipc_srv)
-                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
-            else {
-                fd_set rfds;
-                FD_ZERO(&rfds);
-                FD_SET(STDIN_FILENO, &rfds);
-                select(STDIN_FILENO + 1, &rfds, NULL, NULL, NULL);
-            }
+            /* Wait on the event loop — wakes on stdin or IPC */
+#if defined(__linux__)
+            struct epoll_event evs[64];
+            epoll_wait(term->poll_fd, evs, 64, -1);
+#elif defined(__APPLE__)
+            struct kevent evs[64];
+            kevent(term->poll_fd, NULL, 0, evs, 64, NULL);
+#endif
             continue;
         }
         return sz;

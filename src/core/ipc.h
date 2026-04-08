@@ -92,6 +92,11 @@ void      ray_ipc_server_destroy(ray_ipc_server_t* srv);
 int       ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms);
 ray_err_t ray_ipc_watch_fd(ray_ipc_server_t* srv, int fd);
 
+/* Attach IPC server to an external poll fd (e.g., terminal's epoll/kqueue).
+ * Moves the listen socket to the new poll fd. The server's own poll_fd is
+ * closed and replaced. */
+void      ray_ipc_attach(ray_ipc_server_t* srv, int poll_fd);
+
 /* ===== Client ===== */
 
 int64_t   ray_ipc_connect(const char* host, uint16_t port);

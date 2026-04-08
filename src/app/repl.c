@@ -566,12 +566,11 @@ static void run_interactive(ray_repl_t* repl) {
     ray_term_t* term = repl->term;
     print_banner();
 
-    /* Register IPC server with terminal: stdin goes into the same
-     * epoll/kqueue set as IPC sockets, and ray_term_getc blocks on
-     * the unified event loop instead of raw read(). */
+    /* Merge IPC into terminal's event loop: add the IPC listen socket
+     * to the terminal's epoll/kqueue fd, then replace the IPC server's
+     * poll_fd with the terminal's so all events go through one fd. */
     if (repl->ipc_srv) {
-        term->ipc_srv = repl->ipc_srv;
-        ray_ipc_watch_fd(repl->ipc_srv, 0);  /* stdin fd = 0 into epoll/kqueue */
+        ray_ipc_attach(repl->ipc_srv, term->poll_fd);
     }
 
     ray_term_begin(term);
