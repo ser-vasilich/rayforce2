@@ -956,6 +956,12 @@ static void propagate_nulls(ray_t* src, ray_t* dst, int64_t len) {
     }
 }
 
+/* Returns true for arithmetic ops that should propagate nulls.
+ * Comparisons (EQ..GE) and logical ops (AND/OR) produce false for null inputs. */
+static bool op_propagates_null(uint16_t opc) {
+    return opc < OP_EQ || opc > OP_OR;
+}
+
 /* Propagate null bitmaps for binary ops: null in either operand → null in result. */
 static void propagate_nulls_binary(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
@@ -1358,11 +1364,9 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                     .l_scalar = l_scalar, .r_scalar = r_scalar,
                 };
                 ray_pool_dispatch(pool, par_binary_str_fn, &ctx, len);
-                propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
                 return result;
             }
             binary_range_str(op, lhs, rhs, result, l_scalar, r_scalar, 0, len);
-            propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
             return result;
         }
     }
@@ -1423,7 +1427,8 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
             .l_i64 = l_i64_val, .r_i64 = r_i64_val,
         };
         ray_pool_dispatch(pool, par_binary_fn, &ctx, len);
-        propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
+        if (op_propagates_null(op->opcode))
+            propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
         return result;
     }
 
@@ -1432,6 +1437,7 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                  l_scalar, r_scalar,
                  l_f64_val, r_f64_val, l_i64_val, r_i64_val,
                  0, len);
-    propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
+    if (op_propagates_null(op->opcode))
+        propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
     return result;
 }
