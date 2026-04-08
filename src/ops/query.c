@@ -2510,7 +2510,8 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
 
         /* For each left row, find matching right rows within the time window */
         /* intervals is a list of [lo, hi] pairs, one per left row */
-        ray_t* result_agg = ray_vec_new(RAY_I64, left_nrows);
+        int is_f64 = (right_agg_col && right_agg_col->type == RAY_F64);
+        ray_t* result_agg = ray_vec_new(is_f64 ? RAY_F64 : RAY_I64, left_nrows);
         if (RAY_IS_ERR(result_agg)) return result_agg;
 
         for (int64_t lr = 0; lr < left_nrows; lr++) {
@@ -2535,7 +2536,6 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
             int64_t best_val_i = INT64_MAX;
             double best_val_f = 1e300;
             int found = 0;
-            int is_f64 = (right_agg_col && right_agg_col->type == RAY_F64);
 
             for (int64_t rr = 0; rr < right_nrows; rr++) {
                 /* Check equality keys */
