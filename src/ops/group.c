@@ -918,6 +918,7 @@ static void radix_phase3_fn(void* ctx, uint32_t worker_id, int64_t start, int64_
             /* Scatter agg results to result columns */
             for (uint8_t a = 0; a < na; a++) {
                 agg_out_t* ao = &c->agg_outs[a];
+                if (!ao->dst) continue; /* allocation failed (OOM) */
                 uint16_t op = ao->agg_op;
                 bool sf = ao->src_f64;
                 int8_t s = ly->agg_val_slot[a];
@@ -3101,7 +3102,11 @@ ht_path:;
                     out_type = agg_col ? agg_col->type : RAY_I64; break;
             }
             ray_t* new_col = ray_vec_new(out_type, (int64_t)total_grps);
-            if (!new_col || RAY_IS_ERR(new_col)) { agg_cols[a] = NULL; continue; }
+            if (!new_col || RAY_IS_ERR(new_col)) {
+                agg_cols[a] = NULL;
+                memset(&agg_outs[a], 0, sizeof(agg_outs[a]));
+                continue;
+            }
             new_col->len = (int64_t)total_grps;
             agg_cols[a] = new_col;
             agg_outs[a] = (agg_out_t){
@@ -3139,7 +3144,7 @@ ht_path:;
         /* Fixup: if nullmap prep failed for any VAR/STDDEV agg, re-scan
          * hash tables sequentially to set null bits that grp_set_null skipped */
         for (uint8_t a = 0; a < n_aggs; a++) {
-            if (nullmap_prep_ok[a]) continue;
+            if (nullmap_prep_ok[a] || !agg_cols[a]) continue;
             uint16_t op = agg_outs[a].agg_op;
             if (op != OP_VAR && op != OP_VAR_POP &&
                 op != OP_STDDEV && op != OP_STDDEV_POP) continue;
