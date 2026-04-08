@@ -36,13 +36,8 @@
   #include <winsock2.h>
   #include <ws2tcpip.h>
 #else
-  #include <fcntl.h>
-  #include <netdb.h>
-  #include <sys/socket.h>
-  #include <sys/time.h>
-  #include <arpa/inet.h>
-  #include <netinet/tcp.h>
   #include <unistd.h>
+  #include <sys/socket.h>
 #endif
 
 #if defined(__linux__)
@@ -54,156 +49,6 @@
 #endif
 
 #include "lang/eval.h"
-
-/* ===== Socket Abstraction ===== */
-
-ray_sock_t ray_sock_listen(uint16_t port)
-{
-    ray_sock_t fd = (ray_sock_t)socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == RAY_INVALID_SOCK) return RAY_INVALID_SOCK;
-
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons(port);
-
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        ray_sock_close(fd);
-        return RAY_INVALID_SOCK;
-    }
-    if (listen(fd, 128) < 0) {
-        ray_sock_close(fd);
-        return RAY_INVALID_SOCK;
-    }
-    return fd;
-}
-
-ray_sock_t ray_sock_accept(ray_sock_t srv)
-{
-    ray_sock_t fd;
-    do {
-        fd = (ray_sock_t)accept(srv, NULL, NULL);
-    } while (fd == RAY_INVALID_SOCK && errno == EINTR);
-
-    if (fd == RAY_INVALID_SOCK) return RAY_INVALID_SOCK;
-
-    int yes = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
-    return fd;
-}
-
-ray_sock_t ray_sock_connect(const char* host, uint16_t port, int timeout_ms)
-{
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%u", (unsigned)port);
-
-    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res)
-        return RAY_INVALID_SOCK;
-
-    ray_sock_t fd = (ray_sock_t)socket(res->ai_family, res->ai_socktype,
-                                        res->ai_protocol);
-    if (fd == RAY_INVALID_SOCK) {
-        freeaddrinfo(res);
-        return RAY_INVALID_SOCK;
-    }
-
-    /* Set send/recv timeout if requested */
-    if (timeout_ms > 0) {
-#ifdef _WIN32
-        DWORD tv = (DWORD)timeout_ms;
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
-#else
-        struct timeval tv;
-        tv.tv_sec  = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-#endif
-    }
-
-    if (connect(fd, res->ai_addr, (socklen_t)res->ai_addrlen) < 0) {
-        ray_sock_close(fd);
-        freeaddrinfo(res);
-        return RAY_INVALID_SOCK;
-    }
-    freeaddrinfo(res);
-
-    int yes = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
-    return fd;
-}
-
-int64_t ray_sock_send(ray_sock_t s, const void* buf, size_t len)
-{
-    const uint8_t* p   = (const uint8_t*)buf;
-    size_t         rem = len;
-    while (rem > 0) {
-#ifdef _WIN32
-        int n = send(s, (const char*)p, (int)rem, 0);
-#else
-        ssize_t n = send(s, p, rem, MSG_NOSIGNAL);
-#endif
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
-            return -1;
-        }
-        p   += n;
-        rem -= (size_t)n;
-    }
-    return (int64_t)len;
-}
-
-int64_t ray_sock_recv(ray_sock_t s, void* buf, size_t len)
-{
-    for (;;) {
-#ifdef _WIN32
-        int n = recv(s, (char*)buf, (int)len, 0);
-#else
-        ssize_t n = recv(s, buf, len, 0);
-#endif
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        return (int64_t)n;   /* 0 = peer closed */
-    }
-}
-
-void ray_sock_close(ray_sock_t s)
-{
-    if (s == RAY_INVALID_SOCK) return;
-#ifdef _WIN32
-    closesocket(s);
-#else
-    close(s);
-#endif
-}
-
-ray_err_t ray_sock_set_nonblocking(ray_sock_t s)
-{
-#ifdef _WIN32
-    u_long mode = 1;
-    if (ioctlsocket(s, FIONBIO, &mode) != 0)
-        return RAY_ERR_IO;
-#else
-    int flags = fcntl(s, F_GETFL, 0);
-    if (flags < 0) return RAY_ERR_IO;
-    if (fcntl(s, F_SETFL, flags | O_NONBLOCK) < 0)
-        return RAY_ERR_IO;
-#endif
-    return RAY_OK;
-}
 
 /* ===== Compression (delta + RLE) ===== */
 
@@ -221,42 +66,36 @@ size_t ray_ipc_compress(const uint8_t* src, size_t len,
         delta[i] = (uint8_t)(src[i] - src[i - 1]);
 
     /* Step 2: RLE-compress the delta stream */
-    size_t di = 0;   /* destination index */
-    size_t si = 0;   /* source index into delta */
+    size_t di = 0;
+    size_t si = 0;
 
     while (si < len) {
-        /* Check for a run of identical bytes (need at least 2) */
         if (si + 1 < len && delta[si] == delta[si + 1]) {
             uint8_t val = delta[si];
             size_t run = 1;
             while (si + run < len && delta[si + run] == val && run < 127)
                 run++;
             if (di + 2 > dst_cap) { ray_sys_free(delta); return 0; }
-            dst[di++] = (uint8_t)run;        /* positive count = run */
+            dst[di++] = (uint8_t)run;
             dst[di++] = val;
             si += run;
         } else {
-            /* Literal sequence: collect non-repeating bytes */
             size_t start = si;
             size_t llen = 0;
             while (si < len && llen < 128) {
-                /* Stop if we see a run of 2+ identical bytes ahead */
                 if (si + 1 < len && delta[si] == delta[si + 1])
                     break;
                 si++;
                 llen++;
             }
-            /* Encode: negative count followed by raw bytes */
             if (di + 1 + llen > dst_cap) { ray_sys_free(delta); return 0; }
-            dst[di++] = (uint8_t)(-(int8_t)llen);  /* -1..-128 */
+            dst[di++] = (uint8_t)(-(int8_t)llen);
             memcpy(dst + di, delta + start, llen);
             di += llen;
         }
     }
 
     ray_sys_free(delta);
-
-    /* Not worth compressing if result >= original */
     if (di >= len) return 0;
     return di;
 }
@@ -264,17 +103,15 @@ size_t ray_ipc_compress(const uint8_t* src, size_t len,
 size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
                           uint8_t* dst, size_t dst_len)
 {
-    /* Step 1: RLE-decode */
     uint8_t* decoded = (uint8_t*)ray_sys_alloc(dst_len);
     if (!decoded) return 0;
 
-    size_t si = 0;   /* source index */
-    size_t di = 0;   /* decoded index */
+    size_t si = 0;
+    size_t di = 0;
 
     while (si < clen && di < dst_len) {
         int8_t count = (int8_t)src[si++];
         if (count > 0) {
-            /* Run: repeat single byte count times */
             if (si >= clen) { ray_sys_free(decoded); return 0; }
             uint8_t val = src[si++];
             size_t n = (size_t)count;
@@ -282,7 +119,6 @@ size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
             memset(decoded + di, val, n);
             di += n;
         } else {
-            /* Literal: copy |count| bytes */
             size_t n = (size_t)(-(int)count);
             if (si + n > clen || di + n > dst_len) {
                 ray_sys_free(decoded);
@@ -294,7 +130,7 @@ size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
         }
     }
 
-    /* Step 2: un-delta */
+    /* Un-delta */
     dst[0] = decoded[0];
     for (size_t i = 1; i < di; i++)
         dst[i] = (uint8_t)(decoded[i] + dst[i - 1]);
@@ -303,7 +139,280 @@ size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
     return di;
 }
 
-/* ===== Server ===== */
+/* ===== Shared protocol helpers ===== */
+
+#define RAY_IPC_PHASE_HANDSHAKE 0
+#define RAY_IPC_PHASE_HEADER    1
+#define RAY_IPC_PHASE_PAYLOAD   2
+
+static void send_response(ray_sock_t fd, ray_t* result)
+{
+    int64_t ser_size = ray_serde_size(result);
+    if (ser_size <= 0) return;
+
+    uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)ser_size);
+    if (!payload) return;
+    ray_ser_raw(payload, result);
+
+    uint8_t* send_buf = NULL;
+    size_t   send_len = 0;
+    uint8_t  flags    = 0;
+
+    if ((size_t)ser_size > RAY_IPC_COMPRESS_THRESHOLD) {
+        uint8_t* comp = (uint8_t*)ray_sys_alloc((size_t)ser_size);
+        if (comp) {
+            size_t clen = ray_ipc_compress(payload, (size_t)ser_size,
+                                           comp, (size_t)ser_size);
+            if (clen > 0 && clen + 4 < (size_t)ser_size) {
+                send_len = clen + 4;
+                send_buf = (uint8_t*)ray_sys_alloc(send_len);
+                if (send_buf) {
+                    uint32_t uncomp = (uint32_t)ser_size;
+                    memcpy(send_buf, &uncomp, 4);
+                    memcpy(send_buf + 4, comp, clen);
+                    flags = RAY_IPC_FLAG_COMPRESSED;
+                }
+            }
+            ray_sys_free(comp);
+        }
+    }
+
+    if (!send_buf) {
+        send_buf = payload;
+        send_len = (size_t)ser_size;
+        payload  = NULL;
+    }
+
+    ray_ipc_header_t hdr = {
+        .prefix  = RAY_SERDE_PREFIX,
+        .version = RAY_VERSION_MAJOR,
+        .flags   = flags,
+        .endian  = 0,
+        .msgtype = RAY_IPC_MSG_RESP,
+        .size    = (int64_t)send_len,
+    };
+    ray_sock_send(fd, &hdr, sizeof(hdr));
+    ray_sock_send(fd, send_buf, send_len);
+
+    ray_sys_free(send_buf);
+    if (payload) ray_sys_free(payload);
+}
+
+static ray_t* eval_payload(uint8_t* payload, size_t payload_len,
+                           ray_ipc_header_t* hdr)
+{
+    uint8_t* decompressed = NULL;
+    if (hdr->flags & RAY_IPC_FLAG_COMPRESSED) {
+        if (payload_len < 4) return NULL;
+        uint32_t uncomp_size;
+        memcpy(&uncomp_size, payload, 4);
+        decompressed = (uint8_t*)ray_sys_alloc(uncomp_size);
+        if (!decompressed) return NULL;
+        size_t dlen = ray_ipc_decompress(payload + 4, payload_len - 4,
+                                         decompressed, uncomp_size);
+        if (dlen != uncomp_size) {
+            ray_sys_free(decompressed);
+            return NULL;
+        }
+        payload     = decompressed;
+        payload_len = uncomp_size;
+    }
+
+    int64_t de_len = (int64_t)payload_len;
+    ray_t*  msg    = ray_de_raw(payload, &de_len);
+    if (decompressed) ray_sys_free(decompressed);
+
+    ray_t* result = NULL;
+    if (msg && !RAY_IS_ERR(msg)) {
+        if (msg->type == -RAY_STR) {
+            const char* str  = ray_str_ptr(msg);
+            size_t      slen = ray_str_len(msg);
+            if (str && slen > 0) {
+                char* tmp = (char*)ray_sys_alloc(slen + 1);
+                if (tmp) {
+                    memcpy(tmp, str, slen);
+                    tmp[slen] = '\0';
+                    result = ray_eval_str(tmp);
+                    ray_sys_free(tmp);
+                }
+            }
+            ray_release(msg);
+        } else {
+            result = ray_eval(msg);
+            ray_release(msg);
+        }
+    }
+    return result ? result : RAY_NULL_OBJ;
+}
+
+/* ======================================================================
+ * Poll-based IPC (new API)
+ * ====================================================================== */
+
+/* Per-connection state stored in selector->data */
+typedef struct {
+    ray_ipc_header_t hdr;
+    uint8_t          phase;
+    int64_t          listener_id;  /* id of the listener selector */
+} ray_ipc_conn_data_t;
+
+static ray_t* ipc_read_handshake(ray_poll_t* poll, ray_selector_t* sel);
+static ray_t* ipc_read_header(ray_poll_t* poll, ray_selector_t* sel);
+static ray_t* ipc_read_payload(ray_poll_t* poll, ray_selector_t* sel);
+static ray_t* ipc_on_data(ray_poll_t* poll, ray_selector_t* sel, void* data);
+static void   ipc_on_close(ray_poll_t* poll, ray_selector_t* sel);
+
+/* Wrappers matching ray_io_fn signature for socket recv/send */
+static int64_t ipc_recv_fn(int64_t fd, uint8_t* buf, int64_t len) {
+    return ray_sock_recv((ray_sock_t)fd, buf, (size_t)len);
+}
+static int64_t ipc_send_fn(int64_t fd, uint8_t* buf, int64_t len) {
+    return ray_sock_send((ray_sock_t)fd, buf, (size_t)len);
+}
+
+/* Accept callback — called when listener fd is readable */
+static ray_t* ipc_accept(ray_poll_t* poll, ray_selector_t* sel)
+{
+    ray_sock_t new_fd = ray_sock_accept((ray_sock_t)sel->fd);
+    if (new_fd == RAY_INVALID_SOCK) return NULL;
+    ray_sock_set_nonblocking(new_fd);
+
+    ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)ray_sys_alloc(
+                                    sizeof(ray_ipc_conn_data_t));
+    if (!cd) { ray_sock_close(new_fd); return NULL; }
+    memset(cd, 0, sizeof(*cd));
+    cd->phase = RAY_IPC_PHASE_HANDSHAKE;
+    cd->listener_id = sel->id;
+
+    ray_poll_reg_t reg = {0};
+    reg.fd       = (int64_t)new_fd;
+    reg.type     = RAY_SEL_SOCKET;
+    reg.recv_fn  = ipc_recv_fn;
+    reg.send_fn  = ipc_send_fn;
+    reg.read_fn  = ipc_read_handshake;
+    reg.data_fn  = ipc_on_data;
+    reg.close_fn = ipc_on_close;
+    reg.data     = cd;
+
+    int64_t id = ray_poll_register(poll, &reg);
+    if (id < 0) {
+        ray_sock_close(new_fd);
+        ray_sys_free(cd);
+        return NULL;
+    }
+
+    /* Request 2 bytes for handshake */
+    ray_selector_t* ns = ray_poll_get(poll, id);
+    if (ns) ray_poll_rx_request(poll, ns, 2);
+
+    return NULL;
+}
+
+static ray_t* ipc_read_handshake(ray_poll_t* poll, ray_selector_t* sel)
+{
+    if (!sel->rx.buf || sel->rx.buf->offset < 2) return NULL;
+
+    ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
+
+    /* Send handshake response */
+    uint8_t resp[2] = { RAY_VERSION_MAJOR, 0x00 };
+    ray_sock_send((ray_sock_t)sel->fd, resp, 2);
+
+    /* Switch to header phase */
+    cd->phase = RAY_IPC_PHASE_HEADER;
+    sel->rx.read_fn = ipc_read_header;
+    ray_poll_rx_request(poll, sel, sizeof(ray_ipc_header_t));
+
+    return NULL;
+}
+
+static ray_t* ipc_read_header(ray_poll_t* poll, ray_selector_t* sel)
+{
+    if (!sel->rx.buf ||
+        sel->rx.buf->offset < (int64_t)sizeof(ray_ipc_header_t))
+        return NULL;
+
+    ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
+    memcpy(&cd->hdr, sel->rx.buf->data, sizeof(ray_ipc_header_t));
+
+    if (cd->hdr.prefix != RAY_SERDE_PREFIX || cd->hdr.size <= 0 ||
+        cd->hdr.size > 256 * 1024 * 1024) {
+        ray_poll_deregister(poll, sel->id);
+        return NULL;
+    }
+
+    cd->phase = RAY_IPC_PHASE_PAYLOAD;
+    sel->rx.read_fn = ipc_read_payload;
+    ray_poll_rx_request(poll, sel, cd->hdr.size);
+
+    return NULL;
+}
+
+static ray_t* ipc_read_payload(ray_poll_t* poll, ray_selector_t* sel)
+{
+    ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
+
+    if (!sel->rx.buf || sel->rx.buf->offset < cd->hdr.size)
+        return NULL;
+
+    /* Eval and produce result */
+    ray_t* result = eval_payload(sel->rx.buf->data,
+                                 (size_t)sel->rx.buf->offset, &cd->hdr);
+
+    /* Send response for sync messages */
+    if (cd->hdr.msgtype == RAY_IPC_MSG_SYNC)
+        send_response((ray_sock_t)sel->fd, result);
+    if (result != RAY_NULL_OBJ) ray_release(result);
+
+    /* Reset for next message */
+    cd->phase = RAY_IPC_PHASE_HEADER;
+    sel->rx.read_fn = ipc_read_header;
+    ray_poll_rx_request(poll, sel, sizeof(ray_ipc_header_t));
+
+    return NULL;
+}
+
+static ray_t* ipc_on_data(ray_poll_t* poll, ray_selector_t* sel, void* data)
+{
+    (void)poll; (void)sel; (void)data;
+    return NULL;
+}
+
+static void ipc_on_close(ray_poll_t* poll, ray_selector_t* sel)
+{
+    (void)poll;
+    if (sel->data) {
+        ray_sys_free(sel->data);
+        sel->data = NULL;
+    }
+    ray_sock_close((ray_sock_t)sel->fd);
+}
+
+int64_t ray_ipc_listen(ray_poll_t* poll, uint16_t port)
+{
+    if (!poll) return -1;
+
+    ray_sock_t fd = ray_sock_listen(port);
+    if (fd == RAY_INVALID_SOCK) return -1;
+    ray_sock_set_nonblocking(fd);
+
+    ray_poll_reg_t reg = {0};
+    reg.fd       = (int64_t)fd;
+    reg.type     = RAY_SEL_SOCKET;
+    reg.read_fn  = ipc_accept;
+    reg.close_fn = ipc_on_close;
+
+    int64_t id = ray_poll_register(poll, &reg);
+    if (id < 0) {
+        ray_sock_close(fd);
+        return -1;
+    }
+    return id;
+}
+
+/* ======================================================================
+ * Legacy server API (kept for tests and backward compatibility)
+ * ====================================================================== */
 
 static void conn_close(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
@@ -324,101 +433,33 @@ static void conn_close(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
     c->rx_len  = 0;
     c->rx_need = 0;
 
-    /* Compact: move last conn into this slot */
     uint32_t idx = (uint32_t)(c - srv->conns);
     if (idx + 1 < srv->n_conns)
         srv->conns[idx] = srv->conns[srv->n_conns - 1];
     if (srv->n_conns > 0) srv->n_conns--;
 }
 
-static void conn_send_response(ray_ipc_conn_t* c, ray_t* result)
-{
-    /* Serialize — fall back to null if result is unserializable */
-    int64_t ser_size = ray_serde_size(result);
-    if (ser_size <= 0) return;
-
-    uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)ser_size);
-    if (!payload) return;
-    ray_ser_raw(payload, result);
-
-    /* Try compression */
-    uint8_t* send_buf = NULL;
-    size_t   send_len = 0;
-    uint8_t  flags    = 0;
-
-    if ((size_t)ser_size > RAY_IPC_COMPRESS_THRESHOLD) {
-        uint8_t* comp = (uint8_t*)ray_sys_alloc((size_t)ser_size);
-        if (comp) {
-            size_t clen = ray_ipc_compress(payload, (size_t)ser_size,
-                                           comp, (size_t)ser_size);
-            if (clen > 0 && clen + 4 < (size_t)ser_size) {
-                /* Use compressed: 4-byte uncompressed size + compressed data */
-                send_len = clen + 4;
-                send_buf = (uint8_t*)ray_sys_alloc(send_len);
-                if (send_buf) {
-                    uint32_t uncomp = (uint32_t)ser_size;
-                    memcpy(send_buf, &uncomp, 4);
-                    memcpy(send_buf + 4, comp, clen);
-                    flags = RAY_IPC_FLAG_COMPRESSED;
-                }
-            }
-            ray_sys_free(comp);
-        }
-    }
-
-    if (!send_buf) {
-        /* Send uncompressed */
-        send_buf = payload;
-        send_len = (size_t)ser_size;
-        payload  = NULL;  /* don't double-free */
-    }
-
-    /* Build and send header + payload */
-    ray_ipc_header_t hdr = {
-        .prefix  = RAY_SERDE_PREFIX,
-        .version = RAY_VERSION_MAJOR,
-        .flags   = flags,
-        .endian  = 0,
-        .msgtype = RAY_IPC_MSG_RESP,
-        .size    = (int64_t)send_len,
-    };
-    ray_sock_send(c->fd, &hdr, sizeof(hdr));
-    ray_sock_send(c->fd, send_buf, send_len);
-
-    ray_sys_free(send_buf);
-    if (payload) ray_sys_free(payload);
-}
-
 static void conn_on_handshake(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
     (void)srv;
-    /* Validate: rx_buf[1] should be 0x00 (null terminator) */
-    uint8_t version = c->rx_buf[0];
-    (void)version;  /* version check can be added later */
-
-    /* Send handshake response: our version + null */
     uint8_t resp[2] = { RAY_VERSION_MAJOR, 0x00 };
     ray_sock_send(c->fd, resp, 2);
 
-    /* Switch to header phase */
     ray_sys_free(c->rx_buf);
     c->rx_buf  = NULL;
     c->rx_len  = 0;
-    c->rx_need = sizeof(ray_ipc_header_t);  /* 16 bytes */
+    c->rx_need = sizeof(ray_ipc_header_t);
     c->phase   = RAY_IPC_PHASE_HEADER;
 }
 
 static void conn_on_header(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
-    /* Copy header from rx_buf */
     memcpy(&c->hdr, c->rx_buf, sizeof(ray_ipc_header_t));
 
-    /* Validate prefix */
     if (c->hdr.prefix != RAY_SERDE_PREFIX) { conn_close(srv, c); return; }
     if (c->hdr.size <= 0)                  { conn_close(srv, c); return; }
     if (c->hdr.size > 256 * 1024 * 1024)   { conn_close(srv, c); return; }
 
-    /* Reallocate buffer for payload */
     ray_sys_free(c->rx_buf);
     c->rx_buf = (uint8_t*)ray_sys_alloc((size_t)c->hdr.size);
     if (!c->rx_buf) { conn_close(srv, c); return; }
@@ -429,67 +470,12 @@ static void conn_on_header(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
 static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
-    uint8_t* payload     = c->rx_buf;
-    size_t   payload_len = c->rx_len;
+    ray_t* result = eval_payload(c->rx_buf, c->rx_len, &c->hdr);
 
-    /* Decompress if needed */
-    uint8_t* decompressed = NULL;
-    if (c->hdr.flags & RAY_IPC_FLAG_COMPRESSED) {
-        /* First 4 bytes = uncompressed size */
-        if (payload_len < 4) { conn_close(srv, c); return; }
-        uint32_t uncomp_size;
-        memcpy(&uncomp_size, payload, 4);
-        decompressed = (uint8_t*)ray_sys_alloc(uncomp_size);
-        if (!decompressed) { conn_close(srv, c); return; }
-        size_t dlen = ray_ipc_decompress(payload + 4, payload_len - 4,
-                                         decompressed, uncomp_size);
-        if (dlen != uncomp_size) {
-            ray_sys_free(decompressed);
-            conn_close(srv, c);
-            return;
-        }
-        payload     = decompressed;
-        payload_len = uncomp_size;
-    }
-
-    /* Deserialize */
-    int64_t de_len = (int64_t)payload_len;
-    ray_t*  msg    = ray_de_raw(payload, &de_len);
-    if (decompressed) ray_sys_free(decompressed);
-
-    /* Eval */
-    ray_t* result = NULL;
-    if (msg && !RAY_IS_ERR(msg)) {
-        if (msg->type == -RAY_STR) {
-            /* String atom: eval as text */
-            const char* str  = ray_str_ptr(msg);
-            size_t      slen = ray_str_len(msg);
-            if (str && slen > 0) {
-                /* Need null-terminated copy for ray_eval_str */
-                char* tmp = (char*)ray_sys_alloc(slen + 1);
-                if (tmp) {
-                    memcpy(tmp, str, slen);
-                    tmp[slen] = '\0';
-                    result = ray_eval_str(tmp);
-                    ray_sys_free(tmp);
-                }
-            }
-            ray_release(msg);
-        } else {
-            /* Object message: eval directly */
-            result = ray_eval(msg);
-            ray_release(msg);
-        }
-    }
-    if (!result) result = RAY_NULL_OBJ;
-
-    /* Send response for sync messages */
-    if (c->hdr.msgtype == RAY_IPC_MSG_SYNC) {
-        conn_send_response(c, result);
-    }
+    if (c->hdr.msgtype == RAY_IPC_MSG_SYNC)
+        send_response(c->fd, result);
     if (result != RAY_NULL_OBJ) ray_release(result);
 
-    /* Reset for next message */
     ray_sys_free(c->rx_buf);
     c->rx_buf  = NULL;
     c->rx_len  = 0;
@@ -499,32 +485,22 @@ static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
 static void conn_on_readable(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
-    /* Ensure rx_buf has space */
     if (!c->rx_buf) {
         c->rx_buf = (uint8_t*)ray_sys_alloc(c->rx_need);
         if (!c->rx_buf) { conn_close(srv, c); return; }
     }
 
-    /* Read available data */
     int64_t n = ray_sock_recv(c->fd, c->rx_buf + c->rx_len,
                               c->rx_need - c->rx_len);
-    if (n <= 0) { conn_close(srv, c); return; }  /* closed or error */
+    if (n <= 0) { conn_close(srv, c); return; }
     c->rx_len += (size_t)n;
 
-    /* Not enough data yet */
     if (c->rx_len < c->rx_need) return;
 
-    /* Phase complete — process it */
     switch (c->phase) {
-    case RAY_IPC_PHASE_HANDSHAKE:
-        conn_on_handshake(srv, c);
-        break;
-    case RAY_IPC_PHASE_HEADER:
-        conn_on_header(srv, c);
-        break;
-    case RAY_IPC_PHASE_PAYLOAD:
-        conn_on_payload(srv, c);
-        break;
+    case RAY_IPC_PHASE_HANDSHAKE: conn_on_handshake(srv, c); break;
+    case RAY_IPC_PHASE_HEADER:    conn_on_header(srv, c);    break;
+    case RAY_IPC_PHASE_PAYLOAD:   conn_on_payload(srv, c);   break;
     }
 }
 
@@ -553,7 +529,7 @@ ray_err_t ray_ipc_server_init(ray_ipc_server_t* srv, uint16_t port)
     EV_SET(&kev, srv->listen_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
     kevent(srv->poll_fd, &kev, 1, NULL, 0, NULL);
 #else
-    srv->poll_fd = -1;  /* use select in poll */
+    srv->poll_fd = -1;
 #endif
 
     srv->running = true;
@@ -562,7 +538,6 @@ ray_err_t ray_ipc_server_init(ray_ipc_server_t* srv, uint16_t port)
 
 void ray_ipc_server_destroy(ray_ipc_server_t* srv)
 {
-    /* Close all connections */
     for (uint32_t i = 0; i < srv->n_conns; i++) {
         ray_ipc_conn_t* c = &srv->conns[i];
         if (c->fd != RAY_INVALID_SOCK) {
@@ -572,60 +547,16 @@ void ray_ipc_server_destroy(ray_ipc_server_t* srv)
     }
     srv->n_conns = 0;
 
-    /* Close listen socket */
     ray_sock_close(srv->listen_fd);
     srv->listen_fd = RAY_INVALID_SOCK;
 
-    /* Close poll fd */
     if (srv->poll_fd >= 0) {
-#ifdef _WIN32
-        /* no-op */
-#else
+#ifndef _WIN32
         close(srv->poll_fd);
 #endif
     }
     srv->poll_fd = -1;
     srv->running = false;
-}
-
-ray_err_t ray_ipc_watch_fd(ray_ipc_server_t* srv, int fd)
-{
-#if defined(__linux__)
-    struct epoll_event ev = { .events = EPOLLIN, .data.fd = fd };
-    if (epoll_ctl(srv->poll_fd, EPOLL_CTL_ADD, fd, &ev) < 0)
-        return RAY_ERR_IO;
-#elif defined(__APPLE__)
-    struct kevent kev;
-    EV_SET(&kev, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    if (kevent(srv->poll_fd, &kev, 1, NULL, 0, NULL) < 0)
-        return RAY_ERR_IO;
-#else
-    (void)srv; (void)fd;  /* handled in select */
-#endif
-    return RAY_OK;
-}
-
-void ray_ipc_attach(ray_ipc_server_t* srv, int poll_fd)
-{
-    if (!srv || poll_fd < 0) return;
-
-    /* Add listen socket to the external poll fd */
-#if defined(__linux__)
-    struct epoll_event ev = { .events = EPOLLIN, .data.fd = srv->listen_fd };
-    epoll_ctl(poll_fd, EPOLL_CTL_ADD, srv->listen_fd, &ev);
-#elif defined(__APPLE__)
-    struct kevent kev;
-    EV_SET(&kev, srv->listen_fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    kevent(poll_fd, &kev, 1, NULL, 0, NULL);
-#endif
-
-    /* Close old poll fd and use the external one */
-    if (srv->poll_fd >= 0 && srv->poll_fd != poll_fd) {
-#ifndef _WIN32
-        close(srv->poll_fd);
-#endif
-    }
-    srv->poll_fd = poll_fd;
 }
 
 int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
@@ -641,7 +572,6 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
         int fd = events[i].data.fd;
 
         if (fd == srv->listen_fd) {
-            /* Accept new connection */
             ray_sock_t new_fd = ray_sock_accept(srv->listen_fd);
             if (new_fd == RAY_INVALID_SOCK) continue;
             ray_sock_set_nonblocking(new_fd);
@@ -653,12 +583,11 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
             c->fd      = new_fd;
             c->rx_buf  = NULL;
             c->rx_len  = 0;
-            c->rx_need = 2;  /* handshake: version byte + null */
+            c->rx_need = 2;
             c->phase   = RAY_IPC_PHASE_HANDSHAKE;
             struct epoll_event cev = { .events = EPOLLIN, .data.fd = new_fd };
             epoll_ctl(srv->poll_fd, EPOLL_CTL_ADD, new_fd, &cev);
         } else {
-            /* Find connection or count as external fd */
             bool found = false;
             for (uint32_t j = 0; j < srv->n_conns; j++) {
                 if (srv->conns[j].fd == fd) {
@@ -667,7 +596,7 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
                     break;
                 }
             }
-            if (!found) ready++;  /* external watched fd */
+            if (!found) ready++;
         }
     }
 
@@ -687,7 +616,6 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
         int fd = (int)events[i].ident;
 
         if (fd == srv->listen_fd) {
-            /* Accept new connection */
             ray_sock_t new_fd = ray_sock_accept(srv->listen_fd);
             if (new_fd == RAY_INVALID_SOCK) continue;
             ray_sock_set_nonblocking(new_fd);
@@ -755,7 +683,6 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
         }
     }
 
-    /* Iterate in reverse so conn_close swap-compaction doesn't skip entries */
     for (uint32_t i = srv->n_conns; i > 0; ) {
         --i;
         if (srv->conns[i].fd != RAY_INVALID_SOCK && FD_ISSET(srv->conns[i].fd, &rfds))
@@ -766,7 +693,7 @@ int ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms)
     return ready;
 }
 
-/* ===== Client ===== */
+/* ===== Client API ===== */
 
 static ray_sock_t g_client_fds[RAY_IPC_MAX_CONNS];
 static int        g_client_count = 0;
@@ -793,9 +720,8 @@ static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
 {
     if (handle < 0 || handle >= RAY_IPC_MAX_CONNS) return -2;
     ray_sock_t fd = g_client_fds[handle];
-    if (fd == RAY_INVALID_SOCK) return -2;  /* dead handle */
+    if (fd == RAY_INVALID_SOCK) return -2;
 
-    /* Serialize */
     int64_t ser_size = ray_serde_size(msg);
     if (ser_size <= 0) return -1;
 
@@ -803,7 +729,6 @@ static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
     if (!payload) return -1;
     ray_ser_raw(payload, msg);
 
-    /* Try compression */
     uint8_t* send_buf = NULL;
     size_t   send_len = 0;
     uint8_t  flags    = 0;
@@ -833,7 +758,6 @@ static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
         payload  = NULL;
     }
 
-    /* Build and send header + payload */
     ray_ipc_header_t hdr = {
         .prefix  = RAY_SERDE_PREFIX,
         .version = RAY_VERSION_MAJOR,
@@ -859,21 +783,18 @@ int64_t ray_ipc_connect(const char* host, uint16_t port)
     ray_sock_t fd = ray_sock_connect(host, port, 5000);
     if (fd == RAY_INVALID_SOCK) return -1;
 
-    /* Send handshake: version + null */
     uint8_t hs[2] = { RAY_VERSION_MAJOR, 0x00 };
     if (ray_sock_send(fd, hs, 2) < 0) {
         ray_sock_close(fd);
         return -1;
     }
 
-    /* Receive handshake response */
     uint8_t resp[2];
     if (recv_full(fd, resp, 2) < 0 || resp[1] != 0x00) {
         ray_sock_close(fd);
         return -1;
     }
 
-    /* Clear connect/handshake timeout — data transfer has no time limit */
 #ifdef _WIN32
     { DWORD z = 0;
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&z, sizeof(z));
@@ -884,7 +805,6 @@ int64_t ray_ipc_connect(const char* host, uint16_t port)
       setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &z, sizeof(z)); }
 #endif
 
-    /* Find free slot */
     for (int i = 0; i < RAY_IPC_MAX_CONNS; i++) {
         if (g_client_fds[i] == RAY_INVALID_SOCK) {
             g_client_fds[i] = fd;
@@ -893,7 +813,6 @@ int64_t ray_ipc_connect(const char* host, uint16_t port)
         }
     }
 
-    /* No free slot */
     ray_sock_close(fd);
     return -1;
 }
@@ -914,10 +833,9 @@ ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
 
     ray_sock_t fd = g_client_fds[handle];
 
-    /* Receive response header */
     ray_ipc_header_t hdr;
     if (recv_full(fd, &hdr, sizeof(hdr)) < 0) {
-        ray_ipc_close(handle);  /* invalidate poisoned handle */
+        ray_ipc_close(handle);
         return ray_error("io", "ipc recv header failed");
     }
     if (hdr.prefix != RAY_SERDE_PREFIX || hdr.size <= 0) {
@@ -925,7 +843,6 @@ ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
         return ray_error("io", "ipc bad response header");
     }
 
-    /* Receive response payload */
     uint8_t* payload = (uint8_t*)ray_sys_alloc((size_t)hdr.size);
     if (!payload) return ray_error("oom", NULL);
     if (recv_full(fd, payload, (size_t)hdr.size) < 0) {
@@ -934,7 +851,6 @@ ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
         return ray_error("io", "ipc recv payload failed");
     }
 
-    /* Decompress if needed */
     uint8_t* deser_buf     = payload;
     size_t   deser_len     = (size_t)hdr.size;
     uint8_t* decompressed  = NULL;
@@ -956,7 +872,6 @@ ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
         deser_len = uncomp_size;
     }
 
-    /* Deserialize */
     int64_t de_len = (int64_t)deser_len;
     ray_t*  result = ray_de_raw(deser_buf, &de_len);
 

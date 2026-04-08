@@ -25,25 +25,9 @@
 #define RAY_IPC_H
 
 #include <rayforce.h>
+#include "core/poll.h"
+#include "core/sock.h"
 #include "store/serde.h"
-
-/* ===== Socket Abstraction ===== */
-
-#ifdef _WIN32
-  typedef intptr_t ray_sock_t;
-  #define RAY_INVALID_SOCK ((ray_sock_t)-1)
-#else
-  typedef int ray_sock_t;
-  #define RAY_INVALID_SOCK (-1)
-#endif
-
-ray_sock_t ray_sock_listen(uint16_t port);
-ray_sock_t ray_sock_accept(ray_sock_t srv);
-ray_sock_t ray_sock_connect(const char* host, uint16_t port, int timeout_ms);
-int64_t    ray_sock_send(ray_sock_t s, const void* buf, size_t len);
-int64_t    ray_sock_recv(ray_sock_t s, void* buf, size_t len);
-void       ray_sock_close(ray_sock_t s);
-ray_err_t  ray_sock_set_nonblocking(ray_sock_t s);
 
 /* ===== Compression ===== */
 
@@ -54,19 +38,21 @@ size_t ray_ipc_compress(const uint8_t* src, size_t len,
 size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
                           uint8_t* dst, size_t dst_len);
 
-/* ===== Connection State ===== */
-
-#define RAY_IPC_PHASE_HANDSHAKE 0
-#define RAY_IPC_PHASE_HEADER    1
-#define RAY_IPC_PHASE_PAYLOAD   2
-
-#define RAY_IPC_MAX_CONNS 256
+/* ===== Message types ===== */
 
 #define RAY_IPC_MSG_ASYNC  0
 #define RAY_IPC_MSG_SYNC   1
 #define RAY_IPC_MSG_RESP   2
 
 #define RAY_IPC_FLAG_COMPRESSED 0x01
+#define RAY_IPC_MAX_CONNS 256
+
+/* ===== Poll-based IPC (new API) ===== */
+
+/* Register IPC listener on poll. Returns selector id or -1. */
+int64_t ray_ipc_listen(ray_poll_t* poll, uint16_t port);
+
+/* ===== Legacy server API (wraps poll internally for tests) ===== */
 
 typedef struct ray_ipc_conn {
     ray_sock_t        fd;
@@ -76,8 +62,6 @@ typedef struct ray_ipc_conn {
     uint8_t           phase;
     ray_ipc_header_t  hdr;
 } ray_ipc_conn_t;
-
-/* ===== Server ===== */
 
 typedef struct ray_ipc_server {
     ray_sock_t        listen_fd;
@@ -90,14 +74,8 @@ typedef struct ray_ipc_server {
 ray_err_t ray_ipc_server_init(ray_ipc_server_t* srv, uint16_t port);
 void      ray_ipc_server_destroy(ray_ipc_server_t* srv);
 int       ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms);
-ray_err_t ray_ipc_watch_fd(ray_ipc_server_t* srv, int fd);
 
-/* Attach IPC server to an external poll fd (e.g., terminal's epoll/kqueue).
- * Moves the listen socket to the new poll fd. The server's own poll_fd is
- * closed and replaced. */
-void      ray_ipc_attach(ray_ipc_server_t* srv, int poll_fd);
-
-/* ===== Client ===== */
+/* ===== Client API (blocking, no poll needed) ===== */
 
 int64_t   ray_ipc_connect(const char* host, uint16_t port);
 void      ray_ipc_close(int64_t handle);

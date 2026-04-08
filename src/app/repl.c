@@ -30,7 +30,7 @@
 #include "lang/format.h"
 #include "app/repl.h"
 #include "app/term.h"
-#include "core/ipc.h"
+#include "core/poll.h"
 #include "lang/env.h"
 #include "lang/eval.h"
 #include "lang/nfo.h"
@@ -81,29 +81,26 @@ static void render_progress(int64_t done, int64_t total, const char* label) {
 }
 
 static void clear_progress(void) {
-    /* Clear the progress line */
     fprintf(stderr, "\r\033[K");
     fflush(stderr);
 }
 
 /* ===== Profiler span tree printer (reads from g_ray_profile) ===== */
 
-/* Recursively print nested span tree (matching Rayforce 1.0 format) */
 static int32_t profile_print_tree(int32_t idx, int32_t indent) {
     while (idx < g_ray_profile.n) {
         ray_prof_span_t* sp = &g_ray_profile.spans[idx];
 
         switch (sp->type) {
         case RAY_PROF_SPAN_START: {
-            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
-            fprintf(stdout, "\xe2\x95\xad %s\n", sp->msg); /* ╭ */
+            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 ");
+            fprintf(stdout, "\xe2\x95\xad %s\n", sp->msg);
             idx++;
             idx = profile_print_tree(idx, indent + 1);
-            /* idx now points at the matching END span (or past end if truncated) */
             if (idx < g_ray_profile.n) {
                 double ms = (double)(g_ray_profile.spans[idx].ts - sp->ts) / 1e6;
-                for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
-                fprintf(stdout, "\xe2\x95\xb0\xe2\x94\x80\xe2\x94\xa4 %.3f ms\n", ms); /* ╰─┤ */
+                for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 ");
+                fprintf(stdout, "\xe2\x95\xb0\xe2\x94\x80\xe2\x94\xa4 %.3f ms\n", ms);
                 idx++;
             }
             break;
@@ -114,8 +111,8 @@ static int32_t profile_print_tree(int32_t idx, int32_t indent) {
             double ms = 0.0;
             if (idx > 0)
                 ms = (double)(sp->ts - g_ray_profile.spans[idx - 1].ts) / 1e6;
-            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 "); /* │  */
-            fprintf(stdout, "\xe2\x9c\xb6  %s: %.3f ms\n", sp->msg, ms); /* ✶ */
+            for (int32_t i = 0; i < indent; i++) fprintf(stdout, "\xe2\x94\x82 ");
+            fprintf(stdout, "\xe2\x9c\xb6  %s: %.3f ms\n", sp->msg, ms);
             idx++;
             break;
         }
@@ -221,7 +218,6 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
     memcpy(err_code, err->sdata, err->slen < 7 ? err->slen : 7);
     const char* detail = ray_error_msg();
 
-    /* Header: "  x Error: type" */
     fprintf(fp, "\n");
     if (use_color) fprintf(fp, "\033[1;31m");
     fprintf(fp, "  \xc3\x97 Error: %s", err_code);
@@ -236,12 +232,10 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
         if (!frame || frame->type != RAY_LIST || ray_len(frame) < 4) continue;
         ray_t** felems = (ray_t**)ray_data(frame);
 
-        /* Extract span */
         ray_span_t span;
         span.id = felems[0] ? felems[0]->i64 : 0;
         if (span.id == 0) continue;
 
-        /* Filename */
         const char* fname = "repl";
         size_t fname_len = 4;
         if (felems[1] && !RAY_IS_ERR(felems[1])) {
@@ -249,7 +243,6 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
             fname_len = ray_str_len(felems[1]);
         }
 
-        /* Source */
         const char* source = "";
         size_t src_len = 0;
         if (felems[3] && !RAY_IS_ERR(felems[3])) {
@@ -257,7 +250,6 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
             src_len = ray_str_len(felems[3]);
         }
 
-        /* Find line in source */
         int line_num = span.start_line;
         const char* line_start = source;
         int current_line = 0;
@@ -265,17 +257,14 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
             if (*line_start == '\n') current_line++;
             line_start++;
         }
-        /* Find line end */
         const char* line_end = line_start;
         while (line_end < source + src_len && *line_end != '\n') line_end++;
         int line_len = (int)(line_end - line_start);
 
-        /* Gutter width */
         int display_line = line_num + 1;
         int gutter = 1;
         { int tmp = display_line; while (tmp >= 10) { gutter++; tmp /= 10; } }
 
-        /* Frame header: \u256d\u2500[filename:line:col] */
         fprintf(fp, "\n");
         if (use_color) fprintf(fp, "\033[90m");
         fprintf(fp, "   \xe2\x95\xad\xe2\x94\x80[");
@@ -286,7 +275,6 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
         if (use_color) fprintf(fp, "\033[90m");
         fprintf(fp, "]\n");
 
-        /* Source line: " N \u2502 source" */
         if (use_color) fprintf(fp, "\033[36m");
         fprintf(fp, " %*d", gutter, display_line);
         if (use_color) fprintf(fp, "\033[90m");
@@ -294,14 +282,12 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
         if (use_color) fprintf(fp, "\033[0m");
         fprintf(fp, "%.*s\n", line_len, line_start);
 
-        /* Caret line: "   \u2502     \u25b2" */
         if (use_color) fprintf(fp, "\033[90m");
         fprintf(fp, " %*s \xe2\x94\x82 ", gutter, "");
         for (int i = 0; i < span.start_col; i++) fputc(' ', fp);
         if (use_color) fprintf(fp, "\033[35m");
         fprintf(fp, "\xe2\x96\xb2\n");
 
-        /* Error label: "   \u2502     \u2570\u2500 type" */
         if (use_color) fprintf(fp, "\033[90m");
         fprintf(fp, " %*s \xe2\x94\x82 ", gutter, "");
         for (int i = 0; i < span.start_col; i++) fputc(' ', fp);
@@ -315,7 +301,6 @@ static void fmt_error_with_trace(FILE* fp, ray_t* err, ray_t* trace, bool use_co
         if (use_color) fprintf(fp, "\033[0m");
         fprintf(fp, "\n");
 
-        /* Footer: "   \u2570\u2500 in \u03bb" or "   \u2570\u2500 in func_name" */
         if (use_color) fprintf(fp, "\033[90m");
         fprintf(fp, "   \xe2\x95\xb0\xe2\x94\x80 in ");
         if (felems[2] && !RAY_IS_ERR(felems[2])) {
@@ -361,12 +346,14 @@ static void repl_print_result(FILE* fp, ray_t* val, bool use_color) {
     fprintf(fp, "\n");
 }
 
-ray_repl_t* ray_repl_create(void) {
+ray_repl_t* ray_repl_create(ray_poll_t* poll) {
     ray_t* block = ray_alloc(sizeof(ray_repl_t));
     if (!block) return NULL;
     ray_repl_t* repl = (ray_repl_t*)ray_data(block);
     memset(repl, 0, sizeof(*repl));
     repl->_block = block;
+    repl->poll   = poll;
+    repl->id     = -1;
 
     if (isatty(STDIN_FD)) {
         repl->term = ray_term_create();
@@ -398,11 +385,9 @@ static void eval_and_print(ray_term_t* term, const char* input,
     ray_eval_clear_interrupt();
     if (term) ray_term_eval_begin(term);
 
-    /* Create nfo for source location tracking */
     ray_t* nfo = ray_nfo_create("repl", 4, input, strlen(input));
     ray_clear_error_trace();
 
-    /* Parse */
     ray_t* parsed = ray_parse_with_nfo(input, nfo);
     if (profiling) ray_profile_tick("parse");
 
@@ -410,9 +395,7 @@ static void eval_and_print(ray_term_t* term, const char* input,
     if (RAY_IS_ERR(parsed)) {
         result = parsed;
     } else {
-        /* Eval (DAG optimize + execute happens inside for select/update) */
         ray_t* prev_nfo = ray_eval_get_nfo();
-        /* Set nfo so lambdas created during eval get source info */
         ray_eval_set_nfo(nfo);
         result = ray_eval(parsed);
         ray_eval_set_nfo(prev_nfo);
@@ -423,7 +406,6 @@ static void eval_and_print(ray_term_t* term, const char* input,
 
     if (term) ray_term_eval_end(term);
 
-    /* Materialize lazy handles before printing */
     if (ray_is_lazy(result)) {
         result = ray_lazy_materialize(result);
         if (profiling) ray_profile_tick("materialize");
@@ -476,7 +458,6 @@ static bool cmd_match(const char* cmd, size_t clen,
     if (memcmp(cmd, name, nlen) != 0) return false;
     if (clen == nlen) { *arg = NULL; *arg_len = 0; return true; }
     if (cmd[nlen] != ' ') return false;
-    /* Skip spaces after command name */
     size_t off = nlen + 1;
     while (off < clen && cmd[off] == ' ') off++;
     *arg = cmd + off;
@@ -513,7 +494,6 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
 
     if (cmd_match(cmd, clen, "t", 1, &arg, &arg_len) ||
         cmd_match(cmd, clen, "timeit", 6, &arg, &arg_len)) {
-        /* :t — pure toggle, no arguments. Use (timeit expr) for per-expression. */
         if (arg && arg_len > 0) {
             if (color) fprintf(stdout, "\033[1;33m");
             fprintf(stdout, ". :t takes no arguments. Use (timeit expr) for per-expression timing.");
@@ -562,89 +542,183 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     return true;
 }
 
+/* ===== Interactive mode — poll-driven ===== */
+
+/* repl_read callback: called when stdin has data.
+ * Reads one byte via term_getc, feeds it to term_feed.
+ * Returns a ray_t* string when a line is complete, NULL otherwise. */
+static ray_t* repl_read(ray_poll_t* poll, ray_selector_t* sel)
+{
+    (void)poll;
+    ray_repl_t* repl = (ray_repl_t*)sel->data;
+    ray_term_t* term = repl->term;
+
+    int64_t sz = ray_term_getc(term);
+    if (sz <= 0) {
+        if (sz == -2) {
+            /* SIGINT — clear line and re-prompt */
+            ray_term_clear_interrupt();
+            ray_eval_clear_interrupt();
+            term->comp_cycling = 0;
+            term->esc_state = 0;
+            term->buf_len = 0;
+            term->buf_pos = 0;
+            term->multiline_len = 0;
+#if !defined(_WIN32)
+            { ssize_t r_ = write(STDOUT_FILENO, "^C\n", 3); (void)r_; }
+#endif
+            ray_term_prompt(term);
+            fflush(stdout);
+            return NULL;
+        }
+        /* EOF */
+        ray_poll_exit(poll, 0);
+        return NULL;
+    }
+
+    ray_t* line = ray_term_feed(term);
+    if (line == RAY_TERM_EOF) {
+        ray_poll_exit(poll, 0);
+        return NULL;
+    }
+    return line;
+}
+
+/* repl_on_data callback: receives a complete line string.
+ * Handles commands, evals, and prints. */
+static ray_t* repl_on_data(ray_poll_t* poll, ray_selector_t* sel, void* data)
+{
+    (void)poll;
+    ray_repl_t* repl = (ray_repl_t*)sel->data;
+    ray_t* line = (ray_t*)data;
+
+    const char* str = ray_str_ptr(line);
+    size_t len = ray_str_len(line);
+
+    if (len == 0) {
+        ray_release(line);
+        ray_term_begin(repl->term);
+        return NULL;
+    }
+
+    /* Exit commands */
+    if ((len == 2 && memcmp(str, "\\\\", 2) == 0) ||
+        (len == 4 && memcmp(str, "exit", 4) == 0)) {
+        ray_release(line);
+        ray_poll_exit(poll, 0);
+        return NULL;
+    }
+
+    /* REPL commands starting with ':' */
+    if (str[0] == ':') {
+        size_t clen = len - 1;
+        const char* cmd = str + 1;
+        if ((clen == 1 && cmd[0] == 'q') ||
+            (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
+            ray_release(line);
+            ray_poll_exit(poll, 0);
+            return NULL;
+        }
+        handle_command(repl, str, len);
+        ray_release(line);
+        ray_term_begin(repl->term);
+        return NULL;
+    }
+
+    eval_and_print(repl->term, str, true, repl->timeit);
+    ray_release(line);
+    ray_term_begin(repl->term);
+    return NULL;
+}
+
 static void run_interactive(ray_repl_t* repl) {
     ray_term_t* term = repl->term;
     print_banner();
 
-    /* Merge IPC into terminal's event loop: add the IPC listen socket
-     * to the terminal's epoll/kqueue fd, then replace the IPC server's
-     * poll_fd with the terminal's so all events go through one fd. */
-    if (repl->ipc_srv) {
-        ray_ipc_attach(repl->ipc_srv, term->poll_fd);
-        term->ipc_srv = repl->ipc_srv;
-    }
+    if (repl->poll) {
+        /* Register stdin in poll */
+        ray_poll_reg_t reg = {0};
+        reg.fd       = STDIN_FD;
+        reg.type     = RAY_SEL_STDIN;
+        reg.read_fn  = repl_read;
+        reg.data_fn  = repl_on_data;
+        reg.data     = repl;
 
-    ray_term_begin(term);
-    for (;;) {
-        int64_t sz = ray_term_getc(term);
-        if (sz <= 0) {
-            if (sz == -2) {
-                /* SIGINT — clear line and re-prompt */
-                ray_term_clear_interrupt();
-                ray_eval_clear_interrupt();
-                term->comp_cycling = 0;
-                term->esc_state = 0;
-                term->buf_len = 0;
-                term->buf_pos = 0;
-                term->multiline_len = 0;
-                { ssize_t r_ = write(STDOUT_FILENO, "^C\n", 3); (void)r_; }
-                ray_term_prompt(term);
-                fflush(stdout);
+        repl->id = ray_poll_register(repl->poll, &reg);
+
+        ray_term_begin(term);
+        ray_poll_run(repl->poll);
+    } else {
+        /* Fallback: no poll, run blocking loop */
+        ray_term_begin(term);
+        for (;;) {
+            int64_t sz = ray_term_getc(term);
+            if (sz <= 0) {
+                if (sz == -2) {
+                    ray_term_clear_interrupt();
+                    ray_eval_clear_interrupt();
+                    term->comp_cycling = 0;
+                    term->esc_state = 0;
+                    term->buf_len = 0;
+                    term->buf_pos = 0;
+                    term->multiline_len = 0;
+#if !defined(_WIN32)
+                    { ssize_t r_ = write(STDOUT_FILENO, "^C\n", 3); (void)r_; }
+#endif
+                    ray_term_prompt(term);
+                    fflush(stdout);
+                    continue;
+                }
+                break;
+            }
+            ray_t* line = ray_term_feed(term);
+            if (line == RAY_TERM_EOF) break;
+            if (!line) continue;
+
+            const char* str = ray_str_ptr(line);
+            size_t len = ray_str_len(line);
+
+            if (len == 0) {
+                ray_release(line);
+                ray_term_begin(term);
                 continue;
             }
-            break; /* EOF */
-        }
-        ray_t* line = ray_term_feed(term);
-        if (line == RAY_TERM_EOF) break;
-        if (!line) continue;
 
-        const char* str = ray_str_ptr(line);
-        size_t len = ray_str_len(line);
-
-        if (len == 0) {
-            ray_release(line);
-            ray_term_begin(term);
-            continue;
-        }
-
-        /* Exit commands */
-        if ((len == 2 && memcmp(str, "\\\\", 2) == 0) ||
-            (len == 4 && memcmp(str, "exit", 4) == 0)) {
-            ray_release(line);
-            break;
-        }
-
-        /* REPL commands starting with ':' */
-        if (str[0] == ':') {
-            size_t clen = len - 1;
-            const char* cmd = str + 1;
-            if ((clen == 1 && cmd[0] == 'q') ||
-                (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
+            if ((len == 2 && memcmp(str, "\\\\", 2) == 0) ||
+                (len == 4 && memcmp(str, "exit", 4) == 0)) {
                 ray_release(line);
                 break;
             }
-            handle_command(repl, str, len);
+
+            if (str[0] == ':') {
+                size_t clen = len - 1;
+                const char* cmd = str + 1;
+                if ((clen == 1 && cmd[0] == 'q') ||
+                    (clen == 4 && memcmp(cmd, "quit", 4) == 0)) {
+                    ray_release(line);
+                    break;
+                }
+                handle_command(repl, str, len);
+                ray_release(line);
+                ray_term_begin(term);
+                continue;
+            }
+
+            eval_and_print(repl->term, str, true, repl->timeit);
             ray_release(line);
             ray_term_begin(term);
-            continue;
         }
-
-        eval_and_print(repl->term, str, true, repl->timeit);
-        ray_release(line);
-        ray_term_begin(term);
     }
 }
 
+/* ===== Piped mode ===== */
+
 /* Parse state for bracket_delta, preserved across chunk boundaries. */
 typedef struct {
-    int in_string;   /* inside a "..." literal */
-    int in_comment;  /* inside a ;-comment (until newline) */
+    int in_string;
+    int in_comment;
 } bracket_state_t;
 
-/* Compute the net bracket delta for a string, skipping string literals
- * and ;-comments.  Result can be negative (more closers than openers).
- * If `state` is non-NULL, string/comment parse state is carried across
- * calls (required for chunked overflow recovery in piped mode). */
 static int32_t bracket_delta_s(const char* s, size_t len,
                                bracket_state_t* state) {
     int32_t depth = 0;
@@ -676,12 +750,10 @@ static int32_t bracket_delta_s(const char* s, size_t len,
     return depth;
 }
 
-/* Convenience wrapper with no persistent state (single-buffer calls). */
 static int32_t bracket_delta(const char* s, size_t len) {
     return bracket_delta_s(s, len, NULL);
 }
 
-/* Count unmatched opening brackets (clamped >= 0). */
 static int32_t count_unmatched(const char* s, size_t len) {
     int32_t d = bracket_delta(s, len);
     return d > 0 ? d : 0;
@@ -691,7 +763,7 @@ static void run_piped(ray_repl_t* repl) {
     char line[PIPE_BUF_SIZE];
     char accum[PIPE_BUF_SIZE];
     size_t accum_len = 0;
-    bool mid_line = false; /* true when fgets returned without a newline */
+    bool mid_line = false;
 
     while (fgets(line, PIPE_BUF_SIZE, stdin)) {
         size_t len = strlen(line);
@@ -705,7 +777,6 @@ static void run_piped(ray_repl_t* repl) {
         if (accum_len == 0 && !mid_line) {
             if (strcmp(line, "\\\\") == 0 || strcmp(line, "exit") == 0) break;
 
-            /* REPL commands */
             if (line[0] == ':') {
                 size_t clen = len - 1;
                 const char* cmd = line + 1;
@@ -727,49 +798,38 @@ static void run_piped(ray_repl_t* repl) {
         } else {
             fprintf(stderr, "error: input too large (max %d bytes)\n",
                     PIPE_BUF_SIZE - 1);
-            /* Compute bracket depth of the accumulated text plus the
-               current chunk that triggered the overflow.  Use stateful
-               parsing so string/comment context survives chunk splits. */
             bracket_state_t bs = {0, 0};
             int32_t depth = bracket_delta_s(accum, accum_len, &bs);
-            /* A logical newline separates accum from line (the normal
-               append path inserts one at line 519).  Reset comment state
-               so a trailing ;-comment in accum doesn't bleed into line. */
             if (accum_len > 0 && !mid_line) bs.in_comment = 0;
             depth += bracket_delta_s(line, len, &bs);
             accum_len = 0;
             mid_line = false;
-            /* Drain the rest of the oversized physical line. */
             while (!had_newline) {
                 if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
                 len = strlen(line);
                 had_newline = (len > 0 && line[len - 1] == '\n');
                 if (had_newline) {
                     line[--len] = '\0';
-                    bs.in_comment = 0; /* newline ends ; comment */
+                    bs.in_comment = 0;
                 }
                 depth += bracket_delta_s(line, len, &bs);
             }
-            /* If we were inside an unmatched multi-line form, keep
-               draining lines until brackets balance or EOF. */
             while (depth > 0) {
                 if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
                 len = strlen(line);
                 had_newline = (len > 0 && line[len - 1] == '\n');
                 if (had_newline) {
                     line[--len] = '\0';
-                    bs.in_comment = 0; /* newline ends ; comment */
+                    bs.in_comment = 0;
                 }
                 depth += bracket_delta_s(line, len, &bs);
-                /* If fgets didn't see a newline, drain the rest of
-                   this physical line before counting brackets. */
                 while (!had_newline) {
                     if (!fgets(line, PIPE_BUF_SIZE, stdin)) break;
                     len = strlen(line);
                     had_newline = (len > 0 && line[len - 1] == '\n');
                     if (had_newline) {
                         line[--len] = '\0';
-                        bs.in_comment = 0; /* newline ends ; comment */
+                        bs.in_comment = 0;
                     }
                     depth += bracket_delta_s(line, len, &bs);
                 }
@@ -777,33 +837,26 @@ static void run_piped(ray_repl_t* repl) {
             continue;
         }
 
-        /* Track whether we're in the middle of a physical line */
         if (!had_newline) {
             mid_line = true;
-            continue; /* keep accumulating until the line ends */
+            continue;
         }
         mid_line = false;
 
-        /* Evaluate when brackets are balanced */
         if (count_unmatched(accum, accum_len) == 0) {
             eval_and_print(NULL, accum, false, repl->timeit);
-            if (repl->ipc_srv)
-                ray_ipc_poll(repl->ipc_srv, 0);
             accum_len = 0;
         }
     }
 
-    /* Evaluate any remaining accumulated input */
     if (accum_len > 0) {
         accum[accum_len] = '\0';
         eval_and_print(NULL, accum, false, repl->timeit);
     }
 
-    /* If IPC server is active, keep running after stdin exhausted */
-    if (repl->ipc_srv) {
-        while (repl->ipc_srv->running)
-            ray_ipc_poll(repl->ipc_srv, 100);
-    }
+    /* If poll has registered selectors (IPC server), enter poll_run after stdin */
+    if (repl->poll && repl->poll->n_sels > 0)
+        ray_poll_run(repl->poll);
 }
 
 void ray_repl_run(ray_repl_t* repl) {
@@ -844,7 +897,6 @@ int ray_repl_run_file(const char* path) {
 
     ray_t* result = ray_eval_str(buf);
     ray_release(block);
-    /* Materialize lazy handles before printing */
     if (ray_is_lazy(result))
         result = ray_lazy_materialize(result);
     if (RAY_IS_ERR(result)) {

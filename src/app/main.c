@@ -21,15 +21,15 @@
  *   SOFTWARE.
  */
 
-#include "app/repl.h"
+#include "core/poll.h"
 #include "core/ipc.h"
+#include "app/repl.h"
 #include "core/runtime.h"
 #include <rayforce.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
 
 int main(int argc, char** argv) {
     ray_runtime_t* rt = ray_runtime_create(argc, argv);
@@ -50,40 +50,37 @@ int main(int argc, char** argv) {
             file = argv[i];
     }
 
+    ray_poll_t* poll = ray_poll_create();
+
     /* Start IPC server if port specified */
-    ray_ipc_server_t ipc_srv_storage;
-    ray_ipc_server_t* ipc_srv = NULL;
     if (port > 0) {
-        if (ray_ipc_server_init(&ipc_srv_storage, port) == RAY_OK) {
-            ipc_srv = &ipc_srv_storage;
+        if (poll && ray_ipc_listen(poll, port) >= 0)
             fprintf(stderr, "listening on port %u\n", port);
-        } else {
-            fprintf(stderr, "failed to listen on port %u: %s\n", port, strerror(errno));
-        }
+        else
+            fprintf(stderr, "failed to listen on port %u: %s\n",
+                    port, strerror(errno));
     }
 
     /* Load script if specified */
     if (file) {
         rc = ray_repl_run_file(file);
-        if (!interactive && !ipc_srv) goto done;
+        if (!interactive && !(port > 0)) goto done;
     }
 
     /* REPL or pure server mode */
     {
-        ray_repl_t* repl = ray_repl_create();
+        ray_repl_t* repl = ray_repl_create(poll);
         if (repl) {
-            repl->ipc_srv = ipc_srv;
             ray_repl_run(repl);
             ray_repl_destroy(repl);
-        } else if (ipc_srv) {
+        } else if (poll && port > 0) {
             /* No REPL possible — run pure server loop */
-            while (ipc_srv->running)
-                ray_ipc_poll(ipc_srv, 100);
+            ray_poll_run(poll);
         }
     }
 
 done:
-    if (ipc_srv) ray_ipc_server_destroy(ipc_srv);
+    if (poll) ray_poll_destroy(poll);
     ray_runtime_destroy(rt);
     return rc;
 }

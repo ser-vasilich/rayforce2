@@ -21,25 +21,40 @@
  *   SOFTWARE.
  */
 
-#ifndef RAY_IO_REPL_H
-#define RAY_IO_REPL_H
+#if defined(_WIN32)
 
-#include <rayforce.h>
+#include "core/poll.h"
+#include <stdio.h>
 
-typedef struct ray_term ray_term_t;
-typedef struct ray_poll ray_poll_t;
+/* Windows IOCP implementation — stub for now.
+ * Full IOCP support is deferred to a future release. */
 
-typedef struct ray_repl {
-    ray_t*              _block;
-    ray_term_t*         term;      /* NULL if piped/non-tty */
-    bool                timeit;    /* :timeit toggle — print expression timing */
-    ray_poll_t*         poll;      /* event loop — NULL in piped mode */
-    int64_t             id;        /* selector id for stdin in poll */
-} ray_repl_t;
+ray_poll_t* ray_poll_create(void)
+{
+    fprintf(stderr, "ray_poll_create: IOCP not yet implemented\n");
+    return NULL;
+}
 
-ray_repl_t* ray_repl_create(ray_poll_t* poll);
-void       ray_repl_destroy(ray_repl_t* repl);
-void       ray_repl_run(ray_repl_t* repl);
-int        ray_repl_run_file(const char* path);
+void ray_poll_destroy(ray_poll_t* poll)
+{
+    (void)poll;
+}
 
-#endif /* RAY_IO_REPL_H */
+int64_t ray_poll_register(ray_poll_t* poll, ray_poll_reg_t* reg)
+{
+    (void)poll; (void)reg;
+    return -1;
+}
+
+void ray_poll_deregister(ray_poll_t* poll, int64_t id)
+{
+    (void)poll; (void)id;
+}
+
+int64_t ray_poll_run(ray_poll_t* poll)
+{
+    (void)poll;
+    return -1;
+}
+
+#endif /* _WIN32 */

@@ -29,7 +29,6 @@
 
 
 #include "app/term.h"
-#include "core/ipc.h"
 #include "lang/env.h"
 #include "lang/eval.h"
 #include <stdio.h>
@@ -53,11 +52,6 @@ typedef struct _stat hist_stat_t;
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
-#if defined(__linux__)
-  #include <sys/epoll.h>
-#elif defined(__APPLE__)
-  #include <sys/event.h>
-#endif
 #include <sys/stat.h>
 #define hist_open(p, f, m)  open((p), (f), (m))
 #define hist_read(fd, b, n) read((fd), (b), (n))
@@ -99,8 +93,6 @@ static void signal_handler(int sig) {
             SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
             SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
 #else
-            { int fl = fcntl(STDIN_FILENO, F_GETFL);
-              fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK); }
             tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
 #endif
         }
@@ -116,8 +108,6 @@ static void atexit_handler(void) {
         SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
         SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
 #else
-        { int fl = fcntl(STDIN_FILENO, F_GETFL);
-          fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK); }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
 #endif
         g_active_term = NULL;
@@ -332,28 +322,9 @@ ray_term_t* ray_term_create(void) {
     tcgetattr(STDIN_FILENO, &term->oldattr);
     term->newattr = term->oldattr;
     term->newattr.c_lflag &= ~(ICANON | ECHO | ISIG);
-    term->newattr.c_cc[VMIN]  = 0;
+    term->newattr.c_cc[VMIN]  = 1;
     term->newattr.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->newattr);
-    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
-
-    /* Create event loop and register stdin */
-#if defined(__linux__)
-    term->poll_fd = epoll_create1(0);
-    if (term->poll_fd >= 0) {
-        struct epoll_event ev = { .events = EPOLLIN, .data.fd = STDIN_FILENO };
-        epoll_ctl(term->poll_fd, EPOLL_CTL_ADD, STDIN_FILENO, &ev);
-    }
-#elif defined(__APPLE__)
-    term->poll_fd = kqueue();
-    if (term->poll_fd >= 0) {
-        struct kevent kev;
-        EV_SET(&kev, STDIN_FILENO, EVFILT_READ, EV_ADD, 0, 0, NULL);
-        kevent(term->poll_fd, &kev, 1, NULL, 0, NULL);
-    }
-#else
-    term->poll_fd = -1;
-#endif
 
     term->term_width  = 80;
     term->term_height = 24;
@@ -370,13 +341,13 @@ void ray_term_destroy(ray_term_t* term) {
     if (g_active_term == term) g_active_term = NULL;
     ray_hist_save(&term->hist, NULL);
     ray_hist_destroy(&term->hist);
-    if (term->poll_fd >= 0) close(term->poll_fd);
-    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) & ~O_NONBLOCK);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
     ray_free(term->_block);
 }
 
 int64_t ray_term_getc(ray_term_t* term) {
+    /* Simple blocking read — only called when poll confirms data ready,
+     * or in fallback mode where VMIN=1 provides blocking behavior. */
     for (;;) {
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
@@ -384,34 +355,7 @@ int64_t ray_term_getc(ray_term_t* term) {
             if (g_interrupted) return -2;
             continue;
         }
-        /* EAGAIN / sz==0: no data available on non-blocking TTY.
-         * With VMIN=0 VTIME=0, some systems return 0 instead of -1/EAGAIN. */
-        if (sz == 0 || (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
-            /* Empty buffer mid-escape → bare Esc (sequences arrive as burst) */
-            if (term->esc_state > 0) {
-                term->esc_state = 0;
-                if (term->comp_cycling) {
-                    term->comp_cycling = 0;
-                    ray_term_redraw(term);
-                }
-            }
-            /* Wait on the event loop. When IPC is active, ray_ipc_poll
-             * dispatches IPC events (accept, handshake, queries) and
-             * returns when stdin or other external fds are ready.
-             * Without IPC, raw epoll/kqueue watches stdin only. */
-            if (term->ipc_srv) {
-                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
-            } else {
-#if defined(__linux__)
-                struct epoll_event evs[64];
-                epoll_wait(term->poll_fd, evs, 64, -1);
-#elif defined(__APPLE__)
-                struct kevent evs[64];
-                kevent(term->poll_fd, NULL, 0, evs, 64, NULL);
-#endif
-            }
-            continue;
-        }
+        if (sz == 0) return -1;  /* EOF */
         return sz;  /* real error */
     }
 }

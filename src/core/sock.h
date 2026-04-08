@@ -21,25 +21,27 @@
  *   SOFTWARE.
  */
 
-#ifndef RAY_IO_REPL_H
-#define RAY_IO_REPL_H
+#ifndef RAY_SOCK_H
+#define RAY_SOCK_H
 
 #include <rayforce.h>
 
-typedef struct ray_term ray_term_t;
-typedef struct ray_poll ray_poll_t;
+/* ===== Socket Abstraction ===== */
 
-typedef struct ray_repl {
-    ray_t*              _block;
-    ray_term_t*         term;      /* NULL if piped/non-tty */
-    bool                timeit;    /* :timeit toggle — print expression timing */
-    ray_poll_t*         poll;      /* event loop — NULL in piped mode */
-    int64_t             id;        /* selector id for stdin in poll */
-} ray_repl_t;
+#ifdef _WIN32
+  typedef intptr_t ray_sock_t;
+  #define RAY_INVALID_SOCK ((ray_sock_t)-1)
+#else
+  typedef int ray_sock_t;
+  #define RAY_INVALID_SOCK (-1)
+#endif
 
-ray_repl_t* ray_repl_create(ray_poll_t* poll);
-void       ray_repl_destroy(ray_repl_t* repl);
-void       ray_repl_run(ray_repl_t* repl);
-int        ray_repl_run_file(const char* path);
+ray_sock_t ray_sock_listen(uint16_t port);
+ray_sock_t ray_sock_accept(ray_sock_t srv);
+ray_sock_t ray_sock_connect(const char* host, uint16_t port, int timeout_ms);
+int64_t    ray_sock_send(ray_sock_t s, const void* buf, size_t len);
+int64_t    ray_sock_recv(ray_sock_t s, void* buf, size_t len);
+void       ray_sock_close(ray_sock_t s);
+ray_err_t  ray_sock_set_nonblocking(ray_sock_t s);
 
-#endif /* RAY_IO_REPL_H */
+#endif /* RAY_SOCK_H */
