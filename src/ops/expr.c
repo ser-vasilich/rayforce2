@@ -962,6 +962,28 @@ static bool op_propagates_null(uint16_t opc) {
     return opc < OP_EQ || opc > OP_OR;
 }
 
+/* For comparisons: force result to false for any element where either input is null. */
+static void clear_null_comparisons(ray_t* lhs, ray_t* rhs, ray_t* result,
+                                   bool l_scalar, bool r_scalar, int64_t len) {
+    uint8_t* dst = (uint8_t*)ray_data(result);
+    if (l_scalar && RAY_ATOM_IS_NULL(lhs)) {
+        memset(dst, 0, (size_t)len);
+        return;
+    }
+    if (r_scalar && RAY_ATOM_IS_NULL(rhs)) {
+        memset(dst, 0, (size_t)len);
+        return;
+    }
+    bool l_has = !l_scalar && (lhs->attrs & RAY_ATTR_HAS_NULLS);
+    bool r_has = !r_scalar && (rhs->attrs & RAY_ATTR_HAS_NULLS);
+    if (!l_has && !r_has) return;
+    for (int64_t i = 0; i < len; i++) {
+        if ((l_has && ray_vec_is_null(lhs, i)) ||
+            (r_has && ray_vec_is_null(rhs, i)))
+            dst[i] = 0;
+    }
+}
+
 /* Propagate null bitmaps for binary ops: null in either operand → null in result. */
 static void propagate_nulls_binary(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
@@ -1364,9 +1386,11 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                     .l_scalar = l_scalar, .r_scalar = r_scalar,
                 };
                 ray_pool_dispatch(pool, par_binary_str_fn, &ctx, len);
+                clear_null_comparisons(lhs, rhs, result, l_scalar, r_scalar, len);
                 return result;
             }
             binary_range_str(op, lhs, rhs, result, l_scalar, r_scalar, 0, len);
+            clear_null_comparisons(lhs, rhs, result, l_scalar, r_scalar, len);
             return result;
         }
     }
@@ -1429,6 +1453,8 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
         ray_pool_dispatch(pool, par_binary_fn, &ctx, len);
         if (op_propagates_null(op->opcode))
             propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
+        else
+            clear_null_comparisons(lhs, rhs, result, l_scalar, r_scalar, len);
         return result;
     }
 
@@ -1439,5 +1465,7 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                  0, len);
     if (op_propagates_null(op->opcode))
         propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
+    else
+        clear_null_comparisons(lhs, rhs, result, l_scalar, r_scalar, len);
     return result;
 }
