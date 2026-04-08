@@ -108,7 +108,7 @@ static inline int64_t win_read_i64(ray_t* col, int64_t row) {
  * the caller must call win_finalize_nulls after all threads have joined. */
 static inline void win_set_null(ray_t* vec, int64_t idx) {
     if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
-        /* Inline nullmap: idx < 128 */
+        if (idx >= 128) return; /* ext nullmap not allocated (OOM) — skip */
         int byte_idx = (int)(idx / 8);
         int bit_idx  = (int)(idx % 8);
         __atomic_fetch_or(&vec->nullmap[byte_idx],

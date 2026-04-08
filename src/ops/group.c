@@ -827,6 +827,7 @@ typedef struct {
  * call grp_finalize_nulls after all threads have joined. */
 static inline void grp_set_null(ray_t* vec, int64_t idx) {
     if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
+        if (idx >= 128) return; /* ext nullmap not allocated (OOM) — skip */
         int byte_idx = (int)(idx / 8);
         int bit_idx  = (int)(idx % 8);
         __atomic_fetch_or(&vec->nullmap[byte_idx],
@@ -841,11 +842,13 @@ static inline void grp_set_null(ray_t* vec, int64_t idx) {
                       (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
 }
 
-static void grp_prepare_nullmap(ray_t* vec) {
-    if (vec->len <= 128) return;
-    ray_vec_set_null(vec, 0, true);
-    ray_vec_set_null(vec, 0, false);
+static ray_err_t grp_prepare_nullmap(ray_t* vec) {
+    if (vec->len <= 128) return RAY_OK;
+    ray_err_t err = ray_vec_set_null_checked(vec, 0, true);
+    if (err != RAY_OK) return err;
+    ray_vec_set_null_checked(vec, 0, false);
     vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
+    return RAY_OK;
 }
 
 static void grp_finalize_nulls(ray_t* vec) {
@@ -3112,9 +3115,10 @@ ht_path:;
             };
         }
 
-        /* Pre-allocate nullmaps for agg result vectors (parallel safety) */
+        /* Pre-allocate nullmaps for agg result vectors (parallel safety).
+         * On OOM, grp_set_null bounds-checks and silently skips. */
         for (uint8_t a = 0; a < n_aggs; a++)
-            grp_prepare_nullmap(agg_outs[a].vec);
+            (void)grp_prepare_nullmap(agg_outs[a].vec);
 
         /* Phase 3: parallel key gather + agg result building from inline rows */
         {
