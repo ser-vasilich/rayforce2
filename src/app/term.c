@@ -381,31 +381,6 @@ int64_t ray_term_getc(ray_term_t* term) {
 
 #endif /* _WIN32 */
 
-/* Read a single byte with a short timeout for escape sequence detection.
- * Returns the byte (0..255) on success, -1 on timeout/failure.
- * Uses VTIME to avoid blocking indefinitely on bare Esc. */
-static int term_read_byte(ray_term_t* term) {
-#if defined(_WIN32)
-    if (ray_term_getc(term) <= 0) return -1;
-    return (unsigned char)term->input[0];
-#else
-    /* Wait for data with 100ms timeout via select (works with non-blocking stdin) */
-    fd_set rfds;
-    FD_ZERO(&rfds);
-    FD_SET(STDIN_FILENO, &rfds);
-    struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
-    int sr = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
-    if (sr <= 0) {
-        if (sr < 0 && errno == EINTR && g_interrupted) return -2;
-        return -1;  /* timeout or error */
-    }
-    int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
-    if (sz < 0 && errno == EINTR && g_interrupted) return -2;
-    if (sz <= 0) return -1;
-    return (unsigned char)term->input[0];
-#endif
-}
-
 /* ===== History ===== */
 
 void ray_hist_create(ray_hist_t* hist) {
@@ -1333,253 +1308,66 @@ static void ray_term_search_redraw(ray_term_t* term) {
     fflush(stdout);
 }
 
-/* ===== Line editing ===== */
+/* ===== Event-driven line editing ===== */
 
-ray_t* ray_term_read(ray_term_t* term) {
+/* Show prompt and reset line state.  Called once per input line. */
+void ray_term_begin(ray_term_t* term) {
     ray_term_prompt(term);
     fflush(stdout);
     term->buf_len = 0;
     term->buf_pos = 0;
     term->multiline_len = 0;
     term->last_total_rows = 1;
+    term->esc_state = 0;
+    term->esc_buf_len = 0;
+}
 
-    for (;;) {
-        int64_t sz = ray_term_getc(term);
-        if (sz <= 0) {
-            if (sz == -2) goto interrupted;
+/* Forward declaration — feed_normal handles all normal-mode keys. */
+static ray_t* feed_normal(ray_term_t* term, int key);
+
+/* Process one byte while in escape-sequence state.
+ * Returns a line (via feed_normal) or NULL. */
+static ray_t* feed_escape(ray_term_t* term, int byte) {
+    switch (term->esc_state) {
+    case 1: /* Got ESC, waiting for [ or O */
+        if (byte == '[') { term->esc_state = 2; return NULL; }
+        if (byte == 'O') { term->esc_state = 3; return NULL; }
+        /* Bare ESC — cancel tab cycling if active */
+        term->esc_state = 0;
+        if (term->comp_cycling) {
+            term->comp_cycling = 0;
+            ray_term_redraw(term);
+        }
+        return NULL;
+
+    case 2: /* Got ESC [, waiting for final byte */
+        term->esc_state = 0;
+        switch (byte) {
+        case 'A': return feed_normal(term, -KEYCODE_UP);
+        case 'B': return feed_normal(term, -KEYCODE_DOWN);
+        case 'C': return feed_normal(term, -KEYCODE_RIGHT);
+        case 'D': return feed_normal(term, -KEYCODE_LEFT);
+        case 'H': return feed_normal(term, -KEYCODE_HOME);
+        case 'F': return feed_normal(term, -KEYCODE_END);
+        case '3': term->esc_state = 4; return NULL; /* waiting for ~ */
+        default:
+            /* Unknown CSI — if this is a final byte we are done */
+            if (byte >= 0x40 && byte <= 0x7E) return NULL;
+            /* Otherwise consume until final byte */
+            term->esc_state = 5;
+            term->esc_buf_len = 0;
             return NULL;
         }
 
-        int key = (unsigned char)term->input[0];
+    case 3: /* Got ESC O */
+        term->esc_state = 0;
+        if (byte == 'H') return feed_normal(term, -KEYCODE_HOME);
+        if (byte == 'F') return feed_normal(term, -KEYCODE_END);
+        return NULL;
 
-        if (key == KEYCODE_ESCAPE) {
-            /* Read escape sequence via platform-abstracted helper */
-            int seq0 = term_read_byte(term);
-            if (seq0 == -2) goto interrupted; /* SIGINT during esc read */
-            if (seq0 < 0) {
-                /* Bare Esc — cancel tab cycling if active */
-                if (term->comp_cycling) {
-                    term->comp_cycling = 0;
-                    ray_term_redraw(term);
-                }
-                continue;
-            }
-            if (seq0 == '[') {
-                int seq1 = term_read_byte(term);
-                if (seq1 == -2) goto interrupted;
-                if (seq1 < 0) continue;
-                switch (seq1) {
-                    case 'A': key = -KEYCODE_UP;    goto handle; /* Up */
-                    case 'B': key = -KEYCODE_DOWN;  goto handle; /* Down */
-                    case 'C': key = -KEYCODE_RIGHT; goto handle; /* Right */
-                    case 'D': key = -KEYCODE_LEFT;  goto handle; /* Left */
-                    case 'H': key = -KEYCODE_HOME;  goto handle; /* Home */
-                    case 'F': key = -KEYCODE_END;   goto handle; /* End */
-                    case '3': /* Delete key: \033[3~ */
-                        { int seq2 = term_read_byte(term);
-                          if (seq2 == -2) goto interrupted;
-                          if (seq2 == '~') {
-                            if (term->buf_pos < term->buf_len) {
-                                int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
-                                int32_t bytes = next - term->buf_pos;
-                                memmove(term->buf + term->buf_pos,
-                                        term->buf + term->buf_pos + bytes,
-                                        (size_t)(term->buf_len - term->buf_pos - bytes));
-                                term->buf_len -= bytes;
-                                ray_term_redraw(term);
-                            }
-                          }
-                        }
-                        continue;
-                    default:
-                        /* Consume remaining bytes of unknown CSI sequence (max 8) */
-                        if (!(seq1 >= 0x40 && seq1 <= 0x7E)) {
-                            for (int csi_i = 0; csi_i < 8; csi_i++) {
-                                int d = term_read_byte(term);
-                                if (d == -2) goto interrupted;
-                                if (d < 0 || (d >= 0x40 && d <= 0x7E)) break;
-                            }
-                        }
-                        continue;
-                }
-            } else if (seq0 == 'O') {
-                int seq1 = term_read_byte(term);
-                if (seq1 == -2) goto interrupted;
-                if (seq1 < 0) continue;
-                switch (seq1) {
-                    case 'H': key = -KEYCODE_HOME; goto handle;
-                    case 'F': key = -KEYCODE_END;  goto handle;
-                    default: continue;
-                }
-            }
-            /* Unrecognized escape — cancel tab cycling */
-            if (term->comp_cycling) {
-                term->comp_cycling = 0;
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-
-        goto handle;
-
-    interrupted:
-        /* External SIGINT — treat like Ctrl-C: clear line */
-        ray_term_clear_interrupt();
-        term->comp_cycling = 0;
-        term->buf_len = 0;
-        term->buf_pos = 0;
-        term->multiline_len = 0;
-        term_write("^C\n", 3);
-        ray_term_prompt(term);
-        fflush(stdout);
-        continue;
-
-    handle:
-        /* Reset tab-cycle on any non-Tab key */
-        if (key != KEYCODE_TAB)
-            term->comp_cycling = 0;
-
-        /* Arrow keys are encoded as negative to distinguish from printable chars */
-        if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
-            int32_t len = ray_hist_prev(&term->hist, term->buf, term->buf_len);
-            if (len >= 0) {
-                term->buf_len = len;
-                term->buf_pos = len;
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-
-        if (key == -KEYCODE_DOWN || key == KEYCODE_CTRL_N) {
-            int32_t len = ray_hist_next(&term->hist, term->buf);
-            if (len >= 0) {
-                term->buf_len = len;
-                term->buf_pos = len;
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-
-        if (key == -KEYCODE_LEFT) {
-            if (term->buf_pos > 0) {
-                int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
-                term->buf_pos = prev;
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-
-        if (key == -KEYCODE_RIGHT) {
-            if (term->buf_pos < term->buf_len) {
-                int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
-                term->buf_pos = next;
-                ray_term_redraw(term);
-            } else if (term->ghost_len > 0) {
-                /* Accept ghost text at end of line */
-                ray_term_accept_ghost(term);
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-
-        if (key == -KEYCODE_HOME || key == KEYCODE_CTRL_A) {
-            term->buf_pos = 0;
-            ray_term_redraw(term);
-            continue;
-        }
-
-        if (key == -KEYCODE_END || key == KEYCODE_CTRL_E) {
-            term->buf_pos = term->buf_len;
-            ray_term_redraw(term);
-            continue;
-        }
-
-        switch (key) {
-        case KEYCODE_RETURN: {
-            term->buf[term->buf_len] = '\0';
-            int32_t unmatched = ray_term_count_unmatched(term);
-            if (unmatched > 0) {
-                term->comp_cycling = 0;
-                /* Append buf + newline to multiline_buf, show continuation */
-                if (term->multiline_len + term->buf_len + 1 < TERM_BUF_SIZE) {
-                    memcpy(term->multiline_buf + term->multiline_len,
-                           term->buf, (size_t)term->buf_len);
-                    term->multiline_len += term->buf_len;
-                    term->multiline_buf[term->multiline_len++] = '\n';
-                } else {
-                    fprintf(stderr, "\ninput too long (max %d bytes)\n",
-                            TERM_BUF_SIZE - 1);
-                    fflush(stderr);
-                    term->multiline_len = 0;
-                    term->buf_len = 0;
-                    term->buf_pos = 0;
-                    ray_term_prompt(term);
-                    fflush(stdout);
-                    continue;
-                }
-                term->buf_len = 0;
-                term->buf_pos = 0;
-                putchar('\n');
-                fflush(stdout);
-                ray_term_continuation_prompt(term);
-                fflush(stdout);
-                continue;
-            }
-            /* Redraw line without bracket highlights before submitting */
-            term->ghost_len = 0;
-            term->comp_cycling = 0;
-            {
-                /* Move to start of line, clear, rewrite with no bracket match */
-                ray_cursor_hide();
-                printf("\r\033[J");
-                char hlbuf[TERM_BUF_SIZE * 8];
-                int32_t hlen = 0;
-                if (term->multiline_len > 0) {
-                    memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);
-                    hlen = CONT_PROMPT_LEN;
-                } else {
-                    memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
-                    hlen = PROMPT_LEN;
-                }
-                if (term->buf_len > 0)
-                    hlen += term_highlight_into(hlbuf + hlen,
-                                (int32_t)sizeof(hlbuf) - hlen,
-                                term->buf, term->buf_len, -1, -1);
-                fflush(stdout);
-                term_write(hlbuf, (size_t)hlen);
-                ray_cursor_show();
-                fflush(stdout);
-            }
-            putchar('\n');
-            fflush(stdout);
-            if (term->multiline_len > 0) {
-                /* Concatenate multiline_buf + buf */
-                if (term->multiline_len + term->buf_len < TERM_BUF_SIZE) {
-                    memcpy(term->multiline_buf + term->multiline_len,
-                           term->buf, (size_t)term->buf_len);
-                    term->multiline_len += term->buf_len;
-                }
-                ray_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
-                ray_t* result = ray_str(term->multiline_buf, (size_t)term->multiline_len);
-                term->multiline_len = 0;
-                return RAY_IS_ERR(result) ? NULL : result;
-            }
-            ray_hist_add(&term->hist, term->buf, term->buf_len);
-            if (term->buf_len == 0) {
-                ray_t* result = ray_str("", 0);
-                return RAY_IS_ERR(result) ? NULL : result;
-            }
-            { ray_t* result = ray_str(term->buf, (size_t)term->buf_len);
-              return RAY_IS_ERR(result) ? NULL : result; }
-        }
-
-        case KEYCODE_CTRL_D: {
-            if (term->buf_len == 0) {
-                putchar('\n');
-                fflush(stdout);
-                return NULL;
-            }
-            /* Delete char at cursor (like Delete key) */
+    case 4: /* Got ESC [ 3, waiting for ~ (Delete key) */
+        term->esc_state = 0;
+        if (byte == '~') {
             if (term->buf_pos < term->buf_len) {
                 int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
                 int32_t bytes = next - term->buf_pos;
@@ -1589,230 +1377,413 @@ ray_t* ray_term_read(ray_term_t* term) {
                 term->buf_len -= bytes;
                 ray_term_redraw(term);
             }
-            continue;
         }
+        return NULL;
 
-        case KEYCODE_CTRL_C: {
+    case 5: /* Consuming unknown CSI until final byte */
+        if (byte >= 0x40 && byte <= 0x7E)
+            term->esc_state = 0;
+        else if (++term->esc_buf_len > 8)
+            term->esc_state = 0;
+        return NULL;
+    }
+    term->esc_state = 0;
+    return NULL;
+}
+
+/* Process one byte while in search mode.
+ * Returns a line if search-then-Enter fires, NULL otherwise. */
+static ray_t* feed_search(ray_term_t* term, int skey) {
+    if (skey == KEYCODE_RETURN) {
+        /* Accept match into buffer, then submit via normal Enter path */
+        if (term->search_match_idx >= 0) {
+            const char* entry = term->hist.entries[term->search_match_idx];
+            int32_t len = (int32_t)strlen(entry);
+            if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
+            memcpy(term->buf, entry, (size_t)len);
+            term->buf_len = len;
+            term->buf_pos = len;
+        }
+        term->search_mode = 0;
+        term->multiline_len = 0;
+        return feed_normal(term, KEYCODE_RETURN);
+    }
+
+    if (skey == KEYCODE_ESCAPE) {
+        /* Exit search mode; escape sequence bytes will arrive later
+         * and be consumed by the escape state machine. */
+        term->search_mode = 0;
+        term->esc_state = 1;  /* expect continuation byte */
+        term->esc_buf_len = 0;
+        return NULL;
+    }
+
+    if (skey == KEYCODE_CTRL_C) {
+        term->search_mode = 0;
+        term->buf_len = 0;
+        term->buf_pos = 0;
+        term->multiline_len = 0;
+        term_write("^C\n", 3);
+        ray_term_prompt(term);
+        fflush(stdout);
+        return NULL;
+    }
+
+    if (skey == KEYCODE_CTRL_R) {
+        /* Search further back */
+        if (term->search_match_idx > 0 && term->search_len > 0) {
+            int32_t idx = ray_hist_search(&term->hist,
+                                         term->search_buf,
+                                         term->search_len,
+                                         term->search_match_idx - 1);
+            if (idx >= 0)
+                term->search_match_idx = idx;
+        }
+        ray_term_search_redraw(term);
+        return NULL;
+    }
+
+    if (skey == KEYCODE_BACKSPACE || skey == KEYCODE_DELETE) {
+        if (term->search_len > 0) {
+            term->search_len--;
+            if (term->search_len > 0) {
+                term->search_match_idx = ray_hist_search(
+                    &term->hist, term->search_buf,
+                    term->search_len, term->hist.count - 1);
+            } else {
+                term->search_match_idx = -1;
+            }
+        }
+        ray_term_search_redraw(term);
+        return NULL;
+    }
+
+    /* Printable character — append to search query */
+    if ((unsigned char)skey >= 0x20 && term->search_len < 255) {
+        term->search_buf[term->search_len++] = (char)skey;
+        int32_t start = (term->search_match_idx >= 0)
+                        ? term->search_match_idx
+                        : term->hist.count - 1;
+        term->search_match_idx = ray_hist_search(
+            &term->hist, term->search_buf,
+            term->search_len, start);
+        ray_term_search_redraw(term);
+    }
+    return NULL;
+}
+
+/* Process one normal-mode key.  key is positive for ASCII/control,
+ * negative for special keys (arrow, home, end). */
+static ray_t* feed_normal(ray_term_t* term, int key) {
+    /* Reset tab-cycle on any non-Tab key */
+    if (key != KEYCODE_TAB)
+        term->comp_cycling = 0;
+
+    /* Arrow keys are encoded as negative to distinguish from printable chars */
+    if (key == -KEYCODE_UP || key == KEYCODE_CTRL_P) {
+        int32_t len = ray_hist_prev(&term->hist, term->buf, term->buf_len);
+        if (len >= 0) {
+            term->buf_len = len;
+            term->buf_pos = len;
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    if (key == -KEYCODE_DOWN || key == KEYCODE_CTRL_N) {
+        int32_t len = ray_hist_next(&term->hist, term->buf);
+        if (len >= 0) {
+            term->buf_len = len;
+            term->buf_pos = len;
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    if (key == -KEYCODE_LEFT) {
+        if (term->buf_pos > 0) {
+            int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
+            term->buf_pos = prev;
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    if (key == -KEYCODE_RIGHT) {
+        if (term->buf_pos < term->buf_len) {
+            int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
+            term->buf_pos = next;
+            ray_term_redraw(term);
+        } else if (term->ghost_len > 0) {
+            ray_term_accept_ghost(term);
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    if (key == -KEYCODE_HOME || key == KEYCODE_CTRL_A) {
+        term->buf_pos = 0;
+        ray_term_redraw(term);
+        return NULL;
+    }
+
+    if (key == -KEYCODE_END || key == KEYCODE_CTRL_E) {
+        term->buf_pos = term->buf_len;
+        ray_term_redraw(term);
+        return NULL;
+    }
+
+    switch (key) {
+    case KEYCODE_RETURN: {
+        term->buf[term->buf_len] = '\0';
+        int32_t unmatched = ray_term_count_unmatched(term);
+        if (unmatched > 0) {
             term->comp_cycling = 0;
+            if (term->multiline_len + term->buf_len + 1 < TERM_BUF_SIZE) {
+                memcpy(term->multiline_buf + term->multiline_len,
+                       term->buf, (size_t)term->buf_len);
+                term->multiline_len += term->buf_len;
+                term->multiline_buf[term->multiline_len++] = '\n';
+            } else {
+                fprintf(stderr, "\ninput too long (max %d bytes)\n",
+                        TERM_BUF_SIZE - 1);
+                fflush(stderr);
+                term->multiline_len = 0;
+                term->buf_len = 0;
+                term->buf_pos = 0;
+                ray_term_prompt(term);
+                fflush(stdout);
+                return NULL;
+            }
             term->buf_len = 0;
             term->buf_pos = 0;
-            term->multiline_len = 0;
-            term_write("^C\n", 3);
-            ray_term_prompt(term);
+            putchar('\n');
             fflush(stdout);
-            continue;
+            ray_term_continuation_prompt(term);
+            fflush(stdout);
+            return NULL;
         }
+        /* Redraw line without bracket highlights before submitting */
+        term->ghost_len = 0;
+        term->comp_cycling = 0;
+        {
+            ray_cursor_hide();
+            printf("\r\033[J");
+            char hlbuf[TERM_BUF_SIZE * 8];
+            int32_t hlen = 0;
+            if (term->multiline_len > 0) {
+                memcpy(hlbuf, CONT_PROMPT_STR, CONT_PROMPT_LEN);
+                hlen = CONT_PROMPT_LEN;
+            } else {
+                memcpy(hlbuf, PROMPT_STR, PROMPT_LEN);
+                hlen = PROMPT_LEN;
+            }
+            if (term->buf_len > 0)
+                hlen += term_highlight_into(hlbuf + hlen,
+                            (int32_t)sizeof(hlbuf) - hlen,
+                            term->buf, term->buf_len, -1, -1);
+            fflush(stdout);
+            term_write(hlbuf, (size_t)hlen);
+            ray_cursor_show();
+            fflush(stdout);
+        }
+        putchar('\n');
+        fflush(stdout);
+        if (term->multiline_len > 0) {
+            if (term->multiline_len + term->buf_len < TERM_BUF_SIZE) {
+                memcpy(term->multiline_buf + term->multiline_len,
+                       term->buf, (size_t)term->buf_len);
+                term->multiline_len += term->buf_len;
+            }
+            ray_hist_add(&term->hist, term->multiline_buf, term->multiline_len);
+            ray_t* result = ray_str(term->multiline_buf, (size_t)term->multiline_len);
+            term->multiline_len = 0;
+            return RAY_IS_ERR(result) ? NULL : result;
+        }
+        ray_hist_add(&term->hist, term->buf, term->buf_len);
+        if (term->buf_len == 0) {
+            ray_t* result = ray_str("", 0);
+            return RAY_IS_ERR(result) ? NULL : result;
+        }
+        { ray_t* result = ray_str(term->buf, (size_t)term->buf_len);
+          return RAY_IS_ERR(result) ? NULL : result; }
+    }
 
-        case KEYCODE_BACKSPACE:
-        case KEYCODE_DELETE: {
-            if (term->buf_pos > 0) {
-                int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
-                int32_t bytes = term->buf_pos - prev;
-                memmove(term->buf + prev,
+    case KEYCODE_CTRL_D: {
+        if (term->buf_len == 0) {
+            putchar('\n');
+            fflush(stdout);
+            return RAY_TERM_EOF;
+        }
+        if (term->buf_pos < term->buf_len) {
+            int32_t next = find_next_utf8(term->buf, term->buf_pos, term->buf_len);
+            int32_t bytes = next - term->buf_pos;
+            memmove(term->buf + term->buf_pos,
+                    term->buf + term->buf_pos + bytes,
+                    (size_t)(term->buf_len - term->buf_pos - bytes));
+            term->buf_len -= bytes;
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    case KEYCODE_CTRL_C: {
+        term->comp_cycling = 0;
+        term->esc_state = 0;
+        term->buf_len = 0;
+        term->buf_pos = 0;
+        term->multiline_len = 0;
+        term_write("^C\n", 3);
+        ray_term_prompt(term);
+        fflush(stdout);
+        return NULL;
+    }
+
+    case KEYCODE_BACKSPACE:
+    case KEYCODE_DELETE: {
+        if (term->buf_pos > 0) {
+            int32_t prev = find_prev_utf8(term->buf, term->buf_pos);
+            int32_t bytes = term->buf_pos - prev;
+            memmove(term->buf + prev,
+                    term->buf + term->buf_pos,
+                    (size_t)(term->buf_len - term->buf_pos));
+            term->buf_len -= bytes;
+            term->buf_pos = prev;
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    case KEYCODE_CTRL_K: {
+        term->buf_len = term->buf_pos;
+        ray_term_redraw(term);
+        return NULL;
+    }
+
+    case KEYCODE_CTRL_U: {
+        term->buf_len = 0;
+        term->buf_pos = 0;
+        ray_term_redraw(term);
+        return NULL;
+    }
+
+    case KEYCODE_CTRL_W: {
+        if (term->buf_pos > 0) {
+            int32_t end = term->buf_pos;
+            while (term->buf_pos > 0 && !is_alphanum(term->buf[term->buf_pos - 1]))
+                term->buf_pos--;
+            while (term->buf_pos > 0 && is_alphanum(term->buf[term->buf_pos - 1]))
+                term->buf_pos--;
+            memmove(term->buf + term->buf_pos,
+                    term->buf + end,
+                    (size_t)(term->buf_len - end));
+            term->buf_len -= (end - term->buf_pos);
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    case KEYCODE_CTRL_R: {
+        term->search_mode = 1;
+        term->search_len = 0;
+        term->search_match_idx = -1;
+        ray_term_search_redraw(term);
+        return NULL;
+    }
+
+    case KEYCODE_TAB: {
+        if (term->comp_cycling) {
+            int32_t next = (term->comp_cycle_idx + 1) % term->comp_count;
+            comp_cycle_insert(term, next);
+            term->ghost_len = 0;
+            ray_term_redraw(term);
+            return NULL;
+        }
+        if (term->ghost_len > 0 && term->comp_count == 1) {
+            ray_term_accept_ghost(term);
+            ray_term_update_ghost(term);
+            ray_term_redraw(term);
+        } else if (term->comp_count >= 2) {
+            term->comp_cycling = 1;
+            term->comp_cycle_start = term->ghost_word_start;
+            term->comp_cycle_len = term->ghost_word_len;
+            term->comp_cycle_idx = -1;
+            comp_cycle_insert(term, 0);
+            term->ghost_len = 0;
+            ray_term_redraw(term);
+        } else if (term->ghost_len > 0) {
+            ray_term_accept_ghost(term);
+            ray_term_update_ghost(term);
+            ray_term_redraw(term);
+        }
+        return NULL;
+    }
+
+    default: {
+        if ((unsigned char)key >= 0x20 && term->buf_len < TERM_BUF_SIZE - 1) {
+            if (term->buf_pos < term->buf_len) {
+                memmove(term->buf + term->buf_pos + 1,
                         term->buf + term->buf_pos,
                         (size_t)(term->buf_len - term->buf_pos));
-                term->buf_len -= bytes;
-                term->buf_pos = prev;
-                ray_term_redraw(term);
             }
-            continue;
-        }
-
-        case KEYCODE_CTRL_K: {
-            term->buf_len = term->buf_pos;
+            term->buf[term->buf_pos] = (char)key;
+            term->buf_pos++;
+            term->buf_len++;
             ray_term_redraw(term);
-            continue;
         }
+        return NULL;
+    }
+    }
+}
 
-        case KEYCODE_CTRL_U: {
-            term->buf_len = 0;
-            term->buf_pos = 0;
-            ray_term_redraw(term);
-            continue;
-        }
+/* Process one byte from term->input[0].
+ * Returns a ray_t* string when a complete line is ready,
+ * NULL when more input is needed,
+ * RAY_TERM_EOF on EOF/Ctrl-D at empty buffer. */
+ray_t* ray_term_feed(ray_term_t* term) {
+    int key = (unsigned char)term->input[0];
 
-        case KEYCODE_CTRL_W: {
-            if (term->buf_pos > 0) {
-                int32_t end = term->buf_pos;
-                /* Skip non-alphanum */
-                while (term->buf_pos > 0 && !is_alphanum(term->buf[term->buf_pos - 1]))
-                    term->buf_pos--;
-                /* Skip alphanum */
-                while (term->buf_pos > 0 && is_alphanum(term->buf[term->buf_pos - 1]))
-                    term->buf_pos--;
-                memmove(term->buf + term->buf_pos,
-                        term->buf + end,
-                        (size_t)(term->buf_len - end));
-                term->buf_len -= (end - term->buf_pos);
-                ray_term_redraw(term);
-            }
-            continue;
-        }
+    /* Escape sequence state machine */
+    if (term->esc_state > 0)
+        return feed_escape(term, key);
 
-        case KEYCODE_CTRL_R: {
-            /* Enter reverse incremental search mode */
-            term->search_mode = 1;
-            term->search_len = 0;
-            term->search_match_idx = -1;
-            ray_term_search_redraw(term);
+    /* Search mode */
+    if (term->search_mode)
+        return feed_search(term, key);
 
-            for (;;) {
-                int64_t ssz = ray_term_getc(term);
-                if (ssz <= 0) {
-                    term->search_mode = 0;
-                    if (ssz == -2) {
-                        /* External SIGINT in search — clear and interrupt */
-                        ray_term_clear_interrupt();
-                        term->buf_len = 0;
-                        term->buf_pos = 0;
-                        term->multiline_len = 0;
-                        term_write("^C\n", 3);
-                        ray_term_prompt(term);
-                        fflush(stdout);
-                    } else {
-                        ray_term_redraw(term);
-                    }
-                    break;
-                }
+    /* Start of escape sequence */
+    if (key == KEYCODE_ESCAPE) {
+        term->esc_state = 1;
+        term->esc_buf_len = 0;
+        return NULL;
+    }
 
-                int skey = (unsigned char)term->input[0];
+    return feed_normal(term, key);
+}
 
-                if (skey == KEYCODE_RETURN) {
-                    /* Accept match into buffer, discard any partial
-                     * multiline state, then submit via normal Enter path */
-                    if (term->search_match_idx >= 0) {
-                        const char* entry = term->hist.entries[term->search_match_idx];
-                        int32_t len = (int32_t)strlen(entry);
-                        if (len > TERM_BUF_SIZE - 1) len = TERM_BUF_SIZE - 1;
-                        memcpy(term->buf, entry, (size_t)len);
-                        term->buf_len = len;
-                        term->buf_pos = len;
-                    }
-                    term->search_mode = 0;
-                    term->multiline_len = 0;
-                    key = KEYCODE_RETURN;
-                    goto handle;
-                }
-
-                if (skey == KEYCODE_ESCAPE) {
-                    /* Consume potential escape sequence bytes (e.g. arrow keys) */
-                    int esc0 = term_read_byte(term);
-                    if (esc0 == '[') {
-                        (void)term_read_byte(term); /* consume sequence char */
-                    }
-                    term->search_mode = 0;
-                    ray_term_redraw(term);
-                    break;
-                }
-
-                if (skey == KEYCODE_CTRL_C) {
-                    /* Cancel search, clear buffer */
-                    term->search_mode = 0;
-                    term->buf_len = 0;
-                    term->buf_pos = 0;
-                    term->multiline_len = 0;
-                    term_write("^C\n", 3);
-                    ray_term_prompt(term);
-                    fflush(stdout);
-                    break;
-                }
-
-                if (skey == KEYCODE_CTRL_R) {
-                    /* Search further back */
-                    if (term->search_match_idx > 0 && term->search_len > 0) {
-                        int32_t idx = ray_hist_search(&term->hist,
-                                                     term->search_buf,
-                                                     term->search_len,
-                                                     term->search_match_idx - 1);
-                        if (idx >= 0)
-                            term->search_match_idx = idx;
-                    }
-                    ray_term_search_redraw(term);
-                    continue;
-                }
-
-                if (skey == KEYCODE_BACKSPACE || skey == KEYCODE_DELETE) {
-                    /* Remove last char from search query */
-                    if (term->search_len > 0) {
-                        term->search_len--;
-                        if (term->search_len > 0) {
-                            term->search_match_idx = ray_hist_search(
-                                &term->hist, term->search_buf,
-                                term->search_len, term->hist.count - 1);
-                        } else {
-                            term->search_match_idx = -1;
-                        }
-                    }
-                    ray_term_search_redraw(term);
-                    continue;
-                }
-
-                /* Printable character — append to search and search */
-                if ((unsigned char)skey >= 0x20 && term->search_len < 255) {
-                    term->search_buf[term->search_len++] = skey;
-                    /* Search from current match position or from end */
-                    int32_t start = (term->search_match_idx >= 0)
-                                    ? term->search_match_idx
-                                    : term->hist.count - 1;
-                    term->search_match_idx = ray_hist_search(
-                        &term->hist, term->search_buf,
-                        term->search_len, start);
-                    ray_term_search_redraw(term);
-                    continue;
-                }
-            }
-            continue;
-        }
-
-        case KEYCODE_TAB: {
-            if (term->comp_cycling) {
-                /* Already cycling — advance to next candidate */
-                int32_t next = (term->comp_cycle_idx + 1) % term->comp_count;
-                comp_cycle_insert(term, next);
-                term->ghost_len = 0;
-                ray_term_redraw(term);
+/* Blocking line reader — backward-compatible wrapper using begin+feed. */
+ray_t* ray_term_read(ray_term_t* term) {
+    ray_term_begin(term);
+    for (;;) {
+        int64_t sz = ray_term_getc(term);
+        if (sz <= 0) {
+            if (sz == -2) {
+                /* SIGINT — clear line and re-prompt */
+                ray_term_clear_interrupt();
+                term->comp_cycling = 0;
+                term->esc_state = 0;
+                term->buf_len = 0;
+                term->buf_pos = 0;
+                term->multiline_len = 0;
+                term_write("^C\n", 3);
+                ray_term_prompt(term);
+                fflush(stdout);
                 continue;
             }
-            if (term->ghost_len > 0 && term->comp_count == 1) {
-                /* Single match — accept ghost text directly */
-                ray_term_accept_ghost(term);
-                ray_term_update_ghost(term);
-                ray_term_redraw(term);
-            } else if (term->comp_count >= 2) {
-                /* Multiple matches — start inline cycling */
-                term->comp_cycling = 1;
-                term->comp_cycle_start = term->ghost_word_start;
-                term->comp_cycle_len = term->ghost_word_len;
-                term->comp_cycle_idx = -1;
-                comp_cycle_insert(term, 0);
-                term->ghost_len = 0;
-                ray_term_redraw(term);
-            } else if (term->ghost_len > 0) {
-                /* Accept whatever ghost we have */
-                ray_term_accept_ghost(term);
-                ray_term_update_ghost(term);
-                ray_term_redraw(term);
-            }
-            continue;
+            return NULL;
         }
-
-        default: {
-            /* Printable character insert */
-            if ((unsigned char)key >= 0x20 && term->buf_len < TERM_BUF_SIZE - 1) {
-                if (term->buf_pos < term->buf_len) {
-                    memmove(term->buf + term->buf_pos + 1,
-                            term->buf + term->buf_pos,
-                            (size_t)(term->buf_len - term->buf_pos));
-                }
-                term->buf[term->buf_pos] = key;
-                term->buf_pos++;
-                term->buf_len++;
-
-                /* Always do full redraw to show ghost text */
-                ray_term_redraw(term);
-            }
-            continue;
-        }
-        }
+        ray_t* line = ray_term_feed(term);
+        if (line == RAY_TERM_EOF) return NULL;
+        if (line) return line;
     }
 }

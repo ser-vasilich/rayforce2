@@ -115,6 +115,9 @@ typedef struct ray_term {
     /* Multi-line input state */
     char        multiline_buf[TERM_BUF_SIZE];
     int32_t     multiline_len;
+    /* Escape sequence state machine (for event-driven feed) */
+    int32_t     esc_state;     /* 0=normal, 1=ESC, 2=ESC[, 3=ESCO, 4=ESC[3, 5=unknown CSI */
+    int32_t     esc_buf_len;   /* bytes accumulated in unknown CSI sequence */
     /* IPC server — when set, ray_term_getc uses the server's event loop
      * to multiplex stdin with IPC connections (epoll/kqueue). */
     void*       ipc_srv;    /* ray_ipc_server_t* (opaque to avoid header dep) */
@@ -141,6 +144,16 @@ void    ray_term_goto_position(ray_term_t* term, int32_t from_pos, int32_t to_po
 ray_t*  ray_term_read(ray_term_t* term);
 void   ray_term_redraw(ray_term_t* term);
 void   ray_term_prompt(ray_term_t* term);
+
+/* Event-driven terminal API — split ray_term_read into begin + feed.
+ * ray_term_begin: show prompt, reset line state.
+ * ray_term_feed:  process one byte from term->input[0].
+ *   Returns ray_t* string when a complete line is ready,
+ *   NULL when more input is needed,
+ *   RAY_TERM_EOF on EOF/Ctrl-D at empty buffer. */
+#define RAY_TERM_EOF ((ray_t*)(uintptr_t)1)
+void    ray_term_begin(ray_term_t* term);
+ray_t*  ray_term_feed(ray_term_t* term);
 
 void    ray_hist_create(ray_hist_t* hist);
 void    ray_hist_destroy(ray_hist_t* hist);

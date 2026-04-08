@@ -574,15 +574,36 @@ static void run_interactive(ray_repl_t* repl) {
         ray_ipc_watch_fd(repl->ipc_srv, 0);  /* stdin fd = 0 into epoll/kqueue */
     }
 
+    ray_term_begin(term);
     for (;;) {
-        ray_t* line = ray_term_read(term);
-        if (!line) break; /* EOF / Ctrl-D */
+        int64_t sz = ray_term_getc(term);
+        if (sz <= 0) {
+            if (sz == -2) {
+                /* SIGINT — clear line and re-prompt */
+                ray_term_clear_interrupt();
+                ray_eval_clear_interrupt();
+                term->comp_cycling = 0;
+                term->esc_state = 0;
+                term->buf_len = 0;
+                term->buf_pos = 0;
+                term->multiline_len = 0;
+                { ssize_t r_ = write(STDOUT_FILENO, "^C\n", 3); (void)r_; }
+                ray_term_prompt(term);
+                fflush(stdout);
+                continue;
+            }
+            break; /* EOF */
+        }
+        ray_t* line = ray_term_feed(term);
+        if (line == RAY_TERM_EOF) break;
+        if (!line) continue;
 
         const char* str = ray_str_ptr(line);
         size_t len = ray_str_len(line);
 
         if (len == 0) {
             ray_release(line);
+            ray_term_begin(term);
             continue;
         }
 
@@ -595,7 +616,6 @@ static void run_interactive(ray_repl_t* repl) {
 
         /* REPL commands starting with ':' */
         if (str[0] == ':') {
-            /* :q / :quit need special handling — they signal exit */
             size_t clen = len - 1;
             const char* cmd = str + 1;
             if ((clen == 1 && cmd[0] == 'q') ||
@@ -605,11 +625,13 @@ static void run_interactive(ray_repl_t* repl) {
             }
             handle_command(repl, str, len);
             ray_release(line);
+            ray_term_begin(term);
             continue;
         }
 
         eval_and_print(repl->term, str, true, repl->timeit);
         ray_release(line);
+        ray_term_begin(term);
     }
 }
 
