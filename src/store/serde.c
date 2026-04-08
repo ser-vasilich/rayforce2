@@ -123,7 +123,8 @@ static int64_t de_null_bitmap(const uint8_t* buf, int64_t avail, ray_t* v) {
 
 int64_t ray_serde_size(ray_t* obj) {
     if (!obj) return 1; /* RAY_SERDE_NULL marker */
-    if (RAY_IS_ERR(obj)) return 0;
+    if (RAY_IS_ERR(obj)) return 1 + 8; /* type + sdata */
+    if (RAY_IS_NULL(obj)) return 1; /* just the null type byte */
 
     int8_t type = obj->type;
 

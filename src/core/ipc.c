@@ -333,7 +333,7 @@ static void conn_close(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
 static void conn_send_response(ray_ipc_conn_t* c, ray_t* result)
 {
-    /* Serialize */
+    /* Serialize — fall back to null if result is unserializable */
     int64_t ser_size = ray_serde_size(result);
     if (ser_size <= 0) return;
 

@@ -525,5 +525,8 @@ ray_t* ray_hsend_fn(ray_t* handle, ray_t* msg) {
     if (!ray_is_atom(handle) || (handle->type != -RAY_I64 && handle->type != -RAY_I32))
         return ray_error("type", NULL);
     int64_t h = (handle->type == -RAY_I64) ? handle->i64 : handle->i32;
+    /* Validate message is serializable (reject builtins, etc.) */
+    if (ray_serde_size(msg) <= 0)
+        return ray_error("type", "message not serializable");
     return ray_ipc_send(h, msg);
 }
