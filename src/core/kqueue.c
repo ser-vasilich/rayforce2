@@ -176,8 +176,8 @@ int64_t ray_poll_run(ray_poll_t* poll)
                 sel = poll->sels[eid];
             if (!sel) continue;
 
-            /* Error / EOF */
-            if (events[i].flags & EV_ERROR) {
+            /* EV_ERROR without data — fatal, skip directly */
+            if ((events[i].flags & EV_ERROR) && events[i].filter != EVFILT_READ) {
                 if (sel->error_fn)
                     sel->error_fn(poll, sel);
                 else
@@ -185,18 +185,8 @@ int64_t ray_poll_run(ray_poll_t* poll)
                 continue;
             }
 
-            if (events[i].flags & EV_EOF) {
-                /* For stdin, EV_EOF means Ctrl-D — let read_fn handle it */
-                if (sel->type != RAY_SEL_STDIN) {
-                    if (sel->error_fn)
-                        sel->error_fn(poll, sel);
-                    else
-                        ray_poll_deregister(poll, sel->id);
-                    continue;
-                }
-            }
-
-            /* Readable */
+            /* Process readable data first — even if EOF is also set.
+             * A client may send a message and close simultaneously. */
             if (events[i].filter == EVFILT_READ) {
                 if (sel->rx.recv_fn && sel->rx.buf) {
                     while (sel->rx.buf->offset < sel->rx.buf->size) {
@@ -223,6 +213,18 @@ int64_t ray_poll_run(ray_poll_t* poll)
                     if (obj && sel->data_fn) {
                         sel->data_fn(poll, sel, obj);
                     }
+                }
+            }
+
+            /* EOF / error — after data is drained */
+            if (events[i].flags & (EV_EOF | EV_ERROR)) {
+                if (eid < poll->n_sels && poll->sels[eid]) {
+                    sel = poll->sels[eid];
+                    if (sel->type == RAY_SEL_STDIN) goto next_event; /* Ctrl-D handled by read_fn */
+                    if (sel->error_fn)
+                        sel->error_fn(poll, sel);
+                    else
+                        ray_poll_deregister(poll, sel->id);
                 }
             }
 

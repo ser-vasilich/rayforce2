@@ -171,17 +171,9 @@ int64_t ray_poll_run(ray_poll_t* poll)
                 sel = poll->sels[eid];
             if (!sel) continue;
 
-            /* Error / hangup */
-            if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
-                if (sel->error_fn) {
-                    sel->error_fn(poll, sel);
-                } else {
-                    ray_poll_deregister(poll, sel->id);
-                }
-                continue;
-            }
-
-            /* Readable */
+            /* Process readable data first — even if hangup is also set.
+             * A client may send a message and close; epoll reports both
+             * EPOLLIN and EPOLLHUP in the same event. */
             if (events[i].events & EPOLLIN) {
                 /* Read data into rx buffer if recv_fn is set */
                 if (sel->rx.recv_fn && sel->rx.buf) {
@@ -211,6 +203,18 @@ int64_t ray_poll_run(ray_poll_t* poll)
                     if (obj && sel->data_fn) {
                         sel->data_fn(poll, sel, obj);
                     }
+                }
+            }
+
+            /* Error / hangup — after data is drained */
+            if (events[i].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                /* Re-check: selector may have been freed by data_fn */
+                if (eid < poll->n_sels && poll->sels[eid]) {
+                    sel = poll->sels[eid];
+                    if (sel->error_fn)
+                        sel->error_fn(poll, sel);
+                    else
+                        ray_poll_deregister(poll, sel->id);
                 }
             }
 
