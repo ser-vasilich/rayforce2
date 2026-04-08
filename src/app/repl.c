@@ -571,6 +571,7 @@ static void run_interactive(ray_repl_t* repl) {
      * poll_fd with the terminal's so all events go through one fd. */
     if (repl->ipc_srv) {
         ray_ipc_attach(repl->ipc_srv, term->poll_fd);
+        term->ipc_srv = repl->ipc_srv;
     }
 
     ray_term_begin(term);

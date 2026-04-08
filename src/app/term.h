@@ -121,6 +121,7 @@ typedef struct ray_term {
     /* Event loop fd (epoll on Linux, kqueue on macOS).
      * Stdin is always registered. IPC adds its sockets to the same fd. */
     int         poll_fd;
+    void*       ipc_srv;  /* ray_ipc_server_t* — dispatches IPC events in getc */
 } ray_term_t;
 
 ray_term_t* ray_term_create(void);

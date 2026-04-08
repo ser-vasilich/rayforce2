@@ -29,6 +29,7 @@
 
 
 #include "app/term.h"
+#include "core/ipc.h"
 #include "lang/env.h"
 #include "lang/eval.h"
 #include <stdio.h>
@@ -394,14 +395,21 @@ int64_t ray_term_getc(ray_term_t* term) {
                     ray_term_redraw(term);
                 }
             }
-            /* Wait on the event loop — wakes on stdin or IPC */
+            /* Wait on the event loop. When IPC is active, ray_ipc_poll
+             * dispatches IPC events (accept, handshake, queries) and
+             * returns when stdin or other external fds are ready.
+             * Without IPC, raw epoll/kqueue watches stdin only. */
+            if (term->ipc_srv) {
+                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
+            } else {
 #if defined(__linux__)
-            struct epoll_event evs[64];
-            epoll_wait(term->poll_fd, evs, 64, -1);
+                struct epoll_event evs[64];
+                epoll_wait(term->poll_fd, evs, 64, -1);
 #elif defined(__APPLE__)
-            struct kevent evs[64];
-            kevent(term->poll_fd, NULL, 0, evs, 64, NULL);
+                struct kevent evs[64];
+                kevent(term->poll_fd, NULL, 0, evs, 64, NULL);
 #endif
+            }
             continue;
         }
         return sz;  /* real error */
