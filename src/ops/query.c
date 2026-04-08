@@ -1122,8 +1122,10 @@ ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
     }
     /* Float path: either operand is f64 */
     if (is_numeric(col) && is_numeric(bucket)) {
+        if (RAY_ATOM_IS_NULL(col) || RAY_ATOM_IS_NULL(bucket))
+            return ray_error("domain", NULL);
         double c = as_f64(col), b = as_f64(bucket);
-        if (b == 0.0 || isnan(c) || isnan(b)) return ray_error("domain", NULL);
+        if (b == 0.0) return ray_error("domain", NULL);
         double fq = floor(c / b);
         return make_f64(fq * b);
     }
@@ -2574,8 +2576,9 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
                     rt = ((int64_t*)ray_data(right_time))[rr];
                 if (rt < lo || rt > hi) continue;
 
-                /* Apply aggregation */
+                /* Apply aggregation — skip null elements */
                 if (right_agg_col) {
+                    if (ray_vec_is_null(right_agg_col, rr)) continue;
                     if (is_float) {
                         double v = (agg_type == RAY_F32)
                             ? (double)((float*)ray_data(right_agg_col))[rr]

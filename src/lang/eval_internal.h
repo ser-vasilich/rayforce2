@@ -12,6 +12,7 @@
 
 #include "lang/eval.h"
 #include "lang/format.h"
+#include "core/types.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -271,6 +272,8 @@ static inline int64_t elem_as_i64(ray_t* elem) {
  * Returns 0 on success, -1 if the element type doesn't match. */
 static inline int store_typed_elem(ray_t* vec, int64_t i, ray_t* elem) {
     if (RAY_ATOM_IS_NULL(elem)) {
+        int esz = ray_elem_size(vec->type);
+        memset((char*)ray_data(vec) + i * esz, 0, esz);
         ray_vec_set_null(vec, i, true);
         return 0;
     }

@@ -526,30 +526,9 @@ ray_t* ray_dev_fn(ray_t* x) {
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
         if (len == 0) return ray_typed_null(-RAY_F64);
-        /* Build f64 scratch — null bitmap elements become NaN */
-        ray_t* scratch = ray_alloc(len * sizeof(double));
-        if (!scratch) return ray_error("oom", NULL);
-        scratch->type = RAY_F64; scratch->len = len;
-        double* vals = (double*)ray_data(scratch);
-        if (x->type == RAY_I64) {
-            int64_t* d = (int64_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
-        } else if (x->type == RAY_I32) {
-            int32_t* d = (int32_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
-        } else if (x->type == RAY_I16) {
-            int16_t* d = (int16_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
-        } else if (x->type == RAY_U8) {
-            uint8_t* d = (uint8_t*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
-        } else if (x->type == RAY_F64) {
-            double* d = (double*)ray_data(x);
-            for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : d[i];
-        } else {
-            ray_release(scratch);
-            return ray_error("type", NULL);
-        }
+        double* vals;
+        ray_t* scratch = vec_to_f64_scratch(x, &vals);
+        if (RAY_IS_ERR(scratch)) return scratch;
         ray_t* result = dev_from_f64(vals, len);
         ray_release(scratch);
         return result;

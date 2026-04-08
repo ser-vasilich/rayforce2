@@ -332,15 +332,15 @@ static void win_compute_partition(
                 double* out = (double*)ray_data(rvec);
                 for (int64_t i = ps; i < pe; i++) {
                     int64_t src = i - offset;
-                    out[sorted_idx[i]] = (src >= ps)
-                        ? win_read_f64(fvec, sorted_idx[src]) : NAN;
+                    if (src >= ps) { out[sorted_idx[i]] = win_read_f64(fvec, sorted_idx[src]); }
+                    else { out[sorted_idx[i]] = 0.0; ray_vec_set_null(rvec, sorted_idx[i], true); }
                 }
             } else {
                 int64_t* out = (int64_t*)ray_data(rvec);
                 for (int64_t i = ps; i < pe; i++) {
                     int64_t src = i - offset;
-                    out[sorted_idx[i]] = (src >= ps)
-                        ? win_read_i64(fvec, sorted_idx[src]) : 0;
+                    if (src >= ps) { out[sorted_idx[i]] = win_read_i64(fvec, sorted_idx[src]); }
+                    else { out[sorted_idx[i]] = 0; ray_vec_set_null(rvec, sorted_idx[i], true); }
                 }
             }
             break;
@@ -353,15 +353,15 @@ static void win_compute_partition(
                 double* out = (double*)ray_data(rvec);
                 for (int64_t i = ps; i < pe; i++) {
                     int64_t src = i + offset;
-                    out[sorted_idx[i]] = (src < pe)
-                        ? win_read_f64(fvec, sorted_idx[src]) : NAN;
+                    if (src < pe) { out[sorted_idx[i]] = win_read_f64(fvec, sorted_idx[src]); }
+                    else { out[sorted_idx[i]] = 0.0; ray_vec_set_null(rvec, sorted_idx[i], true); }
                 }
             } else {
                 int64_t* out = (int64_t*)ray_data(rvec);
                 for (int64_t i = ps; i < pe; i++) {
                     int64_t src = i + offset;
-                    out[sorted_idx[i]] = (src < pe)
-                        ? win_read_i64(fvec, sorted_idx[src]) : 0;
+                    if (src < pe) { out[sorted_idx[i]] = win_read_i64(fvec, sorted_idx[src]); }
+                    else { out[sorted_idx[i]] = 0; ray_vec_set_null(rvec, sorted_idx[i], true); }
                 }
             }
             break;
@@ -410,18 +410,21 @@ static void win_compute_partition(
             if (!fvec) break;
             int64_t nth = func_params[f];
             if (nth < 1) nth = 1;
+            bool nth_null = nth > part_len;
             if (is_f64[f]) {
                 double* out = (double*)ray_data(rvec);
-                double val = (nth <= part_len)
-                    ? win_read_f64(fvec, sorted_idx[ps + nth - 1]) : NAN;
-                for (int64_t i = ps; i < pe; i++)
+                double val = nth_null ? 0.0 : win_read_f64(fvec, sorted_idx[ps + nth - 1]);
+                for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = val;
+                    if (nth_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                }
             } else {
                 int64_t* out = (int64_t*)ray_data(rvec);
-                int64_t val = (nth <= part_len)
-                    ? win_read_i64(fvec, sorted_idx[ps + nth - 1]) : 0;
-                for (int64_t i = ps; i < pe; i++)
+                int64_t val = nth_null ? 0 : win_read_i64(fvec, sorted_idx[ps + nth - 1]);
+                for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = val;
+                    if (nth_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                }
             }
             break;
         }

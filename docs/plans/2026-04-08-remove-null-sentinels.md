@@ -121,14 +121,19 @@ Display checks the null bit instead of sentinel values.
 - [x] Updated `website/docs/rayfall-syntax.html` — replaced sentinel description with null bitmap explanation
 - [x] Updated `website/docs/control-flow.html` — changed "sentinel nulls" to "typed nulls" in null rules
 
-## Task 6: Tests
+## Task 6: Tests — DONE
 
-**Step-by-step:**
-1. Run full test suite — fix any failures from removed sentinel logic
-2. Verify: `(+ 1 null)` returns null (RAY_NULL_OBJ) or error, not a sentinel
-3. Verify: `(sum [1 2 3])` with null bitmap element produces correct result
-4. Verify: `0Nl` syntax parses to null
-5. Verify: `INT64_MIN` prints as the number, not `0Nl`
+- [x] Run full test suite — 587/587 pass
+- [x] Verify: `(+ 1 null)` returns null (RAY_NULL_OBJ) or error, not a sentinel
+- [x] Verify: `(sum [1 2 3])` with null bitmap element produces correct result
+- [x] Verify: `0Nl` syntax parses to null
+- [x] Verify: `INT64_MIN` prints as the number, not `0Nl`
+
+---
+
+## Known remaining sentinel usage
+
+The fused executor (`src/ops/expr.c`) still uses `INT64_MIN`/`NaN` value-based null checks in vector morsel loops. These were not migrated in this pass because they operate on raw data arrays (not `ray_t` atoms) and require null bitmap propagation through the register-based execution engine. The `eval.c` bail-out (`RAY_ATTR_HAS_NULLS` check) routes nullable vectors through the slow scalar path until `expr.c` is migrated.
 
 ---
 

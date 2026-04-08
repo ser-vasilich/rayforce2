@@ -313,15 +313,17 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
             case OP_LAST:  result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.last_f) : ray_i64(merged.last_i)) : ray_typed_null(-in_type); break;
             case OP_VAR: case OP_VAR_POP:
             case OP_STDDEV: case OP_STDDEV_POP: {
+                bool insufficient = (op->opcode == OP_VAR || op->opcode == OP_STDDEV) ? merged.cnt <= 1 : merged.cnt <= 0;
+                if (insufficient) { result = ray_typed_null(-RAY_F64); break; }
                 double mean, var_pop;
                 if (in_type == RAY_F64) { mean = merged.sum_f / merged.cnt; var_pop = merged.sum_sq_f / merged.cnt - mean * mean; }
                 else { mean = (double)merged.sum_i / merged.cnt; var_pop = (double)merged.sum_sq_i / merged.cnt - mean * mean; }
                 if (var_pop < 0) var_pop = 0;
                 double val;
-                if (op->opcode == OP_VAR_POP) val = merged.cnt > 0 ? var_pop : NAN;
-                else if (op->opcode == OP_VAR) val = merged.cnt > 1 ? var_pop * merged.cnt / (merged.cnt - 1) : NAN;
-                else if (op->opcode == OP_STDDEV_POP) val = merged.cnt > 0 ? sqrt(var_pop) : NAN;
-                else val = merged.cnt > 1 ? sqrt(var_pop * merged.cnt / (merged.cnt - 1)) : NAN;
+                if (op->opcode == OP_VAR_POP) val = var_pop;
+                else if (op->opcode == OP_VAR) val = var_pop * merged.cnt / (merged.cnt - 1);
+                else if (op->opcode == OP_STDDEV_POP) val = sqrt(var_pop);
+                else val = sqrt(var_pop * merged.cnt / (merged.cnt - 1));
                 result = ray_f64(val);
                 break;
             }
@@ -346,15 +348,17 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         case OP_LAST:  return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.last_f) : ray_i64(acc.last_i)) : ray_typed_null(-in_type);
         case OP_VAR: case OP_VAR_POP:
         case OP_STDDEV: case OP_STDDEV_POP: {
+            bool insufficient = (op->opcode == OP_VAR || op->opcode == OP_STDDEV) ? acc.cnt <= 1 : acc.cnt <= 0;
+            if (insufficient) return ray_typed_null(-RAY_F64);
             double mean, var_pop;
             if (in_type == RAY_F64) { mean = acc.sum_f / acc.cnt; var_pop = acc.sum_sq_f / acc.cnt - mean * mean; }
             else { mean = (double)acc.sum_i / acc.cnt; var_pop = (double)acc.sum_sq_i / acc.cnt - mean * mean; }
             if (var_pop < 0) var_pop = 0;
             double val;
-            if (op->opcode == OP_VAR_POP) val = acc.cnt > 0 ? var_pop : NAN;
-            else if (op->opcode == OP_VAR) val = acc.cnt > 1 ? var_pop * acc.cnt / (acc.cnt - 1) : NAN;
-            else if (op->opcode == OP_STDDEV_POP) val = acc.cnt > 0 ? sqrt(var_pop) : NAN;
-            else val = acc.cnt > 1 ? sqrt(var_pop * acc.cnt / (acc.cnt - 1)) : NAN;
+            if (op->opcode == OP_VAR_POP) val = var_pop;
+            else if (op->opcode == OP_VAR) val = var_pop * acc.cnt / (acc.cnt - 1);
+            else if (op->opcode == OP_STDDEV_POP) val = sqrt(var_pop);
+            else val = sqrt(var_pop * acc.cnt / (acc.cnt - 1));
             return ray_f64(val);
         }
         default:       return ray_error("nyi", NULL);
@@ -815,6 +819,7 @@ typedef struct {
     double  bias_f64;
     int64_t bias_i64;
     void*   dst;
+    ray_t*  vec;
 } agg_out_t;
 
 typedef struct {
@@ -897,16 +902,18 @@ static void radix_phase3_fn(void* ctx, uint32_t worker_id, int64_t start, int64_
                             break;
                         case OP_VAR: case OP_VAR_POP:
                         case OP_STDDEV: case OP_STDDEV_POP: {
+                            bool insuf = (op == OP_VAR || op == OP_STDDEV) ? cnt <= 1 : cnt <= 0;
+                            if (insuf) { v = 0.0; ray_vec_set_null(ao->vec, di, true); break; }
                             double sum_val = sf ? ROW_RD_F64(row, ly->off_sum, s)
                                                 : (double)ROW_RD_I64(row, ly->off_sum, s);
                             double sq_val = ly->off_sumsq ? ROW_RD_F64(row, ly->off_sumsq, s) : 0.0;
-                            double mean = cnt > 0 ? sum_val / cnt : 0.0;
-                            double var_pop = cnt > 0 ? sq_val / cnt - mean * mean : 0.0;
+                            double mean = sum_val / cnt;
+                            double var_pop = sq_val / cnt - mean * mean;
                             if (var_pop < 0) var_pop = 0;
-                            if (op == OP_VAR_POP) v = cnt > 0 ? var_pop : NAN;
-                            else if (op == OP_VAR) v = cnt > 1 ? var_pop * cnt / (cnt - 1) : NAN;
-                            else if (op == OP_STDDEV_POP) v = cnt > 0 ? sqrt(var_pop) : NAN;
-                            else v = cnt > 1 ? sqrt(var_pop * cnt / (cnt - 1)) : NAN;
+                            if (op == OP_VAR_POP) v = var_pop;
+                            else if (op == OP_VAR) v = var_pop * cnt / (cnt - 1);
+                            else if (op == OP_STDDEV_POP) v = sqrt(var_pop);
+                            else v = sqrt(var_pop * cnt / (cnt - 1));
                             break;
                         }
                         default: v = 0.0; break;
@@ -1130,15 +1137,17 @@ static void emit_agg_columns(ray_t** result, ray_graph_t* g, const ray_op_ext_t*
                     case OP_VAR: case OP_VAR_POP:
                     case OP_STDDEV: case OP_STDDEV_POP: {
                         int64_t cnt = counts[gi];
+                        bool insuf = (agg_op == OP_VAR || agg_op == OP_STDDEV) ? cnt <= 1 : cnt <= 0;
+                        if (insuf) { v = 0.0; ray_vec_set_null(new_col, gi, true); break; }
                         double sum_val = is_f64 ? sum_f64[idx] : (double)sum_i64[idx];
                         double sq_val = sumsq_f64 ? sumsq_f64[idx] : 0.0;
-                        double mean = cnt > 0 ? sum_val / cnt : 0.0;
-                        double var_pop = cnt > 0 ? sq_val / cnt - mean * mean : 0.0;
+                        double mean = sum_val / cnt;
+                        double var_pop = sq_val / cnt - mean * mean;
                         if (var_pop < 0) var_pop = 0;
-                        if (agg_op == OP_VAR_POP) v = cnt > 0 ? var_pop : NAN;
-                        else if (agg_op == OP_VAR) v = cnt > 1 ? var_pop * cnt / (cnt - 1) : NAN;
-                        else if (agg_op == OP_STDDEV_POP) v = cnt > 0 ? sqrt(var_pop) : NAN;
-                        else v = cnt > 1 ? sqrt(var_pop * cnt / (cnt - 1)) : NAN;
+                        if (agg_op == OP_VAR_POP) v = var_pop;
+                        else if (agg_op == OP_VAR) v = var_pop * cnt / (cnt - 1);
+                        else if (agg_op == OP_STDDEV_POP) v = sqrt(var_pop);
+                        else v = sqrt(var_pop * cnt / (cnt - 1));
                         break;
                     }
                     default:     v = 0.0; break;
@@ -3056,6 +3065,7 @@ ht_path:;
                 .bias_f64 = agg_affine[a].bias_f64,
                 .bias_i64 = agg_affine[a].bias_i64,
                 .dst = ray_data(new_col),
+                .vec = new_col,
             };
         }
 
@@ -3233,16 +3243,18 @@ sequential_fallback:;
                         break;
                     case OP_VAR: case OP_VAR_POP:
                     case OP_STDDEV: case OP_STDDEV_POP: {
+                        bool insuf = (agg_op == OP_VAR || agg_op == OP_STDDEV) ? cnt <= 1 : cnt <= 0;
+                        if (insuf) { v = 0.0; ray_vec_set_null(new_col, gi, true); break; }
                         double sum_val = is_f64 ? ROW_RD_F64(row, ly->off_sum, s)
                                                 : (double)ROW_RD_I64(row, ly->off_sum, s);
                         double sq_val = ly->off_sumsq ? ROW_RD_F64(row, ly->off_sumsq, s) : 0.0;
-                        double mean = cnt > 0 ? sum_val / cnt : 0.0;
-                        double var_pop = cnt > 0 ? sq_val / cnt - mean * mean : 0.0;
+                        double mean = sum_val / cnt;
+                        double var_pop = sq_val / cnt - mean * mean;
                         if (var_pop < 0) var_pop = 0;
-                        if (agg_op == OP_VAR_POP) v = cnt > 0 ? var_pop : NAN;
-                        else if (agg_op == OP_VAR) v = cnt > 1 ? var_pop * cnt / (cnt - 1) : NAN;
-                        else if (agg_op == OP_STDDEV_POP) v = cnt > 0 ? sqrt(var_pop) : NAN;
-                        else v = cnt > 1 ? sqrt(var_pop * cnt / (cnt - 1)) : NAN;
+                        if (agg_op == OP_VAR_POP) v = var_pop;
+                        else if (agg_op == OP_VAR) v = var_pop * cnt / (cnt - 1);
+                        else if (agg_op == OP_STDDEV_POP) v = sqrt(var_pop);
+                        else v = sqrt(var_pop * cnt / (cnt - 1));
                         break;
                     }
                     default: v = 0.0; break;
@@ -3852,27 +3864,31 @@ batch_fail:
                     const double* sv = (const double*)ray_data(sum_col);
                     for (int64_t r = 0; r < nrows; r++) {
                         double n = (double)cv[r];
-                        if (n <= 0) { out[r] = NAN; continue; }
+                        if (n <= 0) { out[r] = 0.0; ray_vec_set_null(out_col, r, true); continue; }
                         double mean = sv[r] / n;
                         double var_pop = sq[r] / n - mean * mean;
                         if (var_pop < 0) var_pop = 0;
+                        bool insuf = (orig_op == OP_VAR || orig_op == OP_STDDEV) && n <= 1;
+                        if (insuf) { out[r] = 0.0; ray_vec_set_null(out_col, r, true); continue; }
                         if (orig_op == OP_VAR_POP)         out[r] = var_pop;
-                        else if (orig_op == OP_VAR)         out[r] = n > 1 ? var_pop * n / (n - 1) : NAN;
+                        else if (orig_op == OP_VAR)         out[r] = var_pop * n / (n - 1);
                         else if (orig_op == OP_STDDEV_POP)  out[r] = sqrt(var_pop);
-                        else /* OP_STDDEV */                out[r] = n > 1 ? sqrt(var_pop * n / (n - 1)) : NAN;
+                        else /* OP_STDDEV */                out[r] = sqrt(var_pop * n / (n - 1));
                     }
                 } else {
                     const int64_t* sv = (const int64_t*)ray_data(sum_col);
                     for (int64_t r = 0; r < nrows; r++) {
                         double n = (double)cv[r];
-                        if (n <= 0) { out[r] = NAN; continue; }
+                        if (n <= 0) { out[r] = 0.0; ray_vec_set_null(out_col, r, true); continue; }
                         double mean = (double)sv[r] / n;
                         double var_pop = sq[r] / n - mean * mean;
                         if (var_pop < 0) var_pop = 0;
+                        bool insuf = (orig_op == OP_VAR || orig_op == OP_STDDEV) && n <= 1;
+                        if (insuf) { out[r] = 0.0; ray_vec_set_null(out_col, r, true); continue; }
                         if (orig_op == OP_VAR_POP)         out[r] = var_pop;
-                        else if (orig_op == OP_VAR)         out[r] = n > 1 ? var_pop * n / (n - 1) : NAN;
+                        else if (orig_op == OP_VAR)         out[r] = var_pop * n / (n - 1);
                         else if (orig_op == OP_STDDEV_POP)  out[r] = sqrt(var_pop);
-                        else /* OP_STDDEV */                out[r] = n > 1 ? sqrt(var_pop * n / (n - 1)) : NAN;
+                        else /* OP_STDDEV */                out[r] = sqrt(var_pop * n / (n - 1));
                     }
                 }
                 trimmed = ray_table_add_col(trimmed, nm, out_col);
