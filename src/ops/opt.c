@@ -249,6 +249,7 @@ static ray_op_ext_t* ensure_ext_node(ray_graph_t* g, uint32_t node_id) {
 
 static bool atom_to_numeric(ray_t* v, double* out_f, int64_t* out_i, bool* is_f64) {
     if (!v || !ray_is_atom(v)) return false;
+    if (RAY_ATOM_IS_NULL(v)) return false;
     switch (v->type) {
         case -RAY_F64:
             *out_f = v->f64;

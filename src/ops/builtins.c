@@ -478,7 +478,7 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
         else if (cast_match(tn, tl, "STR") || cast_match(tn, tl, "str")) { ray_release(s2); return ray_typed_null(-RAY_STR); }
         ray_release(s2);
         if (tt) return ray_typed_null(tt);
-        return ray_typed_null(val->type);
+        return ray_error("domain", NULL);
     }
     ray_t* s = ray_sym_str(type_sym->i64);
     if (!s) return ray_error("domain", NULL);

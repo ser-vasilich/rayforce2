@@ -422,35 +422,36 @@ ray_t* ray_last_fn(ray_t* x) {
     return elem;
 }
 
-/* Helper: copy typed vec elements to double scratch buffer.
- * Null bitmap elements become NaN so callers can skip them.
+/* Helper: copy non-null vec elements to double scratch buffer, compacted.
+ * scratch->len is set to the number of non-null values copied.
  * Returns scratch ray_t* (caller must ray_release), or error. */
 static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
     int64_t len = ray_len(x);
     ray_t* scratch = ray_alloc(len * sizeof(double));
     if (!scratch) return ray_error("oom", NULL);
     scratch->type = RAY_F64;
-    scratch->len = len;
     double* vals = (double*)ray_data(scratch);
+    int64_t cnt = 0;
     if (x->type == RAY_I64) {
         int64_t* d = (int64_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
+        for (int64_t i = 0; i < len; i++) { if (!ray_vec_is_null(x, i)) vals[cnt++] = (double)d[i]; }
     } else if (x->type == RAY_F64) {
         double* d = (double*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : d[i];
+        for (int64_t i = 0; i < len; i++) { if (!ray_vec_is_null(x, i)) vals[cnt++] = d[i]; }
     } else if (x->type == RAY_I32) {
         int32_t* d = (int32_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
+        for (int64_t i = 0; i < len; i++) { if (!ray_vec_is_null(x, i)) vals[cnt++] = (double)d[i]; }
     } else if (x->type == RAY_I16) {
         int16_t* d = (int16_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
+        for (int64_t i = 0; i < len; i++) { if (!ray_vec_is_null(x, i)) vals[cnt++] = (double)d[i]; }
     } else if (x->type == RAY_U8) {
         uint8_t* d = (uint8_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
+        for (int64_t i = 0; i < len; i++) { if (!ray_vec_is_null(x, i)) vals[cnt++] = (double)d[i]; }
     } else {
         ray_release(scratch);
         return ray_error("type", NULL);
     }
+    scratch->len = cnt;
     *out_vals = vals;
     return scratch;
 }
@@ -480,21 +481,21 @@ ray_t* ray_med_fn(ray_t* x) {
         scratch = ray_alloc(len * sizeof(double));
         if (!scratch) return ray_error("oom", NULL);
         scratch->type = RAY_F64;
-        scratch->len = len;
+        scratch->len = 0;
         vals = (double*)ray_data(scratch);
+        int64_t cnt_l = 0;
         for (int64_t i = 0; i < len; i++) {
-            if (ray_is_atom(elems[i]) && RAY_ATOM_IS_NULL(elems[i])) { vals[i] = NAN; continue; }
+            if (ray_is_atom(elems[i]) && RAY_ATOM_IS_NULL(elems[i])) continue;
             if (!is_numeric(elems[i])) { ray_release(scratch); return ray_error("type", NULL); }
-            vals[i] = as_f64(elems[i]);
+            vals[cnt_l++] = as_f64(elems[i]);
         }
+        scratch->len = cnt_l;
     } else {
         return ray_error("type", NULL);
     }
 
-    /* Compact out NaN (null) values, then sort the non-null remainder */
-    int64_t cnt = 0;
-    for (int64_t i = 0; i < len; i++)
-        if (!isnan(vals[i])) vals[cnt++] = vals[i];
+    /* scratch->len holds the count of non-null values (already compacted) */
+    int64_t cnt = scratch->len;
     if (cnt == 0) { ray_release(scratch); return ray_typed_null(-RAY_F64); }
 
     /* Insertion sort */
@@ -511,17 +512,14 @@ ray_t* ray_med_fn(ray_t* x) {
     return make_f64(median);
 }
 
-/* Helper: compute stddev from array of f64 values, skipping NaN (null) */
-static ray_t* dev_from_f64(double* vals, int64_t len) {
-    double sum = 0.0;
-    int64_t cnt = 0;
-    for (int64_t i = 0; i < len; i++)
-        if (!isnan(vals[i])) { sum += vals[i]; cnt++; }
+/* Helper: compute stddev from compacted array of f64 values (no nulls) */
+static ray_t* dev_from_f64(double* vals, int64_t cnt) {
     if (cnt == 0) return ray_typed_null(-RAY_F64);
+    double sum = 0.0;
+    for (int64_t i = 0; i < cnt; i++) sum += vals[i];
     double mean = sum / (double)cnt;
     double var = 0.0;
-    for (int64_t i = 0; i < len; i++)
-        if (!isnan(vals[i])) { double d = vals[i] - mean; var += d * d; }
+    for (int64_t i = 0; i < cnt; i++) { double d = vals[i] - mean; var += d * d; }
     return make_f64(sqrt(var / (double)cnt));
 }
 
@@ -539,7 +537,7 @@ ray_t* ray_dev_fn(ray_t* x) {
         double* vals;
         ray_t* scratch = vec_to_f64_scratch(x, &vals);
         if (RAY_IS_ERR(scratch)) return scratch;
-        ray_t* result = dev_from_f64(vals, len);
+        ray_t* result = dev_from_f64(vals, scratch->len);
         ray_release(scratch);
         return result;
     }
