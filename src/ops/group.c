@@ -3115,10 +3115,10 @@ ht_path:;
             };
         }
 
-        /* Pre-allocate nullmaps for agg result vectors (parallel safety).
-         * On OOM, grp_set_null bounds-checks and silently skips. */
+        /* Pre-allocate nullmaps for agg result vectors (parallel safety) */
+        bool nullmap_prep_ok[n_aggs];
         for (uint8_t a = 0; a < n_aggs; a++)
-            (void)grp_prepare_nullmap(agg_outs[a].vec);
+            nullmap_prep_ok[a] = (grp_prepare_nullmap(agg_outs[a].vec) == RAY_OK);
 
         /* Phase 3: parallel key gather + agg result building from inline rows */
         {
@@ -3134,6 +3134,27 @@ ht_path:;
                 .n_aggs       = n_aggs,
             };
             ray_pool_dispatch_n(pool, radix_phase3_fn, &p3ctx, RADIX_P);
+        }
+
+        /* Fixup: if nullmap prep failed for any VAR/STDDEV agg, re-scan
+         * hash tables sequentially to set null bits that grp_set_null skipped */
+        for (uint8_t a = 0; a < n_aggs; a++) {
+            if (nullmap_prep_ok[a]) continue;
+            uint16_t op = agg_outs[a].agg_op;
+            if (op != OP_VAR && op != OP_VAR_POP &&
+                op != OP_STDDEV && op != OP_STDDEV_POP) continue;
+            for (uint32_t p = 0; p < RADIX_P; p++) {
+                group_ht_t* ph = &part_hts[p];
+                uint32_t gc = ph->grp_count;
+                uint32_t off = part_offsets[p];
+                uint16_t rs = ph->layout.row_stride;
+                for (uint32_t gi = 0; gi < gc; gi++) {
+                    const char* row = ph->rows + (size_t)gi * rs;
+                    int64_t cnt = *(const int64_t*)(const void*)row;
+                    bool insuf = (op == OP_VAR || op == OP_STDDEV) ? cnt <= 1 : cnt <= 0;
+                    if (insuf) ray_vec_set_null(agg_outs[a].vec, off + gi, true);
+                }
+            }
         }
 
         /* Finalize null flags after parallel execution */

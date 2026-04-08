@@ -108,7 +108,13 @@ static inline int64_t win_read_i64(ray_t* col, int64_t row) {
  * the caller must call win_finalize_nulls after all threads have joined. */
 static inline void win_set_null(ray_t* vec, int64_t idx) {
     if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
-        if (idx >= 128) return; /* ext nullmap not allocated (OOM) — skip */
+        if (idx >= 128) {
+            /* ext nullmap not allocated (OOM); fall back to single-thread
+             * ray_vec_set_null which handles allocation lazily.
+             * Safe because OOM forces the sequential execution path. */
+            ray_vec_set_null(vec, idx, true);
+            return;
+        }
         int byte_idx = (int)(idx / 8);
         int bit_idx  = (int)(idx % 8);
         __atomic_fetch_or(&vec->nullmap[byte_idx],
@@ -125,13 +131,13 @@ static inline void win_set_null(ray_t* vec, int64_t idx) {
 
 /* Pre-allocate external nullmap so parallel threads can set bits safely.
  * Does NOT set RAY_ATTR_HAS_NULLS — call win_finalize_nulls after execution. */
-static void win_prepare_nullmap(ray_t* vec) {
-    if (vec->len <= 128) return; /* inline nullmap suffices */
-    /* Force promotion to external nullmap via a dummy set+clear */
-    ray_vec_set_null(vec, 0, true);
-    ray_vec_set_null(vec, 0, false);
-    /* Clear the HAS_NULLS flag that ray_vec_set_null just set */
+static ray_err_t win_prepare_nullmap(ray_t* vec) {
+    if (vec->len <= 128) return RAY_OK;
+    ray_err_t err = ray_vec_set_null_checked(vec, 0, true);
+    if (err != RAY_OK) return err;
+    ray_vec_set_null_checked(vec, 0, false);
     vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
+    return RAY_OK;
 }
 
 /* After all partitions have executed (threads joined), scan nullmaps
@@ -1103,12 +1109,17 @@ ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
     ray_t** order_vecs = n_order > 0 ? &sort_vecs[n_part] : NULL;
 
     {
-        /* Pre-allocate nullmaps so win_set_null works in both paths */
-        for (uint8_t f = 0; f < n_funcs; f++)
-            win_prepare_nullmap(result_vecs[f]);
+        /* Pre-allocate nullmaps so win_set_null works in both paths.
+         * On OOM, force sequential path where win_set_null falls back
+         * to single-threaded ray_vec_set_null. */
+        bool nullmaps_ok = true;
+        for (uint8_t f = 0; f < n_funcs; f++) {
+            if (win_prepare_nullmap(result_vecs[f]) != RAY_OK)
+                nullmaps_ok = false;
+        }
 
         ray_pool_t* p3pool = ray_pool_get();
-        if (p3pool && n_parts > 1) {
+        if (p3pool && n_parts > 1 && nullmaps_ok) {
             win_par_ctx_t pctx = {
                 .order_vecs = order_vecs, .n_order = n_order,
                 .func_vecs = func_vecs, .func_kinds = ext->window.func_kinds,
