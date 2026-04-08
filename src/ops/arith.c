@@ -56,22 +56,29 @@ ray_t* ray_add_fn(ray_t* a, ray_t* b) {
         return ray_error("type", NULL);
     if (is_temporal(a) && is_numeric(b) && RAY_ATOM_IS_NULL(b))
         return ray_error("type", NULL);
-    /* Temporal + temporal: null propagation */
-    if (is_temporal(a) && is_temporal(b) && (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)))
-        return ray_typed_null(-RAY_TIMESTAMP);
     /* DATE + TIME → TIMESTAMP */
-    if (a->type == -RAY_DATE && b->type == -RAY_TIME)
+    if (a->type == -RAY_DATE && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(a->i64 * 86400000000000LL + b->i64 * 1000000LL);
-    if (a->type == -RAY_TIME && b->type == -RAY_DATE)
+    }
+    if (a->type == -RAY_TIME && b->type == -RAY_DATE) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(b->i64 * 86400000000000LL + a->i64 * 1000000LL);
+    }
     /* TIME + TIME → TIME */
-    if (a->type == -RAY_TIME && b->type == -RAY_TIME)
+    if (a->type == -RAY_TIME && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIME);
         return ray_time(a->i64 + b->i64);
+    }
     /* TIME + TIMESTAMP → TIMESTAMP (add ms as ns) */
-    if (a->type == -RAY_TIME && b->type == -RAY_TIMESTAMP)
+    if (a->type == -RAY_TIME && b->type == -RAY_TIMESTAMP) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(b->i64 + a->i64 * 1000000LL);
-    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME)
+    }
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(a->i64 + b->i64 * 1000000LL);
+    }
 
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot add %s and %s",
@@ -93,21 +100,20 @@ ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
         if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b))
             return ray_typed_null(b->type);
     }
-    /* Temporal - temporal null propagation */
-    if (is_temporal(a) && is_temporal(b) && (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b))) {
-        if (a->type == b->type) return ray_typed_null(a->type);
-        return ray_typed_null(-RAY_TIMESTAMP);
-    }
     /* DATE - int → DATE */
     if (a->type == -RAY_DATE && is_numeric(b)) {
         return ray_date(a->i64 - as_i64(b));
     }
     /* DATE - DATE → i32 (days difference) */
-    if (a->type == -RAY_DATE && b->type == -RAY_DATE)
+    if (a->type == -RAY_DATE && b->type == -RAY_DATE) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_I32);
         return ray_i32((int32_t)(a->i64 - b->i64));
+    }
     /* DATE - TIME → TIMESTAMP */
-    if (a->type == -RAY_DATE && b->type == -RAY_TIME)
+    if (a->type == -RAY_DATE && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(a->i64 * 86400000000000LL - b->i64 * 1000000LL);
+    }
     /* TIME - int → TIME */
     if (a->type == -RAY_TIME && is_numeric(b)) {
         return ray_time(a->i64 - as_i64(b));
@@ -117,18 +123,24 @@ ray_t* ray_sub_fn(ray_t* a, ray_t* b) {
         return ray_time(as_i64(a) - b->i64);
     }
     /* TIME - TIME → TIME */
-    if (a->type == -RAY_TIME && b->type == -RAY_TIME)
+    if (a->type == -RAY_TIME && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIME);
         return ray_time(a->i64 - b->i64);
+    }
     /* TIMESTAMP - int → TIMESTAMP */
     if (a->type == -RAY_TIMESTAMP && is_numeric(b)) {
         return ray_timestamp(a->i64 - as_i64(b));
     }
     /* TIMESTAMP - TIME → TIMESTAMP */
-    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME)
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIME) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_TIMESTAMP);
         return ray_timestamp(a->i64 - b->i64 * 1000000LL);
+    }
     /* TIMESTAMP - TIMESTAMP → int (nanos difference) */
-    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIMESTAMP)
+    if (a->type == -RAY_TIMESTAMP && b->type == -RAY_TIMESTAMP) {
+        if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_I64);
         return make_i64(a->i64 - b->i64);
+    }
     /* TIMESTAMP - DATE → error */
     if (a->type == -RAY_TIMESTAMP && b->type == -RAY_DATE)
         return ray_error("type", NULL);
