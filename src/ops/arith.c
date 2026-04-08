@@ -210,7 +210,7 @@ ray_t* ray_div_fn(ray_t* a, ray_t* b) {
     if (!is_numeric(a) || !is_numeric(b))
         return ray_error("type", "cannot divide %s by %s",
                          ray_type_name(abs(a->type)), ray_type_name(abs(b->type)));
-    /* u8: unsigned byte division, no null sentinel — div by 0 returns 0 */
+    /* u8: unsigned byte division — div by 0 returns 0 */
     if (a->type == -RAY_U8) {
         uint8_t bv = (uint8_t)as_i64(b);
         if (bv == 0 || RAY_ATOM_IS_NULL(b)) return make_u8(0);

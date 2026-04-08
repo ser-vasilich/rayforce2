@@ -1263,7 +1263,7 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
     /* Typed vector: extract element directly */
     if (ray_is_vec(vec)) {
         int64_t len = ray_len(vec);
-        if (i < 0 || i >= len) return ray_typed_null(-RAY_I64); /* out of bounds → 0Nl */
+        if (i < 0 || i >= len) return ray_typed_null(-vec->type); /* out of bounds → typed null */
         int alloc = 0;
         ray_t* elem = collection_elem(vec, i, &alloc);
         /* collection_elem always allocates for typed vecs, so elem is owned */

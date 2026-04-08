@@ -456,6 +456,7 @@ bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t* out) {
                 if (!col) return false;
                 if (col->type == RAY_MAPCOMMON) return false;
                 if (col->type == RAY_STR) return false; /* RAY_STR needs string comparison path */
+                if (col->attrs & RAY_ATTR_HAS_NULLS) return false; /* nullable cols need bitmap-aware path */
                 out->regs[r].kind = REG_SCAN;
                 if (RAY_IS_PARTED(col->type)) {
                     int8_t base = (int8_t)RAY_PARTED_BASETYPE(col->type);

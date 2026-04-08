@@ -141,8 +141,8 @@ The fused executor (`src/ops/expr.c`) still uses `INT64_MIN`/`NaN` value-based n
 
 | What | Where | Action |
 |------|-------|--------|
-| `is_null_atom` function | eval_internal.h | Delete |
-| 58 call sites | arith.c, cmp.c, agg.c, collection.c, eval.c, query.c, builtins.c | Remove or replace with RAY_IS_NULL |
-| Sentinel parsing (0Nl etc.) | parse.c | Return RAY_NULL_OBJ |
-| Sentinel display | format.c | Remove INT32_MIN/INT64_MIN special cases |
+| `is_null_atom` function | eval_internal.h | Delete, replace with `RAY_ATOM_IS_NULL` macro |
+| 58 call sites | arith.c, cmp.c, agg.c, collection.c, eval.c, query.c, builtins.c | Replace with `RAY_ATOM_IS_NULL` |
+| Sentinel parsing (0Nl etc.) | parse.c | Return `ray_typed_null()` (typed null atoms with null bit) |
+| Sentinel display | format.c | Check `RAY_ATOM_IS_NULL` instead of sentinel values |
 | Documentation | CLAUDE.md, website | Update |
