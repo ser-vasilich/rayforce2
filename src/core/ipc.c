@@ -138,17 +138,6 @@ ray_sock_t ray_sock_connect(const char* host, uint16_t port, int timeout_ms)
     }
     freeaddrinfo(res);
 
-    /* Clear connect timeout — data transfer has no time limit */
-#ifdef _WIN32
-    { DWORD z = 0;
-      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&z, sizeof(z));
-      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&z, sizeof(z)); }
-#else
-    { struct timeval z = {0, 0};
-      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof(z));
-      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &z, sizeof(z)); }
-#endif
-
     int yes = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
     return fd;
@@ -883,6 +872,17 @@ int64_t ray_ipc_connect(const char* host, uint16_t port)
         ray_sock_close(fd);
         return -1;
     }
+
+    /* Clear connect/handshake timeout — data transfer has no time limit */
+#ifdef _WIN32
+    { DWORD z = 0;
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&z, sizeof(z));
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&z, sizeof(z)); }
+#else
+    { struct timeval z = {0, 0};
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof(z));
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &z, sizeof(z)); }
+#endif
 
     /* Find free slot */
     for (int i = 0; i < RAY_IPC_MAX_CONNS; i++) {
