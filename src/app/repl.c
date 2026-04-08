@@ -562,15 +562,22 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     return true;
 }
 
+static void ipc_idle_cb(void* arg) {
+    ray_ipc_poll((ray_ipc_server_t*)arg, 0);
+}
+
 static void run_interactive(ray_repl_t* repl) {
     ray_term_t* term = repl->term;
     print_banner();
 
-    for (;;) {
-        /* Poll IPC between REPL inputs */
-        if (repl->ipc_srv)
-            ray_ipc_poll(repl->ipc_srv, 0);
+    /* Register IPC idle callback so the server processes connections
+     * while the terminal waits for keystrokes. */
+    if (repl->ipc_srv) {
+        term->idle_fn  = ipc_idle_cb;
+        term->idle_arg = repl->ipc_srv;
+    }
 
+    for (;;) {
         ray_t* line = ray_term_read(term);
         if (!line) break; /* EOF / Ctrl-D */
 

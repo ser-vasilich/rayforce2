@@ -115,6 +115,9 @@ typedef struct ray_term {
     /* Multi-line input state */
     char        multiline_buf[TERM_BUF_SIZE];
     int32_t     multiline_len;
+    /* IPC idle callback — called while waiting for input */
+    void      (*idle_fn)(void* arg);
+    void*       idle_arg;
 } ray_term_t;
 
 ray_term_t* ray_term_create(void);

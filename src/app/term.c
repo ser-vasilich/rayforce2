@@ -51,6 +51,7 @@ typedef struct _stat hist_stat_t;
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #define hist_open(p, f, m)  open((p), (f), (m))
@@ -347,6 +348,29 @@ void ray_term_destroy(ray_term_t* term) {
 
 int64_t ray_term_getc(ray_term_t* term) {
     for (;;) {
+        /* If an idle callback is registered (e.g., IPC server), use select
+         * with a short timeout so the callback runs between keystrokes. */
+        if (term->idle_fn) {
+            fd_set rfds;
+            struct timeval tv = { .tv_sec = 0, .tv_usec = 20000 }; /* 20ms */
+            FD_ZERO(&rfds);
+            FD_SET(STDIN_FILENO, &rfds);
+            int sr = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+            if (sr == 0) {
+                /* Timeout — run idle callback and retry */
+                term->idle_fn(term->idle_arg);
+                continue;
+            }
+            if (sr < 0) {
+                if (errno == EINTR) {
+                    if (g_interrupted) return -2;
+                    continue;
+                }
+                return -1;
+            }
+            /* stdin is ready — fall through to read */
+        }
+
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
         if (sz < 0 && errno == EINTR) {
