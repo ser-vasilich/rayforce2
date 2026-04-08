@@ -571,8 +571,7 @@ static void run_interactive(ray_repl_t* repl) {
      * the unified event loop instead of raw read(). */
     if (repl->ipc_srv) {
         term->ipc_srv = repl->ipc_srv;
-        ray_ipc_watch_fd(repl->ipc_srv, 0);  /* stdin fd = 0 */
-        ray_sock_set_nonblocking(0);
+        ray_ipc_watch_fd(repl->ipc_srv, 0);  /* stdin fd = 0 into epoll/kqueue */
     }
 
     for (;;) {

@@ -347,21 +347,43 @@ void ray_term_destroy(ray_term_t* term) {
 }
 
 int64_t ray_term_getc(ray_term_t* term) {
+    if (term->ipc_srv) {
+        /* IPC server active: stdin is in the epoll/kqueue set.
+         * Set non-blocking, wait on the unified event loop, then
+         * restore blocking before returning so escape-sequence
+         * reads (term_read_byte with VTIME) still work. */
+        int flags = fcntl(STDIN_FILENO, F_GETFL);
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+        for (;;) {
+            int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
+            if (sz > 0) {
+                fcntl(STDIN_FILENO, F_SETFL, flags);  /* restore blocking */
+                return sz;
+            }
+            if (sz < 0 && errno == EINTR) {
+                if (g_interrupted) {
+                    fcntl(STDIN_FILENO, F_SETFL, flags);
+                    return -2;
+                }
+                continue;
+            }
+            if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
+                continue;
+            }
+            fcntl(STDIN_FILENO, F_SETFL, flags);  /* restore on EOF/error */
+            return sz;
+        }
+    }
+    /* No IPC server — original blocking path */
     for (;;) {
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
         if (sz < 0 && errno == EINTR) {
-            if (g_interrupted) return -2; /* signal caller to handle ^C */
-            continue; /* spurious EINTR, retry */
+            if (g_interrupted) return -2;
+            continue;
         }
-        if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && term->ipc_srv) {
-            /* Stdin non-blocking + IPC server active: block on the server's
-             * event loop (epoll/kqueue) which watches both stdin and IPC
-             * sockets. Returns when any fd is ready. */
-            ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
-            continue;  /* retry read — stdin may or may not be ready */
-        }
-        return sz; /* EOF or error */
+        return sz;
     }
 }
 
