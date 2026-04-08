@@ -72,12 +72,8 @@ static dag_unary_ctor resolve_unary_dag(int64_t sym_id) {
     if (len == 3) {
         if (memcmp(name, "neg", 3) == 0) return ray_neg;
         if (memcmp(name, "not", 3) == 0) return ray_not;
-        if (memcmp(name, "abs", 3) == 0) return ray_abs;
-        if (memcmp(name, "exp", 3) == 0) return ray_exp_op;
-        if (memcmp(name, "log", 3) == 0) return ray_log_op;
     } else if (len == 4) {
         if (memcmp(name, "ceil", 4) == 0) return ray_ceil_op;
-        if (memcmp(name, "sqrt", 4) == 0) return ray_sqrt_op;
     } else if (len == 5) {
         if (memcmp(name, "floor", 5) == 0) return ray_floor_op;
     }
