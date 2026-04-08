@@ -456,7 +456,7 @@ bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t* out) {
                 if (!col) return false;
                 if (col->type == RAY_MAPCOMMON) return false;
                 if (col->type == RAY_STR) return false; /* RAY_STR needs string comparison path */
-                if (col->attrs & RAY_ATTR_HAS_NULLS) return false; /* nullable cols need bitmap-aware path */
+                if (col->attrs & (RAY_ATTR_HAS_NULLS | RAY_ATTR_SLICE)) return false; /* nullable cols need bitmap-aware path */
                 out->regs[r].kind = REG_SCAN;
                 if (RAY_IS_PARTED(col->type)) {
                     int8_t base = (int8_t)RAY_PARTED_BASETYPE(col->type);
@@ -947,9 +947,9 @@ ray_t* expr_eval_full(const ray_expr_t* expr, int64_t nrows) {
  * Null bitmap propagation for element-wise ops
  * ============================================================================ */
 
-/* Copy null bitmap from src vector to dst vector (OR-merge). */
+/* Copy null bitmap from src vector to dst vector (OR-merge).
+ * ray_vec_is_null handles slices (delegates to parent with offset). */
 static void propagate_nulls(ray_t* src, ray_t* dst, int64_t len) {
-    if (!(src->attrs & RAY_ATTR_HAS_NULLS)) return;
     for (int64_t i = 0; i < len; i++) {
         if (ray_vec_is_null(src, i))
             ray_vec_set_null(dst, i, true);
@@ -962,20 +962,33 @@ static bool op_propagates_null(uint16_t opc) {
     return opc < OP_EQ || opc > OP_OR;
 }
 
+/* Check if a scalar operand (atom or length-1 vector) is null.
+ * Handles slices correctly via ray_vec_is_null delegation. */
+static bool scalar_is_null(ray_t* x) {
+    if (ray_is_atom(x)) return RAY_ATOM_IS_NULL(x);
+    /* Length-1 vector — use ray_vec_is_null which handles slices */
+    return ray_vec_is_null(x, 0);
+}
+
+/* Check if a vector might contain nulls (accounts for slices). */
+static bool vec_may_have_nulls(ray_t* v) {
+    return (v->attrs & (RAY_ATTR_HAS_NULLS | RAY_ATTR_SLICE)) != 0;
+}
+
 /* For comparisons: force result to false for any element where either input is null. */
 static void clear_null_comparisons(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
     uint8_t* dst = (uint8_t*)ray_data(result);
-    if (l_scalar && RAY_ATOM_IS_NULL(lhs)) {
+    if (l_scalar && scalar_is_null(lhs)) {
         memset(dst, 0, (size_t)len);
         return;
     }
-    if (r_scalar && RAY_ATOM_IS_NULL(rhs)) {
+    if (r_scalar && scalar_is_null(rhs)) {
         memset(dst, 0, (size_t)len);
         return;
     }
-    bool l_has = !l_scalar && (lhs->attrs & RAY_ATTR_HAS_NULLS);
-    bool r_has = !r_scalar && (rhs->attrs & RAY_ATTR_HAS_NULLS);
+    bool l_has = !l_scalar && vec_may_have_nulls(lhs);
+    bool r_has = !r_scalar && vec_may_have_nulls(rhs);
     if (!l_has && !r_has) return;
     for (int64_t i = 0; i < len; i++) {
         if ((l_has && ray_vec_is_null(lhs, i)) ||
@@ -987,13 +1000,13 @@ static void clear_null_comparisons(ray_t* lhs, ray_t* rhs, ray_t* result,
 /* Propagate null bitmaps for binary ops: null in either operand → null in result. */
 static void propagate_nulls_binary(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
-    if (l_scalar && RAY_ATOM_IS_NULL(lhs)) {
+    if (l_scalar && scalar_is_null(lhs)) {
         for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
-    } else if (r_scalar && RAY_ATOM_IS_NULL(rhs)) {
+    } else if (r_scalar && scalar_is_null(rhs)) {
         for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
     } else {
-        if (!l_scalar) propagate_nulls(lhs, result, len);
-        if (!r_scalar) propagate_nulls(rhs, result, len);
+        if (!l_scalar && vec_may_have_nulls(lhs)) propagate_nulls(lhs, result, len);
+        if (!r_scalar && vec_may_have_nulls(rhs)) propagate_nulls(rhs, result, len);
     }
 }
 
@@ -1088,7 +1101,7 @@ ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input) {
 
     /* Propagate null bitmap from input to result.
      * ISNULL is special: set output to 1 for null elements. */
-    if (input->attrs & RAY_ATTR_HAS_NULLS) {
+    if (vec_may_have_nulls(input)) {
         if (op->opcode == OP_ISNULL) {
             for (int64_t i = 0; i < len; i++) {
                 if (ray_vec_is_null(input, i))
