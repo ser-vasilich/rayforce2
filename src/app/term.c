@@ -383,7 +383,9 @@ int64_t ray_term_getc(ray_term_t* term) {
             if (g_interrupted) return -2;
             continue;
         }
-        if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        /* EAGAIN / sz==0: no data available on non-blocking TTY.
+         * With VMIN=0 VTIME=0, some systems return 0 instead of -1/EAGAIN. */
+        if (sz == 0 || (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
             /* Empty buffer mid-escape → bare Esc (sequences arrive as burst) */
             if (term->esc_state > 0) {
                 term->esc_state = 0;
@@ -402,7 +404,7 @@ int64_t ray_term_getc(ray_term_t* term) {
 #endif
             continue;
         }
-        return sz;
+        return sz;  /* real error */
     }
 }
 
