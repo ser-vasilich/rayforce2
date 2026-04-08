@@ -202,7 +202,7 @@ ray_t* ray_min_fn(ray_t* x) {
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
         int64_t n = x->len;
-        if (n == 0) return ray_typed_null(-RAY_I64);
+        if (n == 0) return ray_typed_null(-x->type);
         if (x->type == RAY_I32 || x->type == RAY_DATE || x->type == RAY_TIME) {
             int32_t* d = (int32_t*)ray_data(x);
             int32_t m = INT32_MAX; int found = 0;
@@ -270,7 +270,7 @@ ray_t* ray_max_fn(ray_t* x) {
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
         int64_t n = x->len;
-        if (n == 0) return ray_typed_null(-RAY_I64);
+        if (n == 0) return ray_typed_null(-x->type);
         if (x->type == RAY_I32 || x->type == RAY_DATE || x->type == RAY_TIME) {
             int32_t* d = (int32_t*)ray_data(x);
             int32_t m = INT32_MIN; int found = 0;
@@ -352,7 +352,7 @@ ray_t* ray_first_fn(ray_t* x) {
         return result;
     }
     if (ray_is_vec(x)) {
-        if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty vec */
+        if (ray_len(x) == 0) return ray_typed_null(-x->type);
         /* For SYM, GUID, STR and other non-numeric types, use collection_elem directly */
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
             x->type == RAY_GUID || x->type == RAY_STR) {
@@ -366,7 +366,7 @@ ray_t* ray_first_fn(ray_t* x) {
         return ray_lazy_materialize(ray_lazy_wrap(g, op));
     }
     if (!is_list(x)) return ray_error("type", NULL);
-    if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty list */
+    if (ray_len(x) == 0) return ray_typed_null(-RAY_I64);
     ray_t* elem = ((ray_t**)ray_data(x))[0];
     ray_retain(elem);
     return elem;
@@ -392,7 +392,7 @@ ray_t* ray_last_fn(ray_t* x) {
         return result;
     }
     if (ray_is_vec(x)) {
-        if (ray_len(x) == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty vec */
+        if (ray_len(x) == 0) return ray_typed_null(-x->type);
         if (x->type == RAY_SYM || x->type == RAY_I32 || x->type == RAY_I16 ||
             x->type == RAY_GUID || x->type == RAY_STR) {
             int alloc = 0;
@@ -406,7 +406,7 @@ ray_t* ray_last_fn(ray_t* x) {
     }
     if (!is_list(x)) return ray_error("type", NULL);
     int64_t len = ray_len(x);
-    if (len == 0) return ray_typed_null(-RAY_I64); /* 0Nl for empty list */
+    if (len == 0) return ray_typed_null(-RAY_I64);
     ray_t* elem = ((ray_t**)ray_data(x))[len - 1];
     ray_retain(elem);
     return elem;

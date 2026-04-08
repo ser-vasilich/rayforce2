@@ -822,6 +822,49 @@ typedef struct {
     ray_t*  vec;
 } agg_out_t;
 
+/* Thread-safe null bit set for parallel group-by execution.
+ * Only touches nullmap bytes (atomically). Does NOT modify vec->attrs —
+ * call grp_finalize_nulls after all threads have joined. */
+static inline void grp_set_null(ray_t* vec, int64_t idx) {
+    if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
+        int byte_idx = (int)(idx / 8);
+        int bit_idx  = (int)(idx % 8);
+        __atomic_fetch_or(&vec->nullmap[byte_idx],
+                          (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+        return;
+    }
+    ray_t* ext = vec->ext_nullmap;
+    uint8_t* bits = (uint8_t*)ray_data(ext);
+    int byte_idx = (int)(idx / 8);
+    int bit_idx  = (int)(idx % 8);
+    __atomic_fetch_or(&bits[byte_idx],
+                      (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+}
+
+static void grp_prepare_nullmap(ray_t* vec) {
+    if (vec->len <= 128) return;
+    ray_vec_set_null(vec, 0, true);
+    ray_vec_set_null(vec, 0, false);
+    vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
+}
+
+static void grp_finalize_nulls(ray_t* vec) {
+    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
+        ray_t* ext = vec->ext_nullmap;
+        uint8_t* bits = (uint8_t*)ray_data(ext);
+        int64_t nbytes = (vec->len + 7) / 8;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (bits[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    } else {
+        int64_t nbytes = (vec->len + 7) / 8;
+        if (nbytes > 16) nbytes = 16;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (vec->nullmap[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    }
+}
+
 typedef struct {
     group_ht_t*   part_hts;
     uint32_t*     part_offsets;
@@ -903,7 +946,7 @@ static void radix_phase3_fn(void* ctx, uint32_t worker_id, int64_t start, int64_
                         case OP_VAR: case OP_VAR_POP:
                         case OP_STDDEV: case OP_STDDEV_POP: {
                             bool insuf = (op == OP_VAR || op == OP_STDDEV) ? cnt <= 1 : cnt <= 0;
-                            if (insuf) { v = 0.0; ray_vec_set_null(ao->vec, di, true); break; }
+                            if (insuf) { v = 0.0; grp_set_null(ao->vec, di); break; }
                             double sum_val = sf ? ROW_RD_F64(row, ly->off_sum, s)
                                                 : (double)ROW_RD_I64(row, ly->off_sum, s);
                             double sq_val = ly->off_sumsq ? ROW_RD_F64(row, ly->off_sumsq, s) : 0.0;
@@ -3069,6 +3112,10 @@ ht_path:;
             };
         }
 
+        /* Pre-allocate nullmaps for agg result vectors (parallel safety) */
+        for (uint8_t a = 0; a < n_aggs; a++)
+            grp_prepare_nullmap(agg_outs[a].vec);
+
         /* Phase 3: parallel key gather + agg result building from inline rows */
         {
             radix_phase3_ctx_t p3ctx = {
@@ -3084,6 +3131,10 @@ ht_path:;
             };
             ray_pool_dispatch_n(pool, radix_phase3_fn, &p3ctx, RADIX_P);
         }
+
+        /* Finalize null flags after parallel execution */
+        for (uint8_t a = 0; a < n_aggs; a++)
+            grp_finalize_nulls(agg_outs[a].vec);
 
         /* Add key columns to result */
         for (uint8_t k = 0; k < n_keys; k++) {
