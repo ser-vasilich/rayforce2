@@ -392,13 +392,17 @@ ray_t* ray_ceil_fn(ray_t* x) {
     return ray_error("type", NULL);
 }
 
-/* abs: absolute value, preserves type */
+/* abs: absolute value, preserves type. Null sentinels propagate. */
 ray_t* ray_abs_fn(ray_t* x) {
+    if (is_null_atom(x)) { ray_retain(x); return x; }
     if (x->type == -RAY_F64) return make_f64(fabs(x->f64));
-    if (x->type == -RAY_I64) return make_i64(x->i64 < 0 ? -x->i64 : x->i64);
+    if (x->type == -RAY_I64) {
+        /* Guard against -INT64_MIN overflow (null sentinel 0Nl) */
+        if (x->i64 == INT64_MIN) return make_i64(INT64_MAX);
+        return make_i64(x->i64 < 0 ? -x->i64 : x->i64);
+    }
     if (x->type == -RAY_I32) return make_i64(x->i32 < 0 ? -(int64_t)x->i32 : x->i32);
     if (x->type == -RAY_I16) return make_i64(x->i16 < 0 ? -(int64_t)x->i16 : x->i16);
-    if (is_null_atom(x)) { ray_retain(x); return x; }
     return ray_error("type", NULL);
 }
 
