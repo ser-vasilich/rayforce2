@@ -394,9 +394,16 @@ int atom_eq(ray_t* a, ray_t* b) {
 /* Forward declaration */
 ray_t* list_to_typed_vec(ray_t* list, int8_t orig_vec_type);
 
-/* (distinct vec) — remove duplicates, preserving first occurrence */
+/* (distinct x) — remove duplicates. Dispatches on type:
+ *   table → deduplicate rows (via DAG GROUP with zero aggs)
+ *   vector → remove duplicate elements, preserving first occurrence
+ *   string → unique chars, sorted */
 ray_t* ray_distinct_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
+
+    /* Table distinct: dispatch to table-specific implementation */
+    if (x->type == RAY_TABLE)
+        return ray_table_distinct_fn(x);
 
     /* String distinct: unique chars, sorted */
     if (ray_is_atom(x) && (-x->type) == RAY_STR) {

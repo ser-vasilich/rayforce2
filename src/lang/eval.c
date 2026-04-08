@@ -1851,7 +1851,7 @@ static void ray_register_builtins(void) {
     register_unary("key",      RAY_FN_NONE, ray_key);
     register_unary("value",    RAY_FN_NONE, ray_value);
     register_binary("union-all",      RAY_FN_NONE, ray_union_all_fn);
-    register_unary("table-distinct",  RAY_FN_NONE, ray_table_distinct_fn);
+    /* table-distinct removed — distinct dispatches on type */
 
     /* Query operations */
     register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
@@ -1863,7 +1863,7 @@ static void ray_register_builtins(void) {
     /* Join operations */
     register_vary("left-join",   RAY_FN_NONE, ray_left_join);
     register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
-    register_vary("antijoin",    RAY_FN_NONE, ray_antijoin_fn);
+    register_vary("anti-join",   RAY_FN_NONE, ray_antijoin_fn);
     register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("window-join1", RAY_FN_SPECIAL_FORM, ray_window_join);
     register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);
