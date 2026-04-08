@@ -10,6 +10,7 @@
 #include "lang/eval.h"
 #include "lang/env.h"
 #include "ops/ops.h"
+#include "ops/internal.h"
 #include "table/sym.h"
 
 #include <string.h>
@@ -2511,7 +2512,8 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
         /* For each left row, find matching right rows within the time window */
         /* intervals is a list of [lo, hi] pairs, one per left row */
         int is_f64 = (right_agg_col && right_agg_col->type == RAY_F64);
-        ray_t* result_agg = ray_vec_new(is_f64 ? RAY_F64 : RAY_I64, left_nrows);
+        int8_t agg_type = right_agg_col ? right_agg_col->type : RAY_I64;
+        ray_t* result_agg = ray_vec_new(agg_type, left_nrows);
         if (RAY_IS_ERR(result_agg)) return result_agg;
 
         for (int64_t lr = 0; lr < left_nrows; lr++) {
@@ -2567,7 +2569,7 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
                             (agg_op == OP_MAX && v > best_val_f))
                             best_val_f = v;
                     } else {
-                        int64_t v = ((int64_t*)ray_data(right_agg_col))[rr];
+                        int64_t v = read_col_i64(ray_data(right_agg_col), rr, agg_type, right_agg_col->attrs);
                         if (!found || (agg_op == OP_MIN && v < best_val_i) ||
                             (agg_op == OP_MAX && v > best_val_i))
                             best_val_i = v;
@@ -2576,14 +2578,17 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
                 }
             }
 
-            /* Store result */
+            /* Store result — write with correct element width */
             if (found) {
                 if (is_f64) {
                     double v = best_val_f;
                     result_agg = ray_vec_append(result_agg, &v);
                 } else {
-                    int64_t v = best_val_i;
-                    result_agg = ray_vec_append(result_agg, &v);
+                    int64_t idx = result_agg->len;
+                    uint8_t zero[8] = {0};
+                    result_agg = ray_vec_append(result_agg, zero);
+                    if (!RAY_IS_ERR(result_agg))
+                        write_col_i64(ray_data(result_agg), idx, best_val_i, agg_type, result_agg->attrs);
                 }
             } else {
                 int64_t idx = result_agg->len;
