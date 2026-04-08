@@ -104,10 +104,9 @@ static inline int64_t win_read_i64(ray_t* col, int64_t row) {
 }
 
 /* Thread-safe null bit set for parallel window execution.
- * Requires the vector's external nullmap to be pre-allocated via win_prepare_nullmap. */
+ * Only touches the nullmap bytes (atomically). Does NOT modify vec->attrs —
+ * the caller must call win_finalize_nulls after all threads have joined. */
 static inline void win_set_null(ray_t* vec, int64_t idx) {
-    /* Lazily mark the vector as having nulls (atomic for parallel safety) */
-    __atomic_fetch_or(&vec->attrs, RAY_ATTR_HAS_NULLS, __ATOMIC_RELAXED);
     if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
         /* Inline nullmap: idx < 128 */
         int byte_idx = (int)(idx / 8);
@@ -125,8 +124,7 @@ static inline void win_set_null(ray_t* vec, int64_t idx) {
 }
 
 /* Pre-allocate external nullmap so parallel threads can set bits safely.
- * Does NOT set RAY_ATTR_HAS_NULLS — that is set lazily by win_set_null
- * only when a null is actually written. */
+ * Does NOT set RAY_ATTR_HAS_NULLS — call win_finalize_nulls after execution. */
 static void win_prepare_nullmap(ray_t* vec) {
     if (vec->len <= 128) return; /* inline nullmap suffices */
     /* Force promotion to external nullmap via a dummy set+clear */
@@ -134,6 +132,25 @@ static void win_prepare_nullmap(ray_t* vec) {
     ray_vec_set_null(vec, 0, false);
     /* Clear the HAS_NULLS flag that ray_vec_set_null just set */
     vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
+}
+
+/* After all partitions have executed (threads joined), scan nullmaps
+ * and set RAY_ATTR_HAS_NULLS on vectors that actually received nulls. */
+static void win_finalize_nulls(ray_t* vec) {
+    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
+        ray_t* ext = vec->ext_nullmap;
+        uint8_t* bits = (uint8_t*)ray_data(ext);
+        int64_t nbytes = (vec->len + 7) / 8;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (bits[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    } else {
+        int64_t nbytes = (vec->len + 7) / 8;
+        if (nbytes > 16) nbytes = 16;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (vec->nullmap[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    }
 }
 
 /* Resolve a graph op node to a column vector from tbl */
@@ -1112,6 +1129,10 @@ ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
                     result_vecs, is_f64);
             }
         }
+
+        /* Set RAY_ATTR_HAS_NULLS on vectors that actually received nulls */
+        for (uint8_t f = 0; f < n_funcs; f++)
+            win_finalize_nulls(result_vecs[f]);
     }
 
     /* --- Phase 4: Build result table --- */
