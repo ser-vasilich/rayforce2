@@ -1801,6 +1801,10 @@ static void ray_register_builtins(void) {
     register_unary("round",   RAY_FN_ATOMIC, ray_round_fn);
     register_unary_op("floor", RAY_FN_ATOMIC, ray_floor_fn, OP_FLOOR);
     register_unary_op("ceil",  RAY_FN_ATOMIC, ray_ceil_fn,  OP_CEIL);
+    register_unary_op("abs",   RAY_FN_ATOMIC, ray_abs_fn,  OP_ABS);
+    register_unary_op("sqrt",  RAY_FN_ATOMIC, ray_sqrt_fn, OP_SQRT);
+    register_unary_op("log",   RAY_FN_ATOMIC, ray_log_fn,  OP_LOG);
+    register_unary_op("exp",   RAY_FN_ATOMIC, ray_exp_fn,  OP_EXP);
 
     /* Special forms */
     register_binary("set", RAY_FN_SPECIAL_FORM, ray_set_fn);

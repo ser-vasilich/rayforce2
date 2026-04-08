@@ -387,7 +387,47 @@ ray_t* ray_ceil_fn(ray_t* x) {
     }
     if (is_numeric(x)) {
         if (is_null_atom(x)) { ray_retain(x); return x; }
-        ray_retain(x); return x; /* integer ceil is identity */
+        ray_retain(x); return x;
+    }
+    return ray_error("type", NULL);
+}
+
+/* abs: absolute value, preserves type */
+ray_t* ray_abs_fn(ray_t* x) {
+    if (x->type == -RAY_F64) return make_f64(fabs(x->f64));
+    if (x->type == -RAY_I64) return make_i64(x->i64 < 0 ? -x->i64 : x->i64);
+    if (x->type == -RAY_I32) return make_i64(x->i32 < 0 ? -(int64_t)x->i32 : x->i32);
+    if (x->type == -RAY_I16) return make_i64(x->i16 < 0 ? -(int64_t)x->i16 : x->i16);
+    if (is_null_atom(x)) { ray_retain(x); return x; }
+    return ray_error("type", NULL);
+}
+
+/* sqrt: square root, returns f64 */
+ray_t* ray_sqrt_fn(ray_t* x) {
+    if (x->type == -RAY_F64) return make_f64(sqrt(x->f64));
+    if (is_numeric(x)) {
+        if (is_null_atom(x)) return make_f64(NAN);
+        return make_f64(sqrt(as_f64(x)));
+    }
+    return ray_error("type", NULL);
+}
+
+/* log: natural logarithm, returns f64 */
+ray_t* ray_log_fn(ray_t* x) {
+    if (x->type == -RAY_F64) return make_f64(log(x->f64));
+    if (is_numeric(x)) {
+        if (is_null_atom(x)) return make_f64(NAN);
+        return make_f64(log(as_f64(x)));
+    }
+    return ray_error("type", NULL);
+}
+
+/* exp: e^x, returns f64 */
+ray_t* ray_exp_fn(ray_t* x) {
+    if (x->type == -RAY_F64) return make_f64(exp(x->f64));
+    if (is_numeric(x)) {
+        if (is_null_atom(x)) return make_f64(NAN);
+        return make_f64(exp(as_f64(x)));
     }
     return ray_error("type", NULL);
 }
