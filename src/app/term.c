@@ -363,33 +363,25 @@ int64_t ray_term_getc(ray_term_t* term) {
             continue;
         }
         if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            /* Mid-escape sequence: use 100ms timeout to detect bare Esc */
-            int timeout = (term->esc_state > 0) ? 100 : -1;
-
-            if (term->ipc_srv) {
-                int ready = ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, timeout);
-                if (ready == 0 && term->esc_state > 0) {
-                    /* Timeout — bare Esc or incomplete sequence */
-                    term->esc_state = 0;
-                    if (term->comp_cycling) {
-                        term->comp_cycling = 0;
-                        ray_term_redraw(term);
-                    }
+            /* EAGAIN mid-escape: no more bytes in buffer → bare Esc.
+             * Terminal sends escape sequences as a burst; if the kernel
+             * buffer is empty after ESC, there's no sequence following. */
+            if (term->esc_state > 0) {
+                term->esc_state = 0;
+                if (term->comp_cycling) {
+                    term->comp_cycling = 0;
+                    ray_term_redraw(term);
                 }
-            } else {
+                /* Fall through to wait for next real keystroke */
+            }
+
+            if (term->ipc_srv)
+                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
+            else {
                 fd_set rfds;
                 FD_ZERO(&rfds);
                 FD_SET(STDIN_FILENO, &rfds);
-                struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
-                int sr = select(STDIN_FILENO + 1, &rfds, NULL, NULL,
-                                timeout < 0 ? NULL : &tv);
-                if (sr == 0 && term->esc_state > 0) {
-                    term->esc_state = 0;
-                    if (term->comp_cycling) {
-                        term->comp_cycling = 0;
-                        ray_term_redraw(term);
-                    }
-                }
+                select(STDIN_FILENO + 1, &rfds, NULL, NULL, NULL);
             }
             continue;
         }
