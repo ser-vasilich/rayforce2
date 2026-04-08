@@ -227,6 +227,8 @@ static inline ray_t* collection_elem(ray_t* coll, int64_t i, int *allocated) {
         return ((ray_t**)ray_data(coll))[i];
     }
     *allocated = 1;
+    if (ray_vec_is_null(coll, i))
+        return ray_typed_null(-coll->type);
     switch (coll->type) {
         case RAY_I64:       return ray_i64(((int64_t*)ray_data(coll))[i]);
         case RAY_F64:       return ray_f64(((double*)ray_data(coll))[i]);

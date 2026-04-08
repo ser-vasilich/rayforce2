@@ -167,7 +167,7 @@ ray_t* ray_avg_fn(ray_t* x) {
                 uint8_t* d = (uint8_t*)ray_data(x);
                 for (int64_t i = 0; i < n; i++) { sum += (double)d[i]; cnt++; }
             }
-            if (cnt == 0) return make_f64(NAN);
+            if (cnt == 0) return ray_typed_null(-RAY_F64);
             return make_f64(sum / (double)cnt);
         }
         if (x->type == RAY_F64) {
@@ -176,7 +176,7 @@ ray_t* ray_avg_fn(ray_t* x) {
             int64_t cnt = 0;
             for (int64_t i = 0; i < n; i++)
                 if (!ray_vec_is_null(x, i)) { sum += d[i]; cnt++; }
-            if (cnt == 0) return make_f64(NAN);
+            if (cnt == 0) return ray_typed_null(-RAY_F64);
             return make_f64(sum / (double)cnt);
         }
         ray_graph_t* g = ray_graph_new(NULL);
@@ -458,12 +458,12 @@ ray_t* ray_med_fn(ray_t* x) {
 
     if (ray_is_vec(x)) {
         len = ray_len(x);
-        if (len == 0) return make_f64(NAN);
+        if (len == 0) return ray_typed_null(-RAY_F64);
         scratch = vec_to_f64_scratch(x, &vals);
         if (RAY_IS_ERR(scratch)) return scratch;
     } else if (is_list(x)) {
         len = ray_len(x);
-        if (len == 0) return make_f64(NAN);
+        if (len == 0) return ray_typed_null(-RAY_F64);
         ray_t** elems = (ray_t**)ray_data(x);
         scratch = ray_alloc(len * sizeof(double));
         if (!scratch) return ray_error("oom", NULL);
@@ -498,7 +498,7 @@ static ray_t* dev_from_f64(double* vals, int64_t len) {
     int64_t cnt = 0;
     for (int64_t i = 0; i < len; i++)
         if (!isnan(vals[i])) { sum += vals[i]; cnt++; }
-    if (cnt == 0) return make_f64(NAN);
+    if (cnt == 0) return ray_typed_null(-RAY_F64);
     double mean = sum / (double)cnt;
     double var = 0.0;
     for (int64_t i = 0; i < len; i++)
@@ -516,7 +516,7 @@ ray_t* ray_dev_fn(ray_t* x) {
     }
     if (ray_is_vec(x)) {
         int64_t len = ray_len(x);
-        if (len == 0) return make_f64(NAN);
+        if (len == 0) return ray_typed_null(-RAY_F64);
         /* Build f64 scratch — null bitmap elements become NaN */
         ray_t* scratch = ray_alloc(len * sizeof(double));
         if (!scratch) return ray_error("oom", NULL);
@@ -547,7 +547,7 @@ ray_t* ray_dev_fn(ray_t* x) {
     }
     if (!is_list(x)) return ray_error("type", NULL);
     int64_t len = ray_len(x);
-    if (len == 0) return make_f64(NAN);
+    if (len == 0) return ray_typed_null(-RAY_F64);
     ray_t** elems = (ray_t**)ray_data(x);
     double sum = 0.0;
     int64_t cnt = 0;
@@ -555,7 +555,7 @@ ray_t* ray_dev_fn(ray_t* x) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
         if (!RAY_ATOM_IS_NULL(elems[i])) { sum += as_f64(elems[i]); cnt++; }
     }
-    if (cnt == 0) return make_f64(NAN);
+    if (cnt == 0) return ray_typed_null(-RAY_F64);
     double mean = sum / (double)cnt;
     double var = 0.0;
     for (int64_t i = 0; i < len; i++) {

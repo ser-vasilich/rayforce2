@@ -1156,6 +1156,15 @@ ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
 /* Helper: convert a Rayfall list of atoms into a typed column vector by
  * appending to an existing column (for insert/upsert). */
 static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
+    if (RAY_ATOM_IS_NULL(atom)) {
+        int64_t idx = col_vec->len;
+        int8_t ct = col_vec->type;
+        uint8_t zero[16] = {0};
+        col_vec = ray_vec_append(col_vec, zero);
+        if (!RAY_IS_ERR(col_vec))
+            ray_vec_set_null(col_vec, idx, true);
+        return col_vec;
+    }
     int8_t ct = col_vec->type;
     if (ct == RAY_I64) {
         if (atom->type != -RAY_I64)

@@ -383,6 +383,13 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
 
         int can_dag = (l_num_vec || r_num_vec) &&
                       (l_num_vec || l_num_scalar) && (r_num_vec || r_num_scalar);
+        /* Null scalar atoms lose their null bit in DAG constants — use slow path */
+        if (l_num_scalar && RAY_ATOM_IS_NULL(left)) can_dag = 0;
+        if (r_num_scalar && RAY_ATOM_IS_NULL(right)) can_dag = 0;
+        /* Vectors with null bitmap: DAG executor uses sentinel-based null checks
+         * which are incompatible with bitmap nulls — use slow path */
+        if (l_num_vec && (left->attrs & RAY_ATTR_HAS_NULLS)) can_dag = 0;
+        if (r_num_vec && (right->attrs & RAY_ATTR_HAS_NULLS)) can_dag = 0;
 
         /* Div/mod: only I64×I64 (executor has floor-div semantics for I64) */
         if (is_idiv && !(lt == RAY_I64 && rt == RAY_I64)) can_dag = 0;

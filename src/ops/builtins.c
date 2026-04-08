@@ -1277,6 +1277,10 @@ ray_t* ray_enlist_fn(ray_t** args, int64_t n) {
         for (int64_t i = 0; i < n; i++)
             d[i] = (args[i]->type == -RAY_F64) ? args[i]->f64 : (double)args[i]->i64;
         vec->len = n;
+        for (int64_t i = 0; i < n; i++) {
+            if (RAY_ATOM_IS_NULL(args[i]))
+                ray_vec_set_null(vec, i, true);
+        }
         return vec;
     }
     if (homogeneous && atype < 0) {
@@ -1340,6 +1344,10 @@ ray_t* ray_enlist_fn(ray_t** args, int64_t n) {
         default: goto as_list;
         }
         vec->len = n;
+        for (int64_t i = 0; i < n; i++) {
+            if (RAY_ATOM_IS_NULL(args[i]))
+                ray_vec_set_null(vec, i, true);
+        }
         return vec;
     }
 as_list:;
@@ -2012,6 +2020,6 @@ ray_t* ray_fdiv_fn(ray_t* a, ray_t* b) {
     /* Null propagation */
     if (RAY_ATOM_IS_NULL(a) || RAY_ATOM_IS_NULL(b)) return ray_typed_null(-RAY_F64);
     double fa = as_f64(a), fb = as_f64(b);
-    if (fb == 0.0) return make_f64(NAN);
+    if (fb == 0.0) return ray_typed_null(-RAY_F64);
     return make_f64(fa / fb);
 }

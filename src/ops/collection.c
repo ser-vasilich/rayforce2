@@ -248,16 +248,18 @@ ray_t* ray_filter_fn(ray_t* vec, ray_t* mask) {
         int esz = ray_elem_size(vtype);
         ray_t* result = ray_vec_new(vtype, count);
         if (RAY_IS_ERR(result)) return result;
+        result->len = count;
         char* src = (char*)ray_data(vec);
         char* dst = (char*)ray_data(result);
         int64_t j = 0;
         for (int64_t i = 0; i < len; i++) {
             if (mb[i]) {
                 memcpy(dst + j * esz, src + i * esz, esz);
+                if (ray_vec_is_null(vec, i))
+                    ray_vec_set_null(result, j, true);
                 j++;
             }
         }
-        result->len = count;
         return result;
     }
 
@@ -1121,7 +1123,9 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
         result->len = nrows;
         ray_t** out = (ray_t**)ray_data(result);
         for (int64_t i = 0; i < nrows; i++) {
-            if (ctype == RAY_I64) {
+            if (ray_vec_is_null(col, i)) {
+                out[i] = ray_typed_null(-ctype);
+            } else if (ctype == RAY_I64) {
                 out[i] = make_i64(((int64_t*)ray_data(col))[i]);
             } else if (ctype == RAY_F64) {
                 out[i] = make_f64(((double*)ray_data(col))[i]);
@@ -1138,7 +1142,6 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
                 const char *sptr = ray_str_vec_get(col, i, &slen);
                 out[i] = ray_str(sptr ? sptr : "", sptr ? slen : 0);
             } else {
-                /* Fallback: use collection_elem for any other typed vector */
                 int alloc = 0;
                 out[i] = collection_elem(col, i, &alloc);
             }
