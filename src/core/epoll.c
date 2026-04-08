@@ -175,34 +175,51 @@ int64_t ray_poll_run(ray_poll_t* poll)
              * A client may send a message and close; epoll reports both
              * EPOLLIN and EPOLLHUP in the same event. */
             if (events[i].events & EPOLLIN) {
-                /* Read data into rx buffer if recv_fn is set */
-                if (sel->rx.recv_fn && sel->rx.buf) {
-                    while (sel->rx.buf->offset < sel->rx.buf->size) {
-                        int64_t nr = sel->rx.recv_fn(
-                            sel->fd,
-                            sel->rx.buf->data + sel->rx.buf->offset,
-                            sel->rx.buf->size - sel->rx.buf->offset);
-                        if (nr <= 0) {
-                            if (nr < 0 && errno == EINTR) continue;
-                            if (nr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-                                break;
-                            /* Error or peer closed */
-                            if (sel->error_fn)
-                                sel->error_fn(poll, sel);
-                            else
-                                ray_poll_deregister(poll, sel->id);
-                            goto next_event;
+                /* Loop: read data → call read_fn → if state advanced,
+                 * read more. Handles multi-phase protocols (handshake →
+                 * header → payload) arriving in a single epoll event. */
+                for (;;) {
+                    /* Fill rx buffer */
+                    if (sel->rx.recv_fn && sel->rx.buf) {
+                        while (sel->rx.buf->offset < sel->rx.buf->size) {
+                            int64_t nr = sel->rx.recv_fn(
+                                sel->fd,
+                                sel->rx.buf->data + sel->rx.buf->offset,
+                                sel->rx.buf->size - sel->rx.buf->offset);
+                            if (nr <= 0) {
+                                if (nr < 0 && errno == EINTR) continue;
+                                if (nr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                                    break;
+                                /* Error or peer closed mid-read */
+                                if (sel->error_fn)
+                                    sel->error_fn(poll, sel);
+                                else
+                                    ray_poll_deregister(poll, sel->id);
+                                goto next_event;
+                            }
+                            sel->rx.buf->offset += nr;
                         }
-                        sel->rx.buf->offset += nr;
                     }
-                }
 
-                /* Call read_fn — returns parsed object or NULL */
-                if (sel->rx.read_fn) {
+                    /* Not enough data for current phase */
+                    if (sel->rx.buf && sel->rx.buf->offset < sel->rx.buf->size)
+                        break;
+
+                    /* Call read_fn — may advance state and request new buffer */
+                    if (!sel->rx.read_fn) break;
                     ray_t* obj = sel->rx.read_fn(poll, sel);
-                    if (obj && sel->data_fn) {
+                    if (obj && sel->data_fn)
                         sel->data_fn(poll, sel, obj);
-                    }
+
+                    /* If selector was deregistered by callback, stop */
+                    if (eid >= poll->n_sels || !poll->sels[eid]) goto next_event;
+                    sel = poll->sels[eid];
+
+                    /* If no rx buffer (state machine done or not set), stop */
+                    if (!sel->rx.buf) break;
+                    /* If buffer already has enough data for next phase, loop */
+                    if (sel->rx.buf->offset >= sel->rx.buf->size) continue;
+                    /* Otherwise try reading more (may EAGAIN → break) */
                 }
             }
 

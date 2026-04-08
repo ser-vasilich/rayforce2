@@ -188,31 +188,36 @@ int64_t ray_poll_run(ray_poll_t* poll)
             /* Process readable data first — even if EOF is also set.
              * A client may send a message and close simultaneously. */
             if (events[i].filter == EVFILT_READ) {
-                if (sel->rx.recv_fn && sel->rx.buf) {
-                    while (sel->rx.buf->offset < sel->rx.buf->size) {
-                        int64_t nr = sel->rx.recv_fn(
-                            sel->fd,
-                            sel->rx.buf->data + sel->rx.buf->offset,
-                            sel->rx.buf->size - sel->rx.buf->offset);
-                        if (nr <= 0) {
-                            if (nr < 0 && errno == EINTR) continue;
-                            if (nr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-                                break;
-                            if (sel->error_fn)
-                                sel->error_fn(poll, sel);
-                            else
-                                ray_poll_deregister(poll, sel->id);
-                            goto next_event;
+                for (;;) {
+                    if (sel->rx.recv_fn && sel->rx.buf) {
+                        while (sel->rx.buf->offset < sel->rx.buf->size) {
+                            int64_t nr = sel->rx.recv_fn(
+                                sel->fd,
+                                sel->rx.buf->data + sel->rx.buf->offset,
+                                sel->rx.buf->size - sel->rx.buf->offset);
+                            if (nr <= 0) {
+                                if (nr < 0 && errno == EINTR) continue;
+                                if (nr < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                                    break;
+                                if (sel->error_fn)
+                                    sel->error_fn(poll, sel);
+                                else
+                                    ray_poll_deregister(poll, sel->id);
+                                goto next_event;
+                            }
+                            sel->rx.buf->offset += nr;
                         }
-                        sel->rx.buf->offset += nr;
                     }
-                }
-
-                if (sel->rx.read_fn) {
+                    if (sel->rx.buf && sel->rx.buf->offset < sel->rx.buf->size)
+                        break;
+                    if (!sel->rx.read_fn) break;
                     ray_t* obj = sel->rx.read_fn(poll, sel);
-                    if (obj && sel->data_fn) {
+                    if (obj && sel->data_fn)
                         sel->data_fn(poll, sel, obj);
-                    }
+                    if (eid >= poll->n_sels || !poll->sels[eid]) goto next_event;
+                    sel = poll->sels[eid];
+                    if (!sel->rx.buf) break;
+                    if (sel->rx.buf->offset >= sel->rx.buf->size) continue;
                 }
             }
 
