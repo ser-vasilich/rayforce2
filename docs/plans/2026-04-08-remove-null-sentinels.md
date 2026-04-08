@@ -133,7 +133,7 @@ Display checks the null bit instead of sentinel values.
 
 ## Known remaining sentinel usage
 
-The fused executor (`src/ops/expr.c`) still uses `INT64_MIN`/`NaN` value-based null checks in vector morsel loops. These were not migrated in this pass because they operate on raw data arrays (not `ray_t` atoms) and require null bitmap propagation through the register-based execution engine. The `eval.c` bail-out (`RAY_ATTR_HAS_NULLS` check) routes nullable vectors through the slow scalar path until `expr.c` is migrated.
+The fused executor's compiled path (`expr_compile` / `expr_eval_full` in `src/ops/expr.c`) still uses `INT64_MIN`/`NaN` value-based null checks in its morsel loops. `expr_compile` now bails out when any input column has `RAY_ATTR_HAS_NULLS`, forcing the fallback to `exec_elementwise_binary`/`exec_elementwise_unary`. These fallback functions now propagate null bitmaps from inputs to outputs via `propagate_nulls` / `propagate_nulls_binary` helpers. The `eval.c` bail-out (`RAY_ATTR_HAS_NULLS` check) additionally routes nullable vectors in the Rayfall builtin path through the slow scalar path.
 
 ---
 

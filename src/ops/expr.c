@@ -944,6 +944,32 @@ ray_t* expr_eval_full(const ray_expr_t* expr, int64_t nrows) {
 }
 
 /* ============================================================================
+ * Null bitmap propagation for element-wise ops
+ * ============================================================================ */
+
+/* Copy null bitmap from src vector to dst vector (OR-merge). */
+static void propagate_nulls(ray_t* src, ray_t* dst, int64_t len) {
+    if (!(src->attrs & RAY_ATTR_HAS_NULLS)) return;
+    for (int64_t i = 0; i < len; i++) {
+        if (ray_vec_is_null(src, i))
+            ray_vec_set_null(dst, i, true);
+    }
+}
+
+/* Propagate null bitmaps for binary ops: null in either operand → null in result. */
+static void propagate_nulls_binary(ray_t* lhs, ray_t* rhs, ray_t* result,
+                                   bool l_scalar, bool r_scalar, int64_t len) {
+    if (l_scalar && RAY_ATOM_IS_NULL(lhs)) {
+        for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
+    } else if (r_scalar && RAY_ATOM_IS_NULL(rhs)) {
+        for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
+    } else {
+        if (!l_scalar) propagate_nulls(lhs, result, len);
+        if (!r_scalar) propagate_nulls(rhs, result, len);
+    }
+}
+
+/* ============================================================================
  * Element-wise execution
  * ============================================================================ */
 
@@ -1030,6 +1056,19 @@ ray_t* exec_elementwise_unary(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         }
 
         out_off += n;
+    }
+
+    /* Propagate null bitmap from input to result.
+     * ISNULL is special: set output to 1 for null elements. */
+    if (input->attrs & RAY_ATTR_HAS_NULLS) {
+        if (op->opcode == OP_ISNULL) {
+            for (int64_t i = 0; i < len; i++) {
+                if (ray_vec_is_null(input, i))
+                    ((uint8_t*)ray_data(result))[i] = 1;
+            }
+        } else {
+            propagate_nulls(input, result, len);
+        }
     }
 
     return result;
@@ -1319,9 +1358,11 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                     .l_scalar = l_scalar, .r_scalar = r_scalar,
                 };
                 ray_pool_dispatch(pool, par_binary_str_fn, &ctx, len);
+                propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
                 return result;
             }
             binary_range_str(op, lhs, rhs, result, l_scalar, r_scalar, 0, len);
+            propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
             return result;
         }
     }
@@ -1382,6 +1423,7 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
             .l_i64 = l_i64_val, .r_i64 = r_i64_val,
         };
         ray_pool_dispatch(pool, par_binary_fn, &ctx, len);
+        propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
         return result;
     }
 
@@ -1390,5 +1432,6 @@ ray_t* exec_elementwise_binary(ray_graph_t* g, ray_op_t* op, ray_t* lhs, ray_t* 
                  l_scalar, r_scalar,
                  l_f64_val, r_f64_val, l_i64_val, r_i64_val,
                  0, len);
+    propagate_nulls_binary(lhs, rhs, result, l_scalar, r_scalar, len);
     return result;
 }
