@@ -115,10 +115,11 @@ Display checks the null bit instead of sentinel values.
 - [x] Documented `RAY_ATOM_IS_NULL` macro and `ray_typed_null` constructor
 - [x] Updated eval_internal.h file description to reference `RAY_ATOM_IS_NULL` instead of `is_null_atom`
 
-## Task 5: Update documentation
+## Task 5: Update documentation — DONE
 
-**Files:**
-- `website/docs/data-types.html` — if it documents null sentinels, update
+- [x] Updated `website/docs/data-types.html` — replaced "Null Sentinel" column with "Null Literal", added null bitmap info box
+- [x] Updated `website/docs/rayfall-syntax.html` — replaced sentinel description with null bitmap explanation
+- [x] Updated `website/docs/control-flow.html` — changed "sentinel nulls" to "typed nulls" in null rules
 
 ## Task 6: Tests
 

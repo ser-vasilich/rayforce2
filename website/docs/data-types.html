@@ -118,7 +118,7 @@
             <th>Constant</th>
             <th>Value</th>
             <th>Size</th>
-            <th>Null Sentinel</th>
+            <th>Null Literal</th>
             <th>Rayfall Literal</th>
           </tr>
         </thead>
@@ -128,7 +128,7 @@
             <td><code>RAY_BOOL</code></td>
             <td>1</td>
             <td>1 byte</td>
-            <td><code>0xFF</code></td>
+            <td>Null bitmap</td>
             <td><code><span class="hl-bool">true</span></code> / <code><span class="hl-bool">false</span></code></td>
           </tr>
           <tr>
@@ -136,7 +136,7 @@
             <td><code>RAY_U8</code></td>
             <td>2</td>
             <td>1 byte</td>
-            <td><code>0xFF</code></td>
+            <td>Null bitmap</td>
             <td><code><span class="hl-num">0x42</span></code></td>
           </tr>
           <tr>
@@ -144,7 +144,7 @@
             <td><code>RAY_I16</code></td>
             <td>3</td>
             <td>2 bytes</td>
-            <td><code>INT16_MIN</code></td>
+            <td>Null bitmap</td>
             <td>Small integers</td>
           </tr>
           <tr>
@@ -152,7 +152,7 @@
             <td><code>RAY_I32</code></td>
             <td>4</td>
             <td>4 bytes</td>
-            <td><code>INT32_MIN</code></td>
+            <td><code>0Ni</code></td>
             <td><code><span class="hl-num">42i</span></code></td>
           </tr>
           <tr>
@@ -160,7 +160,7 @@
             <td><code>RAY_I64</code></td>
             <td>5</td>
             <td>8 bytes</td>
-            <td><code>INT64_MIN</code></td>
+            <td><code>0Nl</code></td>
             <td><code><span class="hl-num">42</span></code></td>
           </tr>
           <tr>
@@ -168,7 +168,7 @@
             <td><code>RAY_F32</code></td>
             <td>6</td>
             <td>4 bytes</td>
-            <td><code>NaN</code></td>
+            <td>Null bitmap</td>
             <td>&mdash;</td>
           </tr>
           <tr>
@@ -176,7 +176,7 @@
             <td><code>RAY_F64</code></td>
             <td>7</td>
             <td>8 bytes</td>
-            <td><code>NaN</code></td>
+            <td><code>0Nf</code></td>
             <td><code><span class="hl-num">3.14</span></code></td>
           </tr>
           <tr>
@@ -184,7 +184,7 @@
             <td><code>RAY_DATE</code></td>
             <td>8</td>
             <td>4 bytes</td>
-            <td><code>INT32_MIN</code></td>
+            <td><code>0Nd</code></td>
             <td><code><span class="hl-num">2024.01.15</span></code></td>
           </tr>
           <tr>
@@ -192,7 +192,7 @@
             <td><code>RAY_TIME</code></td>
             <td>9</td>
             <td>4 bytes</td>
-            <td><code>INT32_MIN</code></td>
+            <td><code>0Nt</code></td>
             <td><code><span class="hl-num">09:30:00.000</span></code></td>
           </tr>
           <tr>
@@ -200,7 +200,7 @@
             <td><code>RAY_TIMESTAMP</code></td>
             <td>10</td>
             <td>8 bytes</td>
-            <td><code>INT64_MIN</code></td>
+            <td><code>0Np</code></td>
             <td><code><span class="hl-num">2024.01.15D09:30:00.000000000</span></code></td>
           </tr>
           <tr>
@@ -208,7 +208,7 @@
             <td><code>RAY_GUID</code></td>
             <td>11</td>
             <td>16 bytes</td>
-            <td>All zeros</td>
+            <td>Null bitmap</td>
             <td>UUID format</td>
           </tr>
           <tr>
@@ -216,7 +216,7 @@
             <td><code>RAY_SYM</code></td>
             <td>12</td>
             <td>Adaptive (8/16/32/64-bit)</td>
-            <td><code>0</code> (null sym ID)</td>
+            <td><code>0Ns</code></td>
             <td><code><span class="hl-sym">'AAPL</span></code>, <code>[<span class="hl-sym">AAPL GOOG</span>]</code></td>
           </tr>
           <tr>
@@ -229,6 +229,10 @@
           </tr>
         </tbody>
       </table>
+
+      <div class="info-box">
+        <strong>Null handling:</strong> Nulls are tracked via a per-element bitmap, not sentinel values in the data array. Typed null literals (<code>0Nl</code>, <code>0Ni</code>, <code>0Nf</code>, <code>0Nd</code>, <code>0Nt</code>, <code>0Np</code>, <code>0Ns</code>) create atoms of the correct type with the null bit set &mdash; the value field is zeroed. Use <code>nil?</code> to test for null. Types without a dedicated null literal (BOOL, U8, I16, F32, GUID) use the null bitmap directly.
+      </div>
 
       <div class="info-box">
         <strong>Note:</strong> RAY_SYM and RAY_STR are both string types but serve different purposes. Symbols are dictionary-encoded (interned integers) &mdash; ideal for categorical data with repeated values like stock tickers or country codes. Strings are variable-length and stored inline or in a pool &mdash; ideal for free-form text.

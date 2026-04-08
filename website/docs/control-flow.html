@@ -164,7 +164,7 @@
 6</code></pre>
 
       <h2>Null Semantics</h2>
-      <p>Rayfall has typed null sentinels for each scalar type:</p>
+      <p>Nulls are tracked via a per-element bitmap, not sentinel values. Typed null literals create atoms with the null bit set:</p>
       <table>
         <thead>
           <tr>
@@ -187,7 +187,7 @@
         <li><code>nil?</code> checks for null: <code>(nil? 0Nl)</code> &rarr; <code>true</code></li>
         <li>All null forms are falsy in <code>if</code></li>
         <li>All null forms are equal via <code>==</code>: <code>(== 0Nl 0Nl)</code> &rarr; <code>true</code></li>
-        <li>Sentinel nulls propagate through arithmetic: <code>(+ 0Nl 1)</code> &rarr; <code>0Nl</code></li>
+        <li>Typed nulls propagate through arithmetic: <code>(+ 0Nl 1)</code> &rarr; <code>0Nl</code></li>
         <li><code>println</code> and <code>show</code> return null (not printed in the REPL)</li>
       </ul>
       <pre><code><span class="hl-comment">‣</span> (<span class="hl-fn">nil?</span> <span class="hl-num">0Nl</span>)

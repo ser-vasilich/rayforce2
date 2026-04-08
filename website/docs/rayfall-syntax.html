@@ -161,8 +161,14 @@
       <pre><code>(<span class="hl-fn">guid</span> <span class="hl-num">0</span>)   <span class="hl-comment">; generate a new GUID</span></code></pre>
 
       <h3>Null Values</h3>
-      <p>Each type has a null sentinel: <code>INT64_MIN</code> for i64, <code>NaN</code> for f64, <code>INT32_MIN</code> for i32/date/time. Use <code>nil?</code> to test:</p>
-      <pre><code>(<span class="hl-fn">nil?</span> x)   <span class="hl-comment">; true if x is null</span></code></pre>
+      <p>Nulls are tracked via a per-element bitmap, not sentinel values. Typed null literals create atoms with the null bit set:</p>
+      <pre><code><span class="hl-num">0Nl</span>   <span class="hl-comment">; i64 null</span>
+<span class="hl-num">0Ni</span>   <span class="hl-comment">; i32 null</span>
+<span class="hl-num">0Nf</span>   <span class="hl-comment">; f64 null</span>
+<span class="hl-num">0Nd</span>   <span class="hl-comment">; date null</span>
+<span class="hl-num">0Nt</span>   <span class="hl-comment">; time null</span>
+<span class="hl-num">0Np</span>   <span class="hl-comment">; timestamp null</span>
+(<span class="hl-fn">nil?</span> x)   <span class="hl-comment">; true if x is null</span></code></pre>
 
       <!-- ── Vectors ── -->
       <h2 id="vectors">Vectors</h2>
