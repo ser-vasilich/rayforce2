@@ -506,7 +506,7 @@ ray_t* ray_hopen_fn(ray_t* x) {
     if (port <= 0 || port > 65535) return ray_error("domain", NULL);
 
     int64_t h = ray_ipc_connect(host, (uint16_t)port);
-    if (h < 0) return ray_error("io", NULL);
+    if (h < 0) return ray_error("io", "connection refused: %s:%d", host, port);
 
     return make_i64(h);
 }

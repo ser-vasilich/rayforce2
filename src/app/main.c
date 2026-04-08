@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 
 int main(int argc, char** argv) {
@@ -57,7 +58,7 @@ int main(int argc, char** argv) {
             ipc_srv = &ipc_srv_storage;
             fprintf(stderr, "listening on port %u\n", port);
         } else {
-            fprintf(stderr, "failed to listen on port %u\n", port);
+            fprintf(stderr, "failed to listen on port %u: %s\n", port, strerror(errno));
         }
     }
 
