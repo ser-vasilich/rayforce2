@@ -408,7 +408,7 @@ static ray_t* parse_symbol(ray_parser_t *p) {
     if (*p->pos == 0 || *p->pos == ' ' || *p->pos == '\t' || *p->pos == '\n' ||
         *p->pos == ')' || *p->pos == ']' || *p->pos == '}') {
         /* Null symbol 0Ns */
-        return ray_sym(INT64_MIN);
+        return ray_typed_null(-RAY_SYM);
     }
 
     /* Char literal: 'X' or '\n' etc. */

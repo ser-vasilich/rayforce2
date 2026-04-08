@@ -126,7 +126,7 @@ int is_comparable(ray_t* x) {
 }
 
 ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
-    /* Handle all null forms (C NULL, RAY_NULL_OBJ, sentinel nulls) */
+    /* Handle all null forms (C NULL, RAY_NULL_OBJ, typed null atoms) */
     int na = (!a || RAY_ATOM_IS_NULL(a)), nb = (!b || RAY_ATOM_IS_NULL(b));
     if (na && nb) return make_bool(1);
     if (na || nb) return make_bool(0);
@@ -137,9 +137,6 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
         return make_bool(a->i64 == b->i64 ? 1 : 0);
     if (a->type == -RAY_GUID && b->type == -RAY_GUID)
         return make_bool(memcmp(ray_data(a->obj), ray_data(b->obj), 16) == 0 ? 1 : 0);
-    /* null == null → true */
-    if (is_comparable(a) && is_comparable(b) && RAY_ATOM_IS_NULL(a) && RAY_ATOM_IS_NULL(b))
-        return make_bool(1);
     /* Temporal comparison (same or cross-temporal via nanosecond conversion) */
     if (is_temporal(a) && is_temporal(b))
         return make_bool(temporal_as_ns(a) == temporal_as_ns(b) ? 1 : 0);
@@ -150,7 +147,7 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
 }
 
 ray_t* ray_neq_fn(ray_t* a, ray_t* b) {
-    /* Handle all null forms (C NULL, RAY_NULL_OBJ, sentinel nulls) */
+    /* Handle all null forms (C NULL, RAY_NULL_OBJ, typed null atoms) */
     int na = (!a || RAY_ATOM_IS_NULL(a)), nb = (!b || RAY_ATOM_IS_NULL(b));
     if (na && nb) return make_bool(0);
     if (na || nb) return make_bool(1);

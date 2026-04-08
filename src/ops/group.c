@@ -259,7 +259,7 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
                 if (!has_nulls || !((null_bm[row/8] >> (row%8)) & 1)) break;
         }
         if (row < 0 || row >= len)
-            return in_type == RAY_F64 ? ray_f64(NAN) : ray_i64(INT64_MIN);
+            return ray_typed_null(-in_type);
         void* base = ray_data(input);
         if (in_type == RAY_F64) return ray_f64(((const double*)base)[row]);
         return ray_i64(read_col_i64(base, row, in_type, input->attrs));
@@ -309,8 +309,8 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
             case OP_MAX:   result = in_type == RAY_F64 ? ray_f64(merged.cnt > 0 ? merged.max_f : 0.0) : ray_i64(merged.cnt > 0 ? merged.max_i : 0); break;
             case OP_COUNT: result = ray_i64(merged.cnt); break;
             case OP_AVG:   result = in_type == RAY_F64 ? ray_f64(merged.cnt > 0 ? merged.sum_f / merged.cnt : 0.0) : ray_f64(merged.cnt > 0 ? (double)merged.sum_i / merged.cnt : 0.0); break;
-            case OP_FIRST: result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.first_f) : ray_i64(merged.first_i)) : (in_type == RAY_F64 ? ray_f64(NAN) : ray_i64(INT64_MIN)); break;
-            case OP_LAST:  result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.last_f) : ray_i64(merged.last_i)) : (in_type == RAY_F64 ? ray_f64(NAN) : ray_i64(INT64_MIN)); break;
+            case OP_FIRST: result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.first_f) : ray_i64(merged.first_i)) : ray_typed_null(-in_type); break;
+            case OP_LAST:  result = merged.has_first ? (in_type == RAY_F64 ? ray_f64(merged.last_f) : ray_i64(merged.last_i)) : ray_typed_null(-in_type); break;
             case OP_VAR: case OP_VAR_POP:
             case OP_STDDEV: case OP_STDDEV_POP: {
                 double mean, var_pop;
@@ -342,8 +342,8 @@ ray_t* exec_reduction(ray_graph_t* g, ray_op_t* op, ray_t* input) {
         case OP_MAX:   return in_type == RAY_F64 ? ray_f64(acc.cnt > 0 ? acc.max_f : 0.0) : ray_i64(acc.cnt > 0 ? acc.max_i : 0);
         case OP_COUNT: return ray_i64(acc.cnt);
         case OP_AVG:   return in_type == RAY_F64 ? ray_f64(acc.cnt > 0 ? acc.sum_f / acc.cnt : 0.0) : ray_f64(acc.cnt > 0 ? (double)acc.sum_i / acc.cnt : 0.0);
-        case OP_FIRST: return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.first_f) : ray_i64(acc.first_i)) : (in_type == RAY_F64 ? ray_f64(NAN) : ray_i64(INT64_MIN));
-        case OP_LAST:  return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.last_f) : ray_i64(acc.last_i)) : (in_type == RAY_F64 ? ray_f64(NAN) : ray_i64(INT64_MIN));
+        case OP_FIRST: return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.first_f) : ray_i64(acc.first_i)) : ray_typed_null(-in_type);
+        case OP_LAST:  return acc.has_first ? (in_type == RAY_F64 ? ray_f64(acc.last_f) : ray_i64(acc.last_i)) : ray_typed_null(-in_type);
         case OP_VAR: case OP_VAR_POP:
         case OP_STDDEV: case OP_STDDEV_POP: {
             double mean, var_pop;

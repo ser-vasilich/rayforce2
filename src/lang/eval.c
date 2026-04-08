@@ -209,7 +209,7 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
 
     /* When the probed result is a null atom, the fn already chose the correct
      * result type (e.g., division returns left-operand-typed null).  Skip the
-     * wider-wins promotion so the null sentinel lands in the right vector type. */
+     * wider-wins promotion so the typed null lands in the right vector type. */
     int e0_null = RAY_ATOM_IS_NULL(e0);
 
     /* When the probed result is a boolean (from comparison ops like ==, <, etc.),
@@ -393,7 +393,7 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
 
         /* Div/mod: only I64×I64 (executor has floor-div semantics for I64) */
         if (is_idiv && !(lt == RAY_I64 && rt == RAY_I64)) can_dag = 0;
-        /* Comparisons: same-type only (cross-type null sentinels differ) */
+        /* Comparisons: same-type only (cross-type promotion loses type info) */
         if (is_cmp && lt != rt) can_dag = 0;
         /* Cross-type temporal: DAG promote() loses type tag (int+TIMESTAMP→I64 not TIMESTAMP) */
         {   int lt_temp = (lt==RAY_DATE||lt==RAY_TIME||lt==RAY_TIMESTAMP);

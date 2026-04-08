@@ -1158,7 +1158,6 @@ ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
 static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
     if (RAY_ATOM_IS_NULL(atom)) {
         int64_t idx = col_vec->len;
-        int8_t ct = col_vec->type;
         uint8_t zero[16] = {0};
         col_vec = ray_vec_append(col_vec, zero);
         if (!RAY_IS_ERR(col_vec))
@@ -2578,12 +2577,20 @@ ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
             }
 
             /* Store result */
-            if (is_f64) {
-                double v = found ? best_val_f : NAN;
-                result_agg = ray_vec_append(result_agg, &v);
+            if (found) {
+                if (is_f64) {
+                    double v = best_val_f;
+                    result_agg = ray_vec_append(result_agg, &v);
+                } else {
+                    int64_t v = best_val_i;
+                    result_agg = ray_vec_append(result_agg, &v);
+                }
             } else {
-                int64_t v = found ? best_val_i : INT64_MIN;
-                result_agg = ray_vec_append(result_agg, &v);
+                int64_t idx = result_agg->len;
+                uint8_t zero[8] = {0};
+                result_agg = ray_vec_append(result_agg, zero);
+                if (!RAY_IS_ERR(result_agg))
+                    ray_vec_set_null(result_agg, idx, true);
             }
             if (RAY_IS_ERR(result_agg)) return result_agg;
         }
