@@ -33,12 +33,12 @@
  *             nullmap[2..15] = name (max 13 chars + null).
  * Unary/vary: nullmap[0..15] = name (max 15 chars + null). No opcode. */
 static void fn_set_name(ray_t* obj, const char* name) {
+    memset(obj->nullmap, 0, 16);  /* zero all — clears opcode bytes too */
     int off = (obj->type == RAY_BINARY) ? 2 : 0;
     int max = 16 - off - 1;
     size_t len = strlen(name);
     if ((int)len > max) len = (size_t)max;
     memcpy(obj->nullmap + off, name, len);
-    obj->nullmap[off + len] = 0;
 }
 
 ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {
