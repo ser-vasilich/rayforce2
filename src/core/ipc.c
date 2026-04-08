@@ -138,6 +138,17 @@ ray_sock_t ray_sock_connect(const char* host, uint16_t port, int timeout_ms)
     }
     freeaddrinfo(res);
 
+    /* Clear connect timeout — data transfer has no time limit */
+#ifdef _WIN32
+    { DWORD z = 0;
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&z, sizeof(z));
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&z, sizeof(z)); }
+#else
+    { struct timeval z = {0, 0};
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &z, sizeof(z));
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &z, sizeof(z)); }
+#endif
+
     int yes = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes, sizeof(yes));
     return fd;
@@ -151,10 +162,11 @@ int64_t ray_sock_send(ray_sock_t s, const void* buf, size_t len)
 #ifdef _WIN32
         int n = send(s, (const char*)p, (int)rem, 0);
 #else
-        ssize_t n = send(s, p, rem, 0);
+        ssize_t n = send(s, p, rem, MSG_NOSIGNAL);
 #endif
         if (n < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
             return -1;
         }
         p   += n;
@@ -790,9 +802,9 @@ static int64_t recv_full(ray_sock_t fd, void* buf, size_t len) {
 
 static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
 {
-    if (handle < 0 || handle >= RAY_IPC_MAX_CONNS) return -1;
+    if (handle < 0 || handle >= RAY_IPC_MAX_CONNS) return -2;
     ray_sock_t fd = g_client_fds[handle];
-    if (fd == RAY_INVALID_SOCK) return -1;
+    if (fd == RAY_INVALID_SOCK) return -2;  /* dead handle */
 
     /* Serialize */
     int64_t ser_size = ray_serde_size(msg);
@@ -896,8 +908,9 @@ void ray_ipc_close(int64_t handle)
 
 ray_t* ray_ipc_send(int64_t handle, ray_t* msg)
 {
-    if (client_send_msg(handle, msg, RAY_IPC_MSG_SYNC) < 0)
-        return ray_error("io", "ipc send failed");
+    { int64_t sr = client_send_msg(handle, msg, RAY_IPC_MSG_SYNC);
+      if (sr == -2) return ray_error("io", "connection closed");
+      if (sr < 0) return ray_error("io", "ipc send failed"); }
 
     ray_sock_t fd = g_client_fds[handle];
 
