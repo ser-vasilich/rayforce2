@@ -562,19 +562,17 @@ static bool handle_command(ray_repl_t* repl, const char* str, size_t len) {
     return true;
 }
 
-static void ipc_idle_cb(void* arg) {
-    ray_ipc_poll((ray_ipc_server_t*)arg, 0);
-}
-
 static void run_interactive(ray_repl_t* repl) {
     ray_term_t* term = repl->term;
     print_banner();
 
-    /* Register IPC idle callback so the server processes connections
-     * while the terminal waits for keystrokes. */
+    /* Register IPC server with terminal: stdin goes into the same
+     * epoll/kqueue set as IPC sockets, and ray_term_getc blocks on
+     * the unified event loop instead of raw read(). */
     if (repl->ipc_srv) {
-        term->idle_fn  = ipc_idle_cb;
-        term->idle_arg = repl->ipc_srv;
+        term->ipc_srv = repl->ipc_srv;
+        ray_ipc_watch_fd(repl->ipc_srv, 0);  /* stdin fd = 0 */
+        ray_sock_set_nonblocking(0);
     }
 
     for (;;) {
