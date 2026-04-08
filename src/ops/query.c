@@ -64,6 +64,26 @@ static dag_binary_ctor resolve_binary_dag(int64_t sym_id) {
     return NULL;
 }
 
+static dag_unary_ctor resolve_unary_dag(int64_t sym_id) {
+    ray_t* s = ray_sym_str(sym_id);
+    if (!s) return NULL;
+    const char* name = ray_str_ptr(s);
+    size_t len = ray_str_len(s);
+    if (len == 3) {
+        if (memcmp(name, "neg", 3) == 0) return ray_neg;
+        if (memcmp(name, "not", 3) == 0) return ray_not;
+        if (memcmp(name, "abs", 3) == 0) return ray_abs;
+        if (memcmp(name, "exp", 3) == 0) return ray_exp_op;
+        if (memcmp(name, "log", 3) == 0) return ray_log_op;
+    } else if (len == 4) {
+        if (memcmp(name, "ceil", 4) == 0) return ray_ceil_op;
+        if (memcmp(name, "sqrt", 4) == 0) return ray_sqrt_op;
+    } else if (len == 5) {
+        if (memcmp(name, "floor", 5) == 0) return ray_floor_op;
+    }
+    return NULL;
+}
+
 /* Map Rayfall aggregation name to DAG opcode */
 static uint16_t resolve_agg_opcode(int64_t sym_id) {
     ray_t* s = ray_sym_str(sym_id);
@@ -230,18 +250,13 @@ static ray_op_t* compile_expr_dag(ray_graph_t* g, ray_t* expr) {
             }
         }
 
-        /* Unary aggregation? */
+        /* Unary op or aggregation? */
         if (n == 2) {
-            /* Check if it's a unary DAG op like neg, not, etc. */
-            if (fn_name_str && ray_str_len(fn_name_str) == 3
-                && memcmp(ray_str_ptr(fn_name_str), "not", 3) == 0) {
+            /* Check for unary DAG ops */
+            dag_unary_ctor uctor = resolve_unary_dag(fn_sym);
+            if (uctor) {
                 ray_op_t* arg = compile_expr_dag(g, elems[1]);
-                return arg ? ray_not(g, arg) : NULL;
-            }
-            if (fn_name_str && ray_str_len(fn_name_str) == 3
-                && memcmp(ray_str_ptr(fn_name_str), "neg", 3) == 0) {
-                ray_op_t* arg = compile_expr_dag(g, elems[1]);
-                return arg ? ray_neg(g, arg) : NULL;
+                return arg ? uctor(g, arg) : NULL;
             }
             /* Aggregation functions return DAG agg nodes */
             uint16_t agg_op = resolve_agg_opcode(fn_sym);
