@@ -105,6 +105,7 @@ ray_t* ray_sum_fn(ray_t* x) {
     double fsum = 0.0;
     int64_t isum = 0;
     for (int64_t i = 0; i < len; i++) {
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         if (elems[i]->type == -RAY_F64) { has_float = 1; fsum += elems[i]->f64; }
         else if (elems[i]->type == -RAY_I64) { isum += elems[i]->i64; fsum += (double)elems[i]->i64; }
         else return ray_error("type", NULL);
@@ -237,10 +238,10 @@ ray_t* ray_min_fn(ray_t* x) {
         }
         if (x->type == RAY_U8) {
             uint8_t* d = (uint8_t*)ray_data(x);
-            uint8_t m = 255;
+            uint8_t m = 255; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] < m) m = d[i];
-            return make_u8(m);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] < m) m = d[i]; found = 1; }
+            return found ? make_u8(m) : ray_typed_null(-RAY_U8);
         }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return ray_error("oom", NULL);
@@ -252,16 +253,16 @@ ray_t* ray_min_fn(ray_t* x) {
     int64_t len = ray_len(x);
     if (len == 0) return ray_error("domain", NULL);
     ray_t** elems = (ray_t**)ray_data(x);
-    if (!is_numeric(elems[0])) return ray_error("type", NULL);
-    int has_float = elems[0]->type == -RAY_F64;
-    double fmin = as_f64(elems[0]);
-    int64_t imin = elems[0]->type == -RAY_I64 ? elems[0]->i64 : 0;
-    for (int64_t i = 1; i < len; i++) {
+    int has_float = 0, found = 0;
+    double fmin = 0; int64_t imin = 0;
+    for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         if (elems[i]->type == -RAY_F64) has_float = 1;
         double v = as_f64(elems[i]);
-        if (v < fmin) { fmin = v; imin = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; }
+        if (!found || v < fmin) { fmin = v; imin = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; found = 1; }
     }
+    if (!found) return ray_typed_null(-RAY_F64);
     return has_float ? make_f64(fmin) : make_i64(imin);
 }
 
@@ -305,10 +306,10 @@ ray_t* ray_max_fn(ray_t* x) {
         }
         if (x->type == RAY_U8) {
             uint8_t* d = (uint8_t*)ray_data(x);
-            uint8_t m = 0;
+            uint8_t m = 0; int found = 0;
             for (int64_t i = 0; i < n; i++)
-                if (d[i] > m) m = d[i];
-            return make_u8(m);
+                if (!ray_vec_is_null(x, i)) { if (!found || d[i] > m) m = d[i]; found = 1; }
+            return found ? make_u8(m) : ray_typed_null(-RAY_U8);
         }
         ray_graph_t* g = ray_graph_new(NULL);
         if (!g) return ray_error("oom", NULL);
@@ -320,16 +321,16 @@ ray_t* ray_max_fn(ray_t* x) {
     int64_t len = ray_len(x);
     if (len == 0) return ray_error("domain", NULL);
     ray_t** elems = (ray_t**)ray_data(x);
-    if (!is_numeric(elems[0])) return ray_error("type", NULL);
-    int has_float = elems[0]->type == -RAY_F64;
-    double fmax = as_f64(elems[0]);
-    int64_t imax = elems[0]->type == -RAY_I64 ? elems[0]->i64 : 0;
-    for (int64_t i = 1; i < len; i++) {
+    int has_float = 0, found = 0;
+    double fmax = 0; int64_t imax = 0;
+    for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
         if (elems[i]->type == -RAY_F64) has_float = 1;
         double v = as_f64(elems[i]);
-        if (v > fmax) { fmax = v; imax = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; }
+        if (!found || v > fmax) { fmax = v; imax = elems[i]->type == -RAY_I64 ? elems[i]->i64 : 0; found = 1; }
     }
+    if (!found) return ray_typed_null(-RAY_F64);
     return has_float ? make_f64(fmax) : make_i64(imax);
 }
 

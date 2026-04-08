@@ -477,6 +477,7 @@ bool expr_compile(ray_graph_t* g, ray_t* tbl, ray_op_t* root, ray_expr_t* out) {
             } else if (node->opcode == OP_CONST) {
                 ray_op_ext_t* ext = find_ext(g, node->id);
                 if (!ext || !ext->literal) return false;
+                if (RAY_ATOM_IS_NULL(ext->literal)) return false; /* null constants need bitmap-aware path */
                 double cf; int64_t ci; bool is_f64;
                 if (!atom_to_numeric(ext->literal, &cf, &ci, &is_f64)) {
                     /* Try resolving string constant to symbol intern ID —
