@@ -41,15 +41,18 @@ int sort_cmp(const sort_cmp_ctx_t* ctx, int64_t a, int64_t b) {
         int desc = ctx->desc ? ctx->desc[k] : 0;
         int nf = ctx->nulls_first ? ctx->nulls_first[k] : desc;
 
-        if (col->type == RAY_F64) {
+        /* Check null bitmap for both elements */
+        int a_null = ray_vec_is_null(col, a);
+        int b_null = ray_vec_is_null(col, b);
+        if (a_null || b_null) {
+            null_cmp = 1;
+            if (a_null && b_null) cmp = 0;
+            else if (a_null) cmp = nf ? -1 : 1;
+            else cmp = nf ? 1 : -1;
+        } else if (col->type == RAY_F64) {
             double va = ((double*)ray_data(col))[a];
             double vb = ((double*)ray_data(col))[b];
-            int a_null = isnan(va);
-            int b_null = isnan(vb);
-            if (a_null && b_null) { cmp = 0; null_cmp = 1; }
-            else if (a_null) { cmp = nf ? -1 : 1; null_cmp = 1; }
-            else if (b_null) { cmp = nf ? 1 : -1; null_cmp = 1; }
-            else if (va < vb) cmp = -1;
+            if (va < vb) cmp = -1;
             else if (va > vb) cmp = 1;
         } else if (col->type == RAY_I64 || col->type == RAY_TIMESTAMP) {
             int64_t va = ((int64_t*)ray_data(col))[a];

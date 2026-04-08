@@ -413,6 +413,7 @@ ray_t* ray_last_fn(ray_t* x) {
 }
 
 /* Helper: copy typed vec elements to double scratch buffer.
+ * Null bitmap elements become NaN so callers can skip them.
  * Returns scratch ray_t* (caller must ray_release), or error. */
 static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
     int64_t len = ray_len(x);
@@ -423,18 +424,19 @@ static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
     double* vals = (double*)ray_data(scratch);
     if (x->type == RAY_I64) {
         int64_t* d = (int64_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
     } else if (x->type == RAY_F64) {
-        memcpy(vals, ray_data(x), (size_t)len * sizeof(double));
+        double* d = (double*)ray_data(x);
+        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : d[i];
     } else if (x->type == RAY_I32) {
         int32_t* d = (int32_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
     } else if (x->type == RAY_I16) {
         int16_t* d = (int16_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
     } else if (x->type == RAY_U8) {
         uint8_t* d = (uint8_t*)ray_data(x);
-        for (int64_t i = 0; i < len; i++) vals[i] = (double)d[i];
+        for (int64_t i = 0; i < len; i++) vals[i] = ray_vec_is_null(x, i) ? NAN : (double)d[i];
     } else {
         ray_release(scratch);
         return ray_error("type", NULL);
@@ -478,16 +480,22 @@ ray_t* ray_med_fn(ray_t* x) {
         return ray_error("type", NULL);
     }
 
+    /* Compact out NaN (null) values, then sort the non-null remainder */
+    int64_t cnt = 0;
+    for (int64_t i = 0; i < len; i++)
+        if (!isnan(vals[i])) vals[cnt++] = vals[i];
+    if (cnt == 0) { ray_release(scratch); return ray_typed_null(-RAY_F64); }
+
     /* Insertion sort */
-    for (int64_t i = 1; i < len; i++) {
+    for (int64_t i = 1; i < cnt; i++) {
         double key = vals[i];
         int64_t j = i - 1;
         while (j >= 0 && vals[j] > key) { vals[j + 1] = vals[j]; j--; }
         vals[j + 1] = key;
     }
     double median;
-    if (len % 2 == 1) median = vals[len / 2];
-    else median = (vals[len / 2 - 1] + vals[len / 2]) / 2.0;
+    if (cnt % 2 == 1) median = vals[cnt / 2];
+    else median = (vals[cnt / 2 - 1] + vals[cnt / 2]) / 2.0;
     ray_release(scratch);
     return make_f64(median);
 }

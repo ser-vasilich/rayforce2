@@ -386,8 +386,8 @@ ray_t* atomic_map_binary_op(ray_binary_fn fn, uint16_t dag_opcode, ray_t* left, 
         /* Null scalar atoms lose their null bit in DAG constants — use slow path */
         if (l_num_scalar && RAY_ATOM_IS_NULL(left)) can_dag = 0;
         if (r_num_scalar && RAY_ATOM_IS_NULL(right)) can_dag = 0;
-        /* Vectors with null bitmap: DAG executor uses sentinel-based null checks
-         * which are incompatible with bitmap nulls — use slow path */
+        /* TODO: migrate expr.c to bitmap nulls and remove this bail-out.
+         * DAG executor (expr.c) still uses sentinel-based null checks. */
         if (l_num_vec && (left->attrs & RAY_ATTR_HAS_NULLS)) can_dag = 0;
         if (r_num_vec && (right->attrs & RAY_ATTR_HAS_NULLS)) can_dag = 0;
 
