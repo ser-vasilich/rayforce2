@@ -2452,6 +2452,9 @@ static MunitResult test_rf_math(const void* params, void* fixture) {
     ASSERT_EQ("(sum [1h 2h 3h])", "6");
     ASSERT_EQ("(sum [1h 0Nh 3h])", "4");
     ASSERT_EQ("(sum (take 10h 100000))", "1000000");  // large i16 vector for parallel test
+    // boxed list sum with typed nulls
+    ASSERT_EQ("(sum (list 1 0Nl 3))", "4");
+    ASSERT_EQ("(sum (list 1.0 0Nf 3.0))", "4.0");
 
     ASSERT_EQ("(avg 5i)", "5.0");
     ASSERT_EQ("(avg -1.7)", "-1.7");
@@ -2471,6 +2474,10 @@ static MunitResult test_rf_math(const void* params, void* fixture) {
     ASSERT_EQ("(avg [2h 4h 6h])", "4.0");
     ASSERT_EQ("(avg [1h 0Nh 5h])", "3.0");         // NULL skipped in cnt
     ASSERT_EQ("(avg (take 10h 100000))", "10.0");  // large i16 vector
+    // boxed list avg with typed nulls
+    ASSERT_EQ("(avg (list 1 0Nl 5))", "3.0");
+    ASSERT_EQ("(avg (list 1.0 0Nf 5.0))", "3.0");
+    ASSERT_EQ("(avg (list 0Nl 0Nl))", "0Nf");      // all-null → typed null
 
     ASSERT_EQ("(min 0Nf)", "0Nf");
     ASSERT_EQ("(min 5i)", "5i");

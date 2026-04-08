@@ -54,7 +54,8 @@ ray_t* ray_sum_fn(ray_t* x) {
                     if (!ray_vec_is_null(x, i)) sum += d[i];
             } else {
                 uint8_t* d = (uint8_t*)ray_data(x);
-                for (int64_t i = 0; i < n; i++) sum += d[i];
+                for (int64_t i = 0; i < n; i++)
+                    if (!ray_vec_is_null(x, i)) sum += d[i];
             }
             return make_i64(sum);
         }
@@ -105,10 +106,14 @@ ray_t* ray_sum_fn(ray_t* x) {
     double fsum = 0.0;
     int64_t isum = 0;
     for (int64_t i = 0; i < len; i++) {
-        if (RAY_ATOM_IS_NULL(elems[i])) continue;
+        if (!is_numeric(elems[i])) return ray_error("type", NULL);
+        if (RAY_ATOM_IS_NULL(elems[i])) {
+            if (elems[i]->type == -RAY_F64) has_float = 1;
+            continue;
+        }
         if (elems[i]->type == -RAY_F64) { has_float = 1; fsum += elems[i]->f64; }
         else if (elems[i]->type == -RAY_I64) { isum += elems[i]->i64; fsum += (double)elems[i]->i64; }
-        else return ray_error("type", NULL);
+        else { int64_t v = (int64_t)as_f64(elems[i]); isum += v; fsum += (double)v; }
     }
     return has_float ? make_f64(fsum) : make_i64(isum);
 }
@@ -166,7 +171,8 @@ ray_t* ray_avg_fn(ray_t* x) {
                     if (!ray_vec_is_null(x, i)) { sum += (double)d[i]; cnt++; }
             } else {
                 uint8_t* d = (uint8_t*)ray_data(x);
-                for (int64_t i = 0; i < n; i++) { sum += (double)d[i]; cnt++; }
+                for (int64_t i = 0; i < n; i++)
+                    if (!ray_vec_is_null(x, i)) { sum += (double)d[i]; cnt++; }
             }
             if (cnt == 0) return ray_typed_null(-RAY_F64);
             return make_f64(sum / (double)cnt);
@@ -191,11 +197,14 @@ ray_t* ray_avg_fn(ray_t* x) {
     if (len == 0) return ray_error("domain", NULL);
     ray_t** elems = (ray_t**)ray_data(x);
     double sum = 0.0;
+    int64_t cnt = 0;
     for (int64_t i = 0; i < len; i++) {
         if (!is_numeric(elems[i])) return ray_error("type", NULL);
-        sum += as_f64(elems[i]);
+        if (RAY_ATOM_IS_NULL(elems[i])) continue;
+        sum += as_f64(elems[i]); cnt++;
     }
-    return make_f64(sum / (double)len);
+    if (cnt == 0) return ray_typed_null(-RAY_F64);
+    return make_f64(sum / (double)cnt);
 }
 
 ray_t* ray_min_fn(ray_t* x) {
