@@ -52,6 +52,7 @@ typedef struct _stat hist_stat_t;
 #else
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #define hist_open(p, f, m)  open((p), (f), (m))
@@ -94,6 +95,8 @@ static void signal_handler(int sig) {
             SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
             SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
 #else
+            { int fl = fcntl(STDIN_FILENO, F_GETFL);
+              fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK); }
             tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
 #endif
         }
@@ -109,6 +112,8 @@ static void atexit_handler(void) {
         SetConsoleMode(g_active_term->h_stdin,  g_active_term->old_stdin_mode);
         SetConsoleMode(g_active_term->h_stdout, g_active_term->old_stdout_mode);
 #else
+        { int fl = fcntl(STDIN_FILENO, F_GETFL);
+          fcntl(STDIN_FILENO, F_SETFL, fl & ~O_NONBLOCK); }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_active_term->oldattr);
 #endif
         g_active_term = NULL;
@@ -323,9 +328,10 @@ ray_term_t* ray_term_create(void) {
     tcgetattr(STDIN_FILENO, &term->oldattr);
     term->newattr = term->oldattr;
     term->newattr.c_lflag &= ~(ICANON | ECHO | ISIG);
-    term->newattr.c_cc[VMIN]  = 1;
+    term->newattr.c_cc[VMIN]  = 0;
     term->newattr.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->newattr);
+    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
     term->term_width  = 80;
     term->term_height = 24;
@@ -342,34 +348,31 @@ void ray_term_destroy(ray_term_t* term) {
     if (g_active_term == term) g_active_term = NULL;
     ray_hist_save(&term->hist, NULL);
     ray_hist_destroy(&term->hist);
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->oldattr);
     ray_free(term->_block);
 }
 
 int64_t ray_term_getc(ray_term_t* term) {
-    if (term->ipc_srv) {
-        /* IPC server active: stdin is in the epoll/kqueue set.
-         * Block on the event loop until stdin is ready (ready > 0).
-         * IPC events are processed inside ray_ipc_poll; external fds
-         * (stdin) are counted but not consumed. Stdin stays blocking —
-         * read() succeeds immediately since epoll confirmed data. */
-        for (;;) {
-            int ready = ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
-            if (ready < 0 && errno == EINTR) {
-                if (g_interrupted) return -2;
-                continue;
-            }
-            if (ready > 0) break;  /* stdin has data */
-            /* ready == 0: only IPC events processed, loop */
-        }
-    }
-    /* Blocking read — either no IPC server (original path) or
-     * epoll confirmed stdin ready (IPC path). */
     for (;;) {
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
         if (sz < 0 && errno == EINTR) {
             if (g_interrupted) return -2;
+            continue;
+        }
+        if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (term->ipc_srv) {
+                /* Wait on epoll/kqueue — wakes on stdin or IPC */
+                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
+            } else {
+                /* No IPC — wait on stdin only */
+                fd_set rfds;
+                FD_ZERO(&rfds);
+                FD_SET(STDIN_FILENO, &rfds);
+                select(STDIN_FILENO + 1, &rfds, NULL, NULL, NULL);
+            }
             continue;
         }
         return sz;
@@ -386,20 +389,17 @@ static int term_read_byte(ray_term_t* term) {
     if (ray_term_getc(term) <= 0) return -1;
     return (unsigned char)term->input[0];
 #else
-    /* Temporarily set a short timeout (100ms) for escape sequence reads */
-    struct termios tio;
-    tcgetattr(STDIN_FILENO, &tio);
-    tio.c_cc[VMIN]  = 0;
-    tio.c_cc[VTIME] = 1;  /* 100ms timeout */
-    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
-
+    /* Wait for data with 100ms timeout via select (works with non-blocking stdin) */
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(STDIN_FILENO, &rfds);
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
+    int sr = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+    if (sr <= 0) {
+        if (sr < 0 && errno == EINTR && g_interrupted) return -2;
+        return -1;  /* timeout or error */
+    }
     int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
-
-    /* Restore blocking mode */
-    tio.c_cc[VMIN]  = 1;
-    tio.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
-
     if (sz < 0 && errno == EINTR && g_interrupted) return -2;
     if (sz <= 0) return -1;
     return (unsigned char)term->input[0];
