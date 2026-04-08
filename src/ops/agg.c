@@ -473,6 +473,7 @@ ray_t* ray_med_fn(ray_t* x) {
         scratch->len = len;
         vals = (double*)ray_data(scratch);
         for (int64_t i = 0; i < len; i++) {
+            if (RAY_ATOM_IS_NULL(elems[i])) { vals[i] = NAN; continue; }
             if (!is_numeric(elems[i])) { ray_release(scratch); return ray_error("type", NULL); }
             vals[i] = as_f64(elems[i]);
         }
