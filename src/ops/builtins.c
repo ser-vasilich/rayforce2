@@ -475,7 +475,7 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
         else if (cast_match(tn, tl, "time")) tt = -RAY_TIME;
         else if (cast_match(tn, tl, "timestamp")) tt = -RAY_TIMESTAMP;
         else if (cast_match(tn, tl, "BOOL") || cast_match(tn, tl, "bool")) tt = -RAY_BOOL;
-        else if (cast_match(tn, tl, "STR") || cast_match(tn, tl, "str")) { ray_release(s2); return ray_str("", 0); }
+        else if (cast_match(tn, tl, "STR") || cast_match(tn, tl, "str")) { ray_release(s2); return ray_typed_null(-RAY_STR); }
         ray_release(s2);
         if (tt) return ray_typed_null(tt);
         return ray_typed_null(val->type);

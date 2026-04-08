@@ -38,8 +38,8 @@ static MunitResult test_rf_basic(const void* params, void* fixture) {
     ASSERT_EQ("\"\"", "\"\"");
     ASSERT_EQ("'asd", "'asd");
     ASSERT_EQ("'", "0Ns");
-    ASSERT_EQ("(as 'STR ')", "\"\"");
-    ASSERT_EQ("(as 'STR ' )", "\"\"");
+    ASSERT_EQ("(as 'STR ')", "null");
+    ASSERT_EQ("(as 'STR ' )", "null");
     ASSERT_EQ("\"asd\"", "\"asd\"");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3]}", "{a: \"asd\" b: 1 c: [1 2 3]}");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}", "{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}");
