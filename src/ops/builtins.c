@@ -469,12 +469,14 @@ ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val) {
         if (cast_match(tn, tl, "I64") || cast_match(tn, tl, "i64")) tt = -RAY_I64;
         else if (cast_match(tn, tl, "I32") || cast_match(tn, tl, "i32")) tt = -RAY_I32;
         else if (cast_match(tn, tl, "I16") || cast_match(tn, tl, "i16")) tt = -RAY_I16;
+        else if (cast_match(tn, tl, "U8") || cast_match(tn, tl, "u8")) tt = -RAY_U8;
         else if (cast_match(tn, tl, "F64") || cast_match(tn, tl, "f64")) tt = -RAY_F64;
-        else if (cast_match(tn, tl, "symbol") || cast_match(tn, tl, "sym")) tt = -RAY_SYM;
-        else if (cast_match(tn, tl, "date")) tt = -RAY_DATE;
-        else if (cast_match(tn, tl, "time")) tt = -RAY_TIME;
-        else if (cast_match(tn, tl, "timestamp")) tt = -RAY_TIMESTAMP;
-        else if (cast_match(tn, tl, "BOOL") || cast_match(tn, tl, "bool")) tt = -RAY_BOOL;
+        else if (cast_match(tn, tl, "BOOL") || cast_match(tn, tl, "bool") || cast_match(tn, tl, "B8") || cast_match(tn, tl, "b8")) tt = -RAY_BOOL;
+        else if (cast_match(tn, tl, "SYMBOL") || cast_match(tn, tl, "symbol") || cast_match(tn, tl, "sym")) tt = -RAY_SYM;
+        else if (cast_match(tn, tl, "DATE") || cast_match(tn, tl, "date")) tt = -RAY_DATE;
+        else if (cast_match(tn, tl, "TIME") || cast_match(tn, tl, "time")) tt = -RAY_TIME;
+        else if (cast_match(tn, tl, "TIMESTAMP") || cast_match(tn, tl, "timestamp")) tt = -RAY_TIMESTAMP;
+        else if (cast_match(tn, tl, "GUID") || cast_match(tn, tl, "guid")) tt = -RAY_GUID;
         else if (cast_match(tn, tl, "STR") || cast_match(tn, tl, "str")) { ray_release(s2); return ray_typed_null(-RAY_STR); }
         ray_release(s2);
         if (tt) return ray_typed_null(tt);
