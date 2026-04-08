@@ -950,12 +950,10 @@ static void fmt_obj(fmt_buf_t* b, ray_t* obj, int mode) {
         fmt_dict(b, obj, mode);
     } else if (type == RAY_LAMBDA) {
         fmt_puts(b, "lambda");
-    } else if (type == RAY_UNARY) {
-        fmt_puts(b, "builtin/1");
-    } else if (type == RAY_BINARY) {
-        fmt_puts(b, "builtin/2");
-    } else if (type == RAY_VARY) {
-        fmt_puts(b, "builtin/n");
+    } else if (type == RAY_UNARY || type == RAY_BINARY || type == RAY_VARY) {
+        const char* name = (const char*)obj->nullmap;
+        if (name[0]) fmt_puts(b, name);
+        else fmt_puts(b, type == RAY_UNARY ? "builtin/1" : type == RAY_BINARY ? "builtin/2" : "builtin/n");
     } else if (type == RAY_LAZY) {
         ray_t* concrete = ray_lazy_materialize(obj);
         fmt_obj(b, concrete, mode);

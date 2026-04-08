@@ -28,6 +28,7 @@
 #include "mem/heap.h"
 #include "vec/str.h"
 #include "table/sym.h"
+#include "lang/env.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -216,10 +217,12 @@ int64_t ray_serde_size(ray_t* obj) {
     }
     case RAY_UNARY:
     case RAY_BINARY:
-    case RAY_VARY:
-        /* Builtins: we cannot meaningfully serialize C function pointers.
-         * Serialize the name if available, otherwise error. */
-        return 0; /* not supported yet */
+    case RAY_VARY: {
+        /* Serialize by name (null-terminated string in nullmap) */
+        const char* name = (const char*)obj->nullmap;
+        size_t nlen = strnlen(name, 15);
+        return 1 + (int64_t)nlen + 1; /* type + name + null terminator */
+    }
     case RAY_ERROR:
         return 1 + 8; /* sdata */
     default:
@@ -445,6 +448,17 @@ int64_t ray_ser_raw(uint8_t* buf, ray_t* obj) {
         c = ray_ser_raw(buf, slots[0]);     /* params */
         c += ray_ser_raw(buf + c, slots[1]); /* body */
         return 1 + 1 + c;
+    }
+
+    case RAY_UNARY:
+    case RAY_BINARY:
+    case RAY_VARY: {
+        /* Serialize builtin by name (null-terminated) */
+        const char* name = (const char*)obj->nullmap;
+        size_t nlen = strnlen(name, 15);
+        memcpy(buf, name, nlen);
+        buf[nlen] = 0;
+        return 1 + (int64_t)nlen + 1;
     }
 
     case RAY_ERROR:
@@ -789,6 +803,21 @@ ray_t* ray_de_raw(uint8_t* buf, int64_t* len) {
         ((ray_t**)ray_data(lambda))[0] = params;
         ((ray_t**)ray_data(lambda))[1] = body;
         return lambda;
+    }
+
+    case RAY_UNARY:
+    case RAY_BINARY:
+    case RAY_VARY: {
+        /* Deserialize builtin by name: read null-terminated string,
+         * look up in the global environment. */
+        size_t nlen = safe_strlen(buf, *len);
+        if ((int64_t)nlen >= *len) return ray_error("domain", NULL);
+        int64_t sym = ray_sym_intern((const char*)buf, nlen);
+        *len -= (int64_t)nlen + 1;
+        ray_t* fn = ray_env_get(sym);
+        if (!fn) return ray_error("name", NULL);
+        ray_retain(fn);
+        return fn;
     }
 
     case RAY_ERROR: {

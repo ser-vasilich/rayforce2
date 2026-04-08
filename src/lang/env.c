@@ -28,13 +28,22 @@
 
 /* ---- Function constructors ---- */
 
+/* Builtin name stored inline in nullmap[0..15] (max 15 chars + null).
+ * Used by serde for wire serialization and format for display. */
+static void fn_set_name(ray_t* obj, const char* name) {
+    memset(obj->nullmap, 0, 16);
+    size_t len = strlen(name);
+    if (len > 15) len = 15;
+    memcpy(obj->nullmap, name, len);
+}
+
 ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn) {
-    ray_t* obj = ray_alloc(0);  /* atom, no data beyond header */
+    ray_t* obj = ray_alloc(0);
     if (!obj) return ray_error("oom", NULL);
     obj->type = RAY_UNARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
-    (void)name;
+    fn_set_name(obj, name);
     return obj;
 }
 
@@ -44,7 +53,7 @@ ray_t* ray_fn_binary(const char* name, uint8_t fn_attrs, ray_binary_fn fn) {
     obj->type = RAY_BINARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
-    (void)name;
+    fn_set_name(obj, name);
     return obj;
 }
 
@@ -54,7 +63,7 @@ ray_t* ray_fn_vary(const char* name, uint8_t fn_attrs, ray_vary_fn fn) {
     obj->type = RAY_VARY;
     obj->attrs = fn_attrs;
     obj->i64 = (int64_t)(uintptr_t)fn;
-    (void)name;
+    fn_set_name(obj, name);
     return obj;
 }
 
