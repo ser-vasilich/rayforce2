@@ -1081,11 +1081,12 @@ ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
     ray_t** order_vecs = n_order > 0 ? &sort_vecs[n_part] : NULL;
 
     {
+        /* Pre-allocate nullmaps so win_set_null works in both paths */
+        for (uint8_t f = 0; f < n_funcs; f++)
+            win_prepare_nullmap(result_vecs[f]);
+
         ray_pool_t* p3pool = ray_pool_get();
         if (p3pool && n_parts > 1) {
-            /* Pre-allocate nullmaps so parallel threads can set bits atomically */
-            for (uint8_t f = 0; f < n_funcs; f++)
-                win_prepare_nullmap(result_vecs[f]);
             win_par_ctx_t pctx = {
                 .order_vecs = order_vecs, .n_order = n_order,
                 .func_vecs = func_vecs, .func_kinds = ext->window.func_kinds,
