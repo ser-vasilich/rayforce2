@@ -349,33 +349,22 @@ void ray_term_destroy(ray_term_t* term) {
 int64_t ray_term_getc(ray_term_t* term) {
     if (term->ipc_srv) {
         /* IPC server active: stdin is in the epoll/kqueue set.
-         * Set non-blocking, wait on the unified event loop, then
-         * restore blocking before returning so escape-sequence
-         * reads (term_read_byte with VTIME) still work. */
-        int flags = fcntl(STDIN_FILENO, F_GETFL);
-        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+         * Block on the event loop until stdin is ready (ready > 0).
+         * IPC events are processed inside ray_ipc_poll; external fds
+         * (stdin) are counted but not consumed. Stdin stays blocking —
+         * read() succeeds immediately since epoll confirmed data. */
         for (;;) {
-            int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
-            if (sz > 0) {
-                fcntl(STDIN_FILENO, F_SETFL, flags);  /* restore blocking */
-                return sz;
-            }
-            if (sz < 0 && errno == EINTR) {
-                if (g_interrupted) {
-                    fcntl(STDIN_FILENO, F_SETFL, flags);
-                    return -2;
-                }
+            int ready = ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
+            if (ready < 0 && errno == EINTR) {
+                if (g_interrupted) return -2;
                 continue;
             }
-            if (sz < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                ray_ipc_poll((ray_ipc_server_t*)term->ipc_srv, -1);
-                continue;
-            }
-            fcntl(STDIN_FILENO, F_SETFL, flags);  /* restore on EOF/error */
-            return sz;
+            if (ready > 0) break;  /* stdin has data */
+            /* ready == 0: only IPC events processed, loop */
         }
     }
-    /* No IPC server — original blocking path */
+    /* Blocking read — either no IPC server (original path) or
+     * epoll confirmed stdin ready (IPC path). */
     for (;;) {
         int64_t sz = (int64_t)read(STDIN_FILENO, term->input, 1);
         if (sz > 0) return sz;
