@@ -201,7 +201,7 @@ ray_t* ray_typed_null(int8_t type);
 
 /* Null bitmap check for atoms — bit 0 of nullmap[0] marks typed nulls.
  * Also matches RAY_NULL_OBJ (the untyped null singleton). */
-#define RAY_ATOM_IS_NULL(x) (RAY_IS_NULL(x) || ((x)->nullmap[0] & 1))
+#define RAY_ATOM_IS_NULL(x) (RAY_IS_NULL(x) || ((x)->type < 0 && ((x)->nullmap[0] & 1)))
 
 /* ===== Vector API ===== */
 
