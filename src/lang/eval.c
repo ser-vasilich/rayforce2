@@ -1767,6 +1767,14 @@ static void register_unary(const char* name, uint8_t attrs, ray_unary_fn fn) {
     ray_release(obj);
 }
 
+static void register_unary_op(const char* name, uint8_t attrs, ray_unary_fn fn, uint16_t opcode) {
+    int64_t sym = ray_sym_intern(name, strlen(name));
+    ray_t* obj = ray_fn_unary(name, attrs, fn);
+    RAY_FN_SET_OPCODE(obj, opcode);
+    ray_env_set(sym, obj);
+    ray_release(obj);
+}
+
 static void register_vary(const char* name, uint8_t attrs, ray_vary_fn fn) {
     int64_t sym = ray_sym_intern(name, strlen(name));
     ray_t* obj = ray_fn_vary(name, attrs, fn);
@@ -1786,13 +1794,13 @@ static void ray_register_builtins(void) {
     register_binary_op("<=",  RAY_FN_ATOMIC, ray_lte_fn,    OP_LE);
     register_binary_op("==",  RAY_FN_ATOMIC, ray_eq_fn,  OP_EQ);
     register_binary_op("!=",  RAY_FN_ATOMIC, ray_neq_fn,    OP_NE);
-    register_binary("and", RAY_FN_NONE,   ray_and_fn);
-    register_binary("or",  RAY_FN_NONE,   ray_or_fn);
-    register_unary("not",  RAY_FN_NONE,   ray_not_fn);
-    register_unary("neg",   RAY_FN_ATOMIC, ray_neg_fn);
-    register_unary("round", RAY_FN_ATOMIC, ray_round_fn);
-    register_unary("floor", RAY_FN_ATOMIC, ray_floor_fn);
-    register_unary("ceil",  RAY_FN_ATOMIC, ray_ceil_fn);
+    register_binary_op("and", RAY_FN_NONE,   ray_and_fn, OP_AND);
+    register_binary_op("or",  RAY_FN_NONE,   ray_or_fn,  OP_OR);
+    register_unary_op("not",  RAY_FN_NONE,   ray_not_fn, OP_NOT);
+    register_unary_op("neg",  RAY_FN_ATOMIC, ray_neg_fn, OP_NEG);
+    register_unary("round",   RAY_FN_ATOMIC, ray_round_fn);
+    register_unary_op("floor", RAY_FN_ATOMIC, ray_floor_fn, OP_FLOOR);
+    register_unary_op("ceil",  RAY_FN_ATOMIC, ray_ceil_fn,  OP_CEIL);
 
     /* Special forms */
     register_binary("set", RAY_FN_SPECIAL_FORM, ray_set_fn);
