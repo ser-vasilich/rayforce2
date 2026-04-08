@@ -108,15 +108,12 @@ Display checks the null bit instead of sentinel values.
 2. Same for I64 → `0Nl`, F64 → `0Nf`, etc.
 3. `INT64_MIN` and `INT32_MIN` now display as normal numbers (they're no longer special)
 
-## Task 4: Remove sentinel constants from CLAUDE.md
+## Task 4: Remove sentinel constants from CLAUDE.md — DONE
 
-**Files:**
-- `CLAUDE.md` — update the Null section to remove sentinel references
-
-**Step-by-step:**
-1. Update the Null documentation to describe `RAY_NULL_OBJ`, typed null atoms (null bit in nullmap), and null bitmaps on vectors
-2. Remove mentions of `is_null_atom`, sentinel values (`INT64_MIN`, `INT32_MIN`)
-3. Document `RAY_ATOM_IS_NULL` macro and `ray_typed_null` constructor
+- [x] Updated Null section to describe three null forms: RAY_NULL_OBJ, typed null atoms (null bit), null bitmaps
+- [x] Removed mentions of `is_null_atom` and sentinel values
+- [x] Documented `RAY_ATOM_IS_NULL` macro and `ray_typed_null` constructor
+- [x] Updated eval_internal.h file description to reference `RAY_ATOM_IS_NULL` instead of `is_null_atom`
 
 ## Task 5: Update documentation
 
