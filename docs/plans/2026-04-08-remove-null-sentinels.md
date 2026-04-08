@@ -4,11 +4,12 @@
 
 **Goal:** Remove all null sentinel logic (0Nl, 0Ni, 0Nd, etc.) from the codebase. Rayforce2 uses null bitmaps on vectors — sentinel values are a legacy from Rayforce1 that confuse the code and cause bugs (like the recent `abs` overflow).
 
-**Architecture:** Null in RF2 has two forms only:
-1. `RAY_NULL_OBJ` — the singleton null object (type=RAY_NULL). Returned by void builtins (println, show). Tested with `RAY_IS_NULL(p)`.
-2. Null bitmap on vectors — per-element null flags. The executor skips null elements via the bitmap, not by checking values.
+**Architecture:** Null in RF2 has three forms:
+1. `RAY_NULL_OBJ` — the singleton void null (type=RAY_NULL). Returned by void builtins (println, show). Tested with `RAY_IS_NULL(p)`.
+2. **Typed null atoms** — e.g., `0Ni` is an I32 atom with `nullmap[0] bit 0` set. The value field is undefined. The type is preserved. Uses the same null bitmap machinery as vectors — just the first bit.
+3. **Null bitmap on vectors** — per-element null flags in the 16-byte inline nullmap (or ext_nullmap for large vectors). The executor skips null elements via the bitmap.
 
-Sentinel values (`INT64_MIN` for 0Nl, `INT32_MIN` for 0Ni, `NaN` for 0Nf, etc.) served as in-band null markers in RF1 where vectors didn't have null bitmaps. In RF2 they're redundant and harmful.
+Sentinel values (`INT64_MIN` for 0Nl, `INT32_MIN` for 0Ni, `NaN` for 0Nf, etc.) are replaced by the null bit. The value field is no longer meaningful for null atoms — only the type and null bit matter.
 
 ---
 
@@ -31,9 +32,19 @@ Most `is_null_atom(x)` checks in arithmetic/comparison builtins follow this patt
 if (is_null_atom(x)) { ray_retain(x); return x; }  // propagate null
 ```
 
-These exist because RF1 vectors didn't have null bitmaps — builtins had to check each element for sentinel values. In RF2, the null bitmap + executor handle this. The atomic mapper (`RAY_FN_ATOMIC`) skips null elements before calling the builtin. **Remove these checks entirely.**
+**Replace with null-bit check:**
+```c
+if (x->nullmap[0] & 1) { ray_retain(x); return x; }  // typed null atom
+```
 
-For `RAY_NULL_OBJ` checks (the singleton, not sentinels), replace with `RAY_IS_NULL(x)`.
+This preserves null propagation through scalar arithmetic (e.g., `(+ 1 0Ni)` → null I32) while using the bitmap instead of sentinel values. The atomic mapper (`RAY_FN_ATOMIC`) handles vector-level nulls separately.
+
+For `RAY_NULL_OBJ` checks (the void null), keep using `RAY_IS_NULL(x)`.
+
+**Add helper macro** in eval_internal.h:
+```c
+#define RAY_ATOM_IS_NULL(x) ((x)->nullmap[0] & 1)
+```
 
 **Step-by-step:**
 1. Delete `is_null_atom` from `eval_internal.h`
@@ -55,22 +66,30 @@ The parser creates sentinel atoms for `0Nl`, `0Ni`, `0Nd`, `0Nt`, `0Np`, `0Nf` s
 
 **Decision needed:** Should `0Nl` syntax still be recognized? If yes, it should return `RAY_NULL_OBJ`. If no, remove the parsing rules. The kdb+ convention is to keep the syntax but have a single null representation.
 
-**Recommended:** Keep the syntax, all sentinel literals parse to `RAY_NULL_OBJ`. The type-specific null syntax (`0Ni` vs `0Nl`) becomes redundant but harmless.
+**Approach:** Keep all syntax. Each typed null literal creates an atom of the correct type with `nullmap[0] bit 0` set. The value field is zeroed (not a sentinel).
 
 **Step-by-step:**
-1. Replace all sentinel literal cases in parse.c with `return RAY_NULL_OBJ; ray_retain(RAY_NULL_OBJ);`
-2. Remove empty symbol sentinel (line 460): empty symbol `\`` should be an error, not null
+1. Replace each sentinel case in parse.c:
+   - `0Nl` → `ray_i64(0)` with `nullmap[0] |= 1`
+   - `0Ni` → `ray_i32(0)` with `nullmap[0] |= 1`
+   - `0Nd` → `ray_date(0)` with `nullmap[0] |= 1`
+   - `0Nt` → `ray_time(0)` with `nullmap[0] |= 1`
+   - `0Np` → `ray_timestamp(0)` with `nullmap[0] |= 1`
+   - `0Nf` → `ray_f64(0)` with `nullmap[0] |= 1` (NOT NaN — use the null bit)
+2. Add a helper: `ray_t* ray_typed_null(int8_t type)` that creates a zeroed atom with null bit set
+3. Empty symbol `\`` → typed null SYM atom (null bit set)
 
 ## Task 3: Remove sentinel display from format
 
 **Files:**
 - `src/lang/format.c` (lines 182, 187, 386, 389)
 
-Currently, `INT32_MIN` displays as `0Ni` and `INT64_MIN` as `0Nl`. These are valid integer values — they should display as numbers, not null markers.
+Display checks the null bit instead of sentinel values.
 
 **Step-by-step:**
-1. Remove the `INT32_MIN → 0Ni` and `INT64_MIN → 0Nl` special cases
-2. Remove the `case RAY_I32: fmt_puts(b, "0Ni")` and `case RAY_I64: fmt_puts(b, "0Nl")` in the null format section
+1. Replace `INT32_MIN → 0Ni` check with `RAY_ATOM_IS_NULL(x) → 0Ni` (check the bit, not the value)
+2. Same for I64 → `0Nl`, F64 → `0Nf`, etc.
+3. `INT64_MIN` and `INT32_MIN` now display as normal numbers (they're no longer special)
 
 ## Task 4: Remove sentinel constants from CLAUDE.md
 
@@ -78,8 +97,9 @@ Currently, `INT32_MIN` displays as `0Ni` and `INT64_MIN` as `0Nl`. These are val
 - `CLAUDE.md` — update the Null section to remove sentinel references
 
 **Step-by-step:**
-1. Update the Null documentation to describe only `RAY_NULL_OBJ` and null bitmaps
-2. Remove mentions of `is_null_atom`, `0Nl/0Ni/0Nd/0Nt/0Np/0Nf`, "sentinel nulls propagate through arithmetic"
+1. Update the Null documentation to describe `RAY_NULL_OBJ`, typed null atoms (null bit in nullmap), and null bitmaps on vectors
+2. Remove mentions of `is_null_atom`, sentinel values (`INT64_MIN`, `INT32_MIN`)
+3. Document `RAY_ATOM_IS_NULL` macro and `ray_typed_null` constructor
 
 ## Task 5: Update documentation
 
