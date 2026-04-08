@@ -103,6 +103,34 @@ static inline int64_t win_read_i64(ray_t* col, int64_t row) {
     }
 }
 
+/* Thread-safe null bit set for parallel window execution.
+ * Requires the vector's external nullmap to be pre-allocated. */
+static inline void win_set_null(ray_t* vec, int64_t idx) {
+    if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
+        /* Inline nullmap: idx < 128, byte-level race on nullmap[] */
+        int byte_idx = (int)(idx / 8);
+        int bit_idx  = (int)(idx % 8);
+        __atomic_fetch_or(&vec->nullmap[byte_idx],
+                          (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+        return;
+    }
+    ray_t* ext = vec->ext_nullmap;
+    uint8_t* bits = (uint8_t*)ray_data(ext);
+    int byte_idx = (int)(idx / 8);
+    int bit_idx  = (int)(idx % 8);
+    __atomic_fetch_or(&bits[byte_idx],
+                      (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+}
+
+/* Pre-allocate external nullmap so parallel threads can set bits safely. */
+static void win_prepare_nullmap(ray_t* vec) {
+    vec->attrs |= RAY_ATTR_HAS_NULLS;
+    if (vec->len <= 128) return; /* inline nullmap suffices */
+    /* Force promotion to external nullmap via a dummy set+clear */
+    ray_vec_set_null(vec, 0, true);
+    ray_vec_set_null(vec, 0, false);
+}
+
 /* Resolve a graph op node to a column vector from tbl */
 static ray_t* win_resolve_vec(ray_graph_t* g, ray_op_t* key_op, ray_t* tbl,
                               uint8_t* owned) {
@@ -335,10 +363,10 @@ static void win_compute_partition(
                     if (src >= ps) {
                         out[sorted_idx[i]] = win_read_f64(fvec, sorted_idx[src]);
                         if (ray_vec_is_null(fvec, sorted_idx[src]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     } else {
                         out[sorted_idx[i]] = 0.0;
-                        ray_vec_set_null(rvec, sorted_idx[i], true);
+                        win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             } else {
@@ -348,10 +376,10 @@ static void win_compute_partition(
                     if (src >= ps) {
                         out[sorted_idx[i]] = win_read_i64(fvec, sorted_idx[src]);
                         if (ray_vec_is_null(fvec, sorted_idx[src]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     } else {
                         out[sorted_idx[i]] = 0;
-                        ray_vec_set_null(rvec, sorted_idx[i], true);
+                        win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             }
@@ -368,10 +396,10 @@ static void win_compute_partition(
                     if (src < pe) {
                         out[sorted_idx[i]] = win_read_f64(fvec, sorted_idx[src]);
                         if (ray_vec_is_null(fvec, sorted_idx[src]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     } else {
                         out[sorted_idx[i]] = 0.0;
-                        ray_vec_set_null(rvec, sorted_idx[i], true);
+                        win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             } else {
@@ -381,10 +409,10 @@ static void win_compute_partition(
                     if (src < pe) {
                         out[sorted_idx[i]] = win_read_i64(fvec, sorted_idx[src]);
                         if (ray_vec_is_null(fvec, sorted_idx[src]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     } else {
                         out[sorted_idx[i]] = 0;
-                        ray_vec_set_null(rvec, sorted_idx[i], true);
+                        win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             }
@@ -398,14 +426,14 @@ static void win_compute_partition(
                 double first = first_null ? 0.0 : win_read_f64(fvec, sorted_idx[ps]);
                 for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = first;
-                    if (first_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                    if (first_null) win_set_null(rvec, sorted_idx[i]);
                 }
             } else {
                 int64_t* out = (int64_t*)ray_data(rvec);
                 int64_t first = first_null ? 0 : win_read_i64(fvec, sorted_idx[ps]);
                 for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = first;
-                    if (first_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                    if (first_null) win_set_null(rvec, sorted_idx[i]);
                 }
             }
             break;
@@ -419,13 +447,13 @@ static void win_compute_partition(
                     double last = lnull ? 0.0 : win_read_f64(fvec, sorted_idx[pe - 1]);
                     for (int64_t i = ps; i < pe; i++) {
                         out[sorted_idx[i]] = last;
-                        if (lnull) ray_vec_set_null(rvec, sorted_idx[i], true);
+                        if (lnull) win_set_null(rvec, sorted_idx[i]);
                     }
                 } else {
                     for (int64_t i = ps; i < pe; i++) {
                         out[sorted_idx[i]] = win_read_f64(fvec, sorted_idx[i]);
                         if (ray_vec_is_null(fvec, sorted_idx[i]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             } else {
@@ -435,13 +463,13 @@ static void win_compute_partition(
                     int64_t last = lnull ? 0 : win_read_i64(fvec, sorted_idx[pe - 1]);
                     for (int64_t i = ps; i < pe; i++) {
                         out[sorted_idx[i]] = last;
-                        if (lnull) ray_vec_set_null(rvec, sorted_idx[i], true);
+                        if (lnull) win_set_null(rvec, sorted_idx[i]);
                     }
                 } else {
                     for (int64_t i = ps; i < pe; i++) {
                         out[sorted_idx[i]] = win_read_i64(fvec, sorted_idx[i]);
                         if (ray_vec_is_null(fvec, sorted_idx[i]))
-                            ray_vec_set_null(rvec, sorted_idx[i], true);
+                            win_set_null(rvec, sorted_idx[i]);
                     }
                 }
             }
@@ -458,14 +486,14 @@ static void win_compute_partition(
                 double val = nth_null ? 0.0 : win_read_f64(fvec, sorted_idx[ps + nth - 1]);
                 for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = val;
-                    if (nth_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                    if (nth_null) win_set_null(rvec, sorted_idx[i]);
                 }
             } else {
                 int64_t* out = (int64_t*)ray_data(rvec);
                 int64_t val = nth_null ? 0 : win_read_i64(fvec, sorted_idx[ps + nth - 1]);
                 for (int64_t i = ps; i < pe; i++) {
                     out[sorted_idx[i]] = val;
-                    if (nth_null) ray_vec_set_null(rvec, sorted_idx[i], true);
+                    if (nth_null) win_set_null(rvec, sorted_idx[i]);
                 }
             }
             break;
@@ -1055,6 +1083,9 @@ ray_t* exec_window(ray_graph_t* g, ray_op_t* op, ray_t* tbl) {
     {
         ray_pool_t* p3pool = ray_pool_get();
         if (p3pool && n_parts > 1) {
+            /* Pre-allocate nullmaps so parallel threads can set bits atomically */
+            for (uint8_t f = 0; f < n_funcs; f++)
+                win_prepare_nullmap(result_vecs[f]);
             win_par_ctx_t pctx = {
                 .order_vecs = order_vecs, .n_order = n_order,
                 .func_vecs = func_vecs, .func_kinds = ext->window.func_kinds,
