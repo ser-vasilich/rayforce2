@@ -80,7 +80,7 @@ ray_t* ray_lt_fn(ray_t* a, ray_t* b) {
     return make_bool(as_f64(a) < as_f64(b) ? 1 : 0);
 }
 
-ray_t* ray_gte(ray_t* a, ray_t* b) {
+ray_t* ray_gte_fn(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c >= 0 ? 1 : 0); }
     if (a->type == -RAY_GUID && b->type == -RAY_GUID)
         return make_bool(memcmp(ray_data(a->obj), ray_data(b->obj), 16) >= 0 ? 1 : 0);
@@ -100,7 +100,7 @@ ray_t* ray_gte(ray_t* a, ray_t* b) {
     return make_bool(as_f64(a) >= as_f64(b) ? 1 : 0);
 }
 
-ray_t* ray_lte(ray_t* a, ray_t* b) {
+ray_t* ray_lte_fn(ray_t* a, ray_t* b) {
     { int c; if (char_str_cmp(a, b, &c) == 0) return make_bool(c <= 0 ? 1 : 0); }
     if (a->type == -RAY_GUID && b->type == -RAY_GUID)
         return make_bool(memcmp(ray_data(a->obj), ray_data(b->obj), 16) <= 0 ? 1 : 0);
@@ -149,7 +149,7 @@ ray_t* ray_eq_fn(ray_t* a, ray_t* b) {
     return make_bool(as_i64(a) == as_i64(b) ? 1 : 0);
 }
 
-ray_t* ray_neq(ray_t* a, ray_t* b) {
+ray_t* ray_neq_fn(ray_t* a, ray_t* b) {
     /* Handle all null forms (C NULL, RAY_NULL_OBJ, sentinel nulls) */
     int na = (!a || is_null_atom(a)), nb = (!b || is_null_atom(b));
     if (na && nb) return make_bool(0);

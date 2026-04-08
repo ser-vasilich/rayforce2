@@ -42,8 +42,8 @@ uint16_t pivot_fn_to_agg_op(ray_t* fn) {
     ray_unary_fn f = (ray_unary_fn)(uintptr_t)fn->i64;
     if (f == ray_sum_fn)   return OP_SUM;
     if (f == ray_avg_fn)   return OP_AVG;
-    if (f == ray_min)      return OP_MIN;
-    if (f == ray_max)      return OP_MAX;
+    if (f == ray_min_fn)      return OP_MIN;
+    if (f == ray_max_fn)      return OP_MAX;
     if (f == ray_count_fn) return OP_COUNT;
     if (f == ray_first_fn) return OP_FIRST;
     if (f == ray_last_fn)  return OP_LAST;
@@ -657,7 +657,7 @@ ray_t* ray_row_fn(ray_t* tbl, ray_t* idx) {
     if (tbl->type != RAY_TABLE) return ray_error("type", "row expects a table");
     if (!is_numeric(idx)) return ray_error("type", "row index must be integer");
     /* Delegate to at — it already handles table integer indexing */
-    return ray_at(tbl, idx);
+    return ray_at_fn(tbl, idx);
 }
 
 /* ══════════════════════════════════════════

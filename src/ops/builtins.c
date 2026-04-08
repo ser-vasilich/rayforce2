@@ -172,7 +172,7 @@ static char* fmt_interpolate(const char* fmt, size_t flen, ray_t** args, int64_t
 
 /* (println val1 val2 ...) — print values to stdout, newline at end.
  * If first arg is a string with % placeholders, substitutes remaining args. */
-ray_t* ray_println(ray_t** args, int64_t n) {
+ray_t* ray_println_fn(ray_t** args, int64_t n) {
     for (int64_t i = 0; i < n; i++)
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
 
@@ -201,7 +201,7 @@ ray_t* ray_println(ray_t** args, int64_t n) {
 }
 
 /* (show val1 val2 ...) — print values to stdout using ray_fmt, newline at end */
-ray_t* ray_show(ray_t** args, int64_t n) {
+ray_t* ray_show_fn(ray_t** args, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
         if (ray_is_lazy(args[i])) args[i] = ray_lazy_materialize(args[i]);
         if (!args[i] || RAY_IS_ERR(args[i])) { fprintf(stdout, "error"); continue; }
@@ -1126,7 +1126,7 @@ ray_t* ray_type_fn(ray_t* val) {
 }
 
 /* (read path) — read a file's contents as a string */
-ray_t* ray_read_file(ray_t* path_obj) {
+ray_t* ray_read_file_fn(ray_t* path_obj) {
     if (path_obj->type != -RAY_STR) return ray_error("type", NULL);
     const char* path = ray_str_ptr(path_obj);
     if (!path) return ray_error("domain", NULL);
@@ -1149,7 +1149,7 @@ ray_t* ray_read_file(ray_t* path_obj) {
 }
 
 /* (load path) — read and evaluate a Rayfall script file via mmap */
-ray_t* ray_load_file(ray_t* path_obj) {
+ray_t* ray_load_file_fn(ray_t* path_obj) {
     if (path_obj->type != -RAY_STR) return ray_error("type", NULL);
     const char* path = ray_str_ptr(path_obj);
     if (!path) return ray_error("domain", NULL);
@@ -1217,7 +1217,7 @@ ray_t* ray_load_file(ray_t* path_obj) {
 }
 
 /* (write path content) — write string to a file */
-ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
+ray_t* ray_write_file_fn(ray_t* path_obj, ray_t* content) {
     if (path_obj->type != -RAY_STR) return ray_error("type", NULL);
     if (content->type != -RAY_STR) return ray_error("type", NULL);
     const char* path = ray_str_ptr(path_obj);
@@ -1237,7 +1237,7 @@ ray_t* ray_write_file(ray_t* path_obj, ray_t* content) {
  * ══════════════════════════════════════════ */
 
 /* (enlist a b c ...) -> typed vector from atoms */
-ray_t* ray_enlist(ray_t** args, int64_t n) {
+ray_t* ray_enlist_fn(ray_t** args, int64_t n) {
     if (n == 0) return ray_vec_new(RAY_I64, 0);
     /* Determine type from first arg */
     int8_t atype = args[0]->type;

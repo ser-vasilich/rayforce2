@@ -78,7 +78,7 @@ void   ray_clear_error_trace(void) {
 static _Thread_local ray_t *__raise_val = NULL;
 
 /* (raise value) — raise an error with the given value */
-ray_t* ray_raise(ray_t* val) {
+ray_t* ray_raise_fn(ray_t* val) {
     if (__raise_val) ray_release(__raise_val);
     ray_retain(val);
     __raise_val = val;
@@ -87,7 +87,7 @@ ray_t* ray_raise(ray_t* val) {
 
 /* (try expr handler) — evaluate expr, if error call handler with error value.
  * Special form: receives unevaluated args. */
-ray_t* ray_try(ray_t* expr, ray_t* handler_expr) {
+ray_t* ray_try_fn(ray_t* expr, ray_t* handler_expr) {
     ray_t* result = ray_eval(expr);
     if (!RAY_IS_ERR(result)) return result;
 
@@ -698,7 +698,7 @@ ray_t* gather_by_idx(ray_t* vec, int64_t* idx, int64_t n) {
  * ══════════════════════════════════════════ */
 
 /* (list v1 v2 ...) — package args into a list */
-ray_t* ray_list(ray_t** args, int64_t n) {
+ray_t* ray_list_fn(ray_t** args, int64_t n) {
     ray_t* result = ray_alloc(n * sizeof(ray_t*));
     if (!result) return ray_error("oom", NULL);
     result->type = RAY_LIST;
@@ -712,7 +712,7 @@ ray_t* ray_list(ray_t** args, int64_t n) {
 }
 
 /* (table [col_names] (list col1 col2 ...)) — build a RAY_TABLE */
-ray_t* ray_table(ray_t* names, ray_t* cols) {
+ray_t* ray_table_fn(ray_t* names, ray_t* cols) {
     ray_t *_bxn = NULL, *_bxc = NULL;
     names = unbox_vec_arg(names, &_bxn);
     if (RAY_IS_ERR(names)) return names;
@@ -865,7 +865,7 @@ ray_t* ray_table(ray_t* names, ray_t* cols) {
 }
 
 /* (key table) — return column names as a list of symbols */
-ray_t* ray_key(ray_t* x) {
+ray_t* ray_key_fn(ray_t* x) {
     /* Dict: extract keys as SYM vector */
     if (x->type == RAY_LIST && (x->attrs & RAY_ATTR_DICT)) {
         int64_t n2 = x->len / 2;
@@ -897,7 +897,7 @@ ray_t* ray_key(ray_t* x) {
 }
 
 /* (value dict/table) — extract values */
-ray_t* ray_value(ray_t* x) {
+ray_t* ray_value_fn(ray_t* x) {
     /* Table: return list of column vectors */
     if (x->type == RAY_TABLE) {
         int64_t ncols = x->len;
@@ -933,10 +933,10 @@ ray_t* ray_value(ray_t* x) {
 
 
 
-/* ray_lang_print, fmt_interpolate, ray_println, ray_show, ray_format_fn,
+/* ray_lang_print, fmt_interpolate, ray_println_fn, ray_show_fn, ray_format_fn,
  * ray_resolve_fn, ray_timeit_fn, ray_exit_fn, resolve_type_name,
  * ray_read_csv_fn, ray_write_csv_fn, cast_match, ray_cast_fn, ray_type_fn,
- * ray_read_file, ray_load_file, ray_write_file
+ * ray_read_file_fn, ray_load_file_fn, ray_write_file_fn
  * moved to ops/builtins.c */
 
 /* ══════════════════════════════════════════
@@ -944,7 +944,7 @@ ray_t* ray_value(ray_t* x) {
  * ══════════════════════════════════════════ */
 
 /* (set name value) — bind in global env. Receives unevaluated args. */
-ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
+ray_t* ray_set_fn(ray_t* name_obj, ray_t* val_expr) {
     if (name_obj->type != -RAY_SYM)
         return ray_error("type", NULL);
     ray_t* val = ray_eval(val_expr);
@@ -961,7 +961,7 @@ ray_t* ray_set(ray_t* name_obj, ray_t* val_expr) {
 }
 
 /* (let name value) — bind in local scope. Receives unevaluated args. */
-ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
+ray_t* ray_let_fn(ray_t* name_obj, ray_t* val_expr) {
     if (name_obj->type != -RAY_SYM)
         return ray_error("type", NULL);
     ray_t* val = ray_eval(val_expr);
@@ -976,7 +976,7 @@ ray_t* ray_let(ray_t* name_obj, ray_t* val_expr) {
 }
 
 /* (if cond then else?) — conditional. Receives unevaluated args. */
-ray_t* ray_cond(ray_t** args, int64_t n) {
+ray_t* ray_cond_fn(ray_t** args, int64_t n) {
     if (n < 2) return ray_error("domain", NULL);
     ray_t* cond = ray_eval(args[0]);
     if (RAY_IS_ERR(cond)) return cond;
@@ -1001,7 +1001,7 @@ ray_t* ray_cond(ray_t** args, int64_t n) {
 }
 
 /* (do expr1 expr2 ...) — evaluate in sequence, return last. Pushes local scope. */
-ray_t* ray_do(ray_t** args, int64_t n) {
+ray_t* ray_do_fn(ray_t** args, int64_t n) {
     if (n == 0) return make_i64(0);
     if (ray_env_push_scope() != RAY_OK) return ray_error("oom", NULL);
     ray_t* result = NULL;
@@ -1404,7 +1404,7 @@ op_call2: {
     ray_binary_fn fn = (ray_binary_fn)(uintptr_t)fn_obj->i64;
     ray_t *result;
     if (RAY_UNLIKELY(RAY_IS_NULL(left) || RAY_IS_NULL(right))) {
-        result = (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq)
+        result = (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq_fn)
                  ? fn(left, right) : ray_error("type", NULL);
     /* Fast path: atoms have negative type — skip collection check entirely.
      * Only call is_collection when at least one arg has type >= 0 (vector/list). */
@@ -1736,7 +1736,7 @@ vm_error_cleanup: {
 }
 
 
-/* ray_enlist, ray_dict_fn, ray_nil_fn, ray_where_fn, ray_group_fn,
+/* ray_enlist_fn, ray_dict_fn, ray_nil_fn, ray_where_fn, ray_group_fn,
  * ray_concat_fn, ray_raze_fn, ray_within_fn, ray_fdiv_fn
  * moved to ops/builtins.c */
 
@@ -1782,10 +1782,10 @@ static void ray_register_builtins(void) {
     register_binary_op("%",   RAY_FN_ATOMIC, ray_mod_fn, OP_MOD);
     register_binary_op(">",   RAY_FN_ATOMIC, ray_gt_fn,  OP_GT);
     register_binary_op("<",   RAY_FN_ATOMIC, ray_lt_fn,  OP_LT);
-    register_binary_op(">=",  RAY_FN_ATOMIC, ray_gte,    OP_GE);
-    register_binary_op("<=",  RAY_FN_ATOMIC, ray_lte,    OP_LE);
+    register_binary_op(">=",  RAY_FN_ATOMIC, ray_gte_fn,    OP_GE);
+    register_binary_op("<=",  RAY_FN_ATOMIC, ray_lte_fn,    OP_LE);
     register_binary_op("==",  RAY_FN_ATOMIC, ray_eq_fn,  OP_EQ);
-    register_binary_op("!=",  RAY_FN_ATOMIC, ray_neq,    OP_NE);
+    register_binary_op("!=",  RAY_FN_ATOMIC, ray_neq_fn,    OP_NE);
     register_binary("and", RAY_FN_NONE,   ray_and_fn);
     register_binary("or",  RAY_FN_NONE,   ray_or_fn);
     register_unary("not",  RAY_FN_NONE,   ray_not_fn);
@@ -1795,46 +1795,46 @@ static void ray_register_builtins(void) {
     register_unary("ceil",  RAY_FN_ATOMIC, ray_ceil_fn);
 
     /* Special forms */
-    register_binary("set", RAY_FN_SPECIAL_FORM, ray_set);
-    register_binary("let", RAY_FN_SPECIAL_FORM, ray_let);
-    register_vary("if",    RAY_FN_SPECIAL_FORM, ray_cond);
-    register_vary("do",    RAY_FN_SPECIAL_FORM, ray_do);
+    register_binary("set", RAY_FN_SPECIAL_FORM, ray_set_fn);
+    register_binary("let", RAY_FN_SPECIAL_FORM, ray_let_fn);
+    register_vary("if",    RAY_FN_SPECIAL_FORM, ray_cond_fn);
+    register_vary("do",    RAY_FN_SPECIAL_FORM, ray_do_fn);
     register_vary("fn",    RAY_FN_SPECIAL_FORM, ray_fn);
 
     /* Aggregation builtins */
     register_unary("sum",   RAY_FN_AGGR, ray_sum_fn);
     register_unary("count", RAY_FN_AGGR, ray_count_fn);
     register_unary("avg",   RAY_FN_AGGR, ray_avg_fn);
-    register_unary("min",   RAY_FN_AGGR, ray_min);
-    register_unary("max",   RAY_FN_AGGR, ray_max);
+    register_unary("min",   RAY_FN_AGGR, ray_min_fn);
+    register_unary("max",   RAY_FN_AGGR, ray_max_fn);
     register_unary("first", RAY_FN_NONE, ray_first_fn);
     register_unary("last",  RAY_FN_NONE, ray_last_fn);
-    register_unary("med",   RAY_FN_AGGR, ray_med);
-    register_unary("dev",   RAY_FN_AGGR, ray_dev);
+    register_unary("med",   RAY_FN_AGGR, ray_med_fn);
+    register_unary("dev",   RAY_FN_AGGR, ray_dev_fn);
 
     /* Error handling */
-    register_unary("raise", RAY_FN_NONE, ray_raise);
-    register_binary("try",  RAY_FN_SPECIAL_FORM, ray_try);
+    register_unary("raise", RAY_FN_NONE, ray_raise_fn);
+    register_binary("try",  RAY_FN_SPECIAL_FORM, ray_try_fn);
 
     /* Higher-order functions */
-    register_vary("map",    RAY_FN_NONE, ray_map);
-    register_vary("pmap",   RAY_FN_NONE, ray_pmap);
-    register_vary("fold",   RAY_FN_NONE, ray_fold);
+    register_vary("map",    RAY_FN_NONE, ray_map_fn);
+    register_vary("pmap",   RAY_FN_NONE, ray_pmap_fn);
+    register_vary("fold",   RAY_FN_NONE, ray_fold_fn);
     register_vary("scan",   RAY_FN_NONE, ray_scan_fn);
     register_binary("filter", RAY_FN_NONE, ray_filter_fn);
-    register_vary("apply",  RAY_FN_NONE, ray_apply);
+    register_vary("apply",  RAY_FN_NONE, ray_apply_fn);
 
     /* Collection operations */
     register_unary("distinct", RAY_FN_NONE, ray_distinct_fn);
-    register_binary("in",      RAY_FN_NONE, ray_in);
-    register_binary("except",  RAY_FN_NONE, ray_except);
-    register_binary("union",   RAY_FN_NONE, ray_union);
-    register_binary("sect",    RAY_FN_NONE, ray_sect);
-    register_binary("take",    RAY_FN_NONE, ray_take);
-    register_binary("at",      RAY_FN_NONE, ray_at);
-    register_binary("find",    RAY_FN_NONE, ray_find);
-    register_unary("reverse",  RAY_FN_NONE, ray_reverse);
-    register_unary("til",      RAY_FN_NONE, ray_til);
+    register_binary("in",      RAY_FN_NONE, ray_in_fn);
+    register_binary("except",  RAY_FN_NONE, ray_except_fn);
+    register_binary("union",   RAY_FN_NONE, ray_union_fn);
+    register_binary("sect",    RAY_FN_NONE, ray_sect_fn);
+    register_binary("take",    RAY_FN_NONE, ray_take_fn);
+    register_binary("at",      RAY_FN_NONE, ray_at_fn);
+    register_binary("find",    RAY_FN_NONE, ray_find_fn);
+    register_unary("reverse",  RAY_FN_NONE, ray_reverse_fn);
+    register_unary("til",      RAY_FN_NONE, ray_til_fn);
 
     /* Sorting operations */
     register_unary("asc",      RAY_FN_NONE, ray_asc_fn);
@@ -1846,45 +1846,45 @@ static void ray_register_builtins(void) {
     register_binary("xdesc",   RAY_FN_NONE, ray_xdesc_fn);
 
     /* Table operations */
-    register_vary("list",      RAY_FN_NONE, ray_list);
-    register_binary("table",   RAY_FN_NONE, ray_table);
-    register_unary("key",      RAY_FN_NONE, ray_key);
-    register_unary("value",    RAY_FN_NONE, ray_value);
+    register_vary("list",      RAY_FN_NONE, ray_list_fn);
+    register_binary("table",   RAY_FN_NONE, ray_table_fn);
+    register_unary("key",      RAY_FN_NONE, ray_key_fn);
+    register_unary("value",    RAY_FN_NONE, ray_value_fn);
     register_binary("union-all",      RAY_FN_NONE, ray_union_all_fn);
     /* table-distinct removed — distinct dispatches on type */
 
     /* Query operations */
     register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
-    register_vary("update",    RAY_FN_SPECIAL_FORM, ray_update);
-    register_vary("insert",    RAY_FN_SPECIAL_FORM, ray_insert);
-    register_vary("upsert",    RAY_FN_SPECIAL_FORM, ray_upsert);
-    register_binary("xbar",    RAY_FN_ATOMIC, ray_xbar);
+    register_vary("update",    RAY_FN_SPECIAL_FORM, ray_update_fn);
+    register_vary("insert",    RAY_FN_SPECIAL_FORM, ray_insert_fn);
+    register_vary("upsert",    RAY_FN_SPECIAL_FORM, ray_upsert_fn);
+    register_binary("xbar",    RAY_FN_ATOMIC, ray_xbar_fn);
 
     /* Join operations */
-    register_vary("left-join",   RAY_FN_NONE, ray_left_join);
-    register_vary("inner-join",  RAY_FN_NONE, ray_inner_join);
-    register_vary("anti-join",   RAY_FN_NONE, ray_antijoin_fn);
-    register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join);
-    register_vary("window-join1", RAY_FN_SPECIAL_FORM, ray_window_join);
+    register_vary("left-join",   RAY_FN_NONE, ray_left_join_fn);
+    register_vary("inner-join",  RAY_FN_NONE, ray_inner_join_fn);
+    register_vary("anti-join",   RAY_FN_NONE, ray_anti_join_fn);
+    register_vary("window-join", RAY_FN_SPECIAL_FORM, ray_window_join_fn);
+    register_vary("window-join1", RAY_FN_SPECIAL_FORM, ray_window_join_fn);
     register_vary("asof-join",   RAY_FN_NONE, ray_asof_join_fn);
 
     /* I/O builtins */
-    register_vary("println",    RAY_FN_NONE, ray_println);
-    register_vary("show",       RAY_FN_NONE, ray_show);
+    register_vary("println",    RAY_FN_NONE, ray_println_fn);
+    register_vary("show",       RAY_FN_NONE, ray_show_fn);
     register_vary("format",     RAY_FN_NONE, ray_format_fn);
     register_vary("read-csv",   RAY_FN_NONE, ray_read_csv_fn);
     register_vary("write-csv",  RAY_FN_NONE, ray_write_csv_fn);
     register_binary("as",       RAY_FN_NONE, ray_cast_fn);
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
-    register_unary("read",      RAY_FN_NONE, ray_read_file);
-    register_binary("write",    RAY_FN_NONE, ray_write_file);
-    register_unary("load",      RAY_FN_NONE, ray_load_file);
+    register_unary("read",      RAY_FN_NONE, ray_read_file_fn);
+    register_binary("write",    RAY_FN_NONE, ray_write_file_fn);
+    register_unary("load",      RAY_FN_NONE, ray_load_file_fn);
     register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
     register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
     register_vary("timeit",     RAY_FN_SPECIAL_FORM, ray_timeit_fn);
 
     /* Additional builtins (ported from rayforce) */
-    register_vary("enlist",     RAY_FN_NONE, ray_enlist);
+    register_vary("enlist",     RAY_FN_NONE, ray_enlist_fn);
     register_binary("dict",     RAY_FN_NONE, ray_dict_fn);
     register_unary("nil?",      RAY_FN_NONE, ray_nil_fn);
     register_unary("where",     RAY_FN_NONE, ray_where_fn);
@@ -1896,8 +1896,8 @@ static void ray_register_builtins(void) {
     register_binary("rand",     RAY_FN_NONE, ray_rand_fn);
     register_binary("bin",      RAY_FN_NONE, ray_bin_fn);
     register_binary("binr",     RAY_FN_NONE, ray_binr_fn);
-    register_vary("map-left",   RAY_FN_NONE, ray_map_left);
-    register_vary("map-right",  RAY_FN_NONE, ray_map_right);
+    register_vary("map-left",   RAY_FN_NONE, ray_map_left_fn);
+    register_vary("map-right",  RAY_FN_NONE, ray_map_right_fn);
 
     /* String operations */
     register_binary("split",     RAY_FN_NONE, ray_split_fn);
@@ -1921,13 +1921,13 @@ static void ray_register_builtins(void) {
     register_binary("like",      RAY_FN_NONE, ray_like_fn);
 
     /* Temporal clocks */
-    register_unary("date",       RAY_FN_NONE, ray_date_clock);
-    register_unary("time",       RAY_FN_NONE, ray_time_clock);
-    register_unary("timestamp",  RAY_FN_NONE, ray_timestamp_clock);
+    register_unary("date",       RAY_FN_NONE, ray_date_clock_fn);
+    register_unary("time",       RAY_FN_NONE, ray_time_clock_fn);
+    register_unary("timestamp",  RAY_FN_NONE, ray_timestamp_clock_fn);
 
     /* Eval, parse, print, meta */
-    register_unary("eval",       RAY_FN_NONE, ray_eval_builtin);
-    register_unary("parse",      RAY_FN_NONE, ray_parse_builtin);
+    register_unary("eval",       RAY_FN_NONE, ray_eval_builtin_fn);
+    register_unary("parse",      RAY_FN_NONE, ray_parse_builtin_fn);
     register_unary("print",      RAY_FN_NONE, ray_print_fn);
     register_unary("meta",       RAY_FN_NONE, ray_meta_fn);
 
@@ -1975,10 +1975,10 @@ static void ray_register_builtins(void) {
     register_unary("env",        RAY_FN_NONE, ray_env_fn);
 
     /* Directional fold/scan variants */
-    register_vary("fold-left",   RAY_FN_NONE, ray_fold_left);
-    register_vary("fold-right",  RAY_FN_NONE, ray_fold_right);
-    register_vary("scan-left",   RAY_FN_NONE, ray_scan_left);
-    register_vary("scan-right",  RAY_FN_NONE, ray_scan_right);
+    register_vary("fold-left",   RAY_FN_NONE, ray_fold_left_fn);
+    register_vary("fold-right",  RAY_FN_NONE, ray_fold_right_fn);
+    register_vary("scan-left",   RAY_FN_NONE, ray_scan_left_fn);
+    register_vary("scan-right",  RAY_FN_NONE, ray_scan_right_fn);
 
     /* del, internals, memstat, modify, pivot, sysinfo, unify, xrank */
     register_vary("del",          RAY_FN_SPECIAL_FORM, ray_del_fn);
@@ -2162,7 +2162,7 @@ ray_t* ray_eval(ray_t* obj) {
             }
             /* If either arg is NULL/void, only == and != can handle it */
             if (!left || !right || RAY_IS_NULL(left) || RAY_IS_NULL(right)) {
-                if (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq) {
+                if (fn == (ray_binary_fn)ray_eq_fn || fn == (ray_binary_fn)ray_neq_fn) {
                     ray_release(head);
                     ray_t* result = fn(left, right);
                     ray_release(left);

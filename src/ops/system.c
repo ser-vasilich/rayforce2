@@ -155,12 +155,12 @@ ray_t* ray_guid_fn(ray_t* n_arg) {
  * ══════════════════════════════════════════ */
 
 /* (eval expr) -- evaluate a parsed expression */
-ray_t* ray_eval_builtin(ray_t* x) {
+ray_t* ray_eval_builtin_fn(ray_t* x) {
     return ray_eval(x);
 }
 
 /* (parse str) -- parse a string into an AST */
-ray_t* ray_parse_builtin(ray_t* x) {
+ray_t* ray_parse_builtin_fn(ray_t* x) {
     if (x->type != -RAY_STR) return ray_error("type", "parse expects a string");
     const char* src = ray_str_ptr(x);
     if (!src) return ray_error("domain", NULL);
@@ -309,7 +309,7 @@ ray_t* ray_diverse_fn(ray_t* x) {
 
 /* (get dict key) -- dictionary/table lookup (alias for at) */
 ray_t* ray_get_fn(ray_t* dict, ray_t* key) {
-    return ray_at(dict, key);
+    return ray_at_fn(dict, key);
 }
 
 /* (remove dict key) -- remove key from dict, return new dict */

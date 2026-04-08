@@ -198,7 +198,7 @@ ray_t* ray_avg_fn(ray_t* x) {
     return make_f64(sum / (double)len);
 }
 
-ray_t* ray_min(ray_t* x) {
+ray_t* ray_min_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MIN);
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
@@ -270,7 +270,7 @@ ray_t* ray_min(ray_t* x) {
     return has_float ? make_f64(fmin) : make_i64(imin);
 }
 
-ray_t* ray_max(ray_t* x) {
+ray_t* ray_max_fn(ray_t* x) {
     if (ray_is_lazy(x)) return ray_lazy_append(x, OP_MAX);
     if (ray_is_atom(x)) { ray_retain(x); return x; }
     if (ray_is_vec(x)) {
@@ -356,7 +356,7 @@ ray_t* ray_first_fn(ray_t* x) {
     if (x->type == RAY_TABLE) {
         if (ray_table_nrows(x) == 0) return ray_error("domain", NULL);
         ray_t* idx = make_i64(0);
-        ray_t* result = ray_at(x, idx);
+        ray_t* result = ray_at_fn(x, idx);
         ray_release(idx);
         return result;
     }
@@ -396,7 +396,7 @@ ray_t* ray_last_fn(ray_t* x) {
         int64_t nrows = ray_table_nrows(x);
         if (nrows == 0) return ray_error("domain", NULL);
         ray_t* idx = make_i64(nrows - 1);
-        ray_t* result = ray_at(x, idx);
+        ray_t* result = ray_at_fn(x, idx);
         ray_release(idx);
         return result;
     }
@@ -452,7 +452,7 @@ static ray_t* vec_to_f64_scratch(ray_t* x, double** out_vals) {
     return scratch;
 }
 
-ray_t* ray_med(ray_t* x) {
+ray_t* ray_med_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
     if (RAY_IS_ERR(x)) return x;
     /* Scalar: median of single value → f64 */
@@ -515,7 +515,7 @@ static ray_t* dev_from_f64(double* vals, int64_t len) {
     return make_f64(sqrt(var / (double)cnt));
 }
 
-ray_t* ray_dev(ray_t* x) {
+ray_t* ray_dev_fn(ray_t* x) {
     if (ray_is_lazy(x)) x = ray_lazy_materialize(x);
     if (RAY_IS_ERR(x)) return x;
     if (ray_is_atom(x)) {

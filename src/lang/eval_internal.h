@@ -331,32 +331,32 @@ int    atom_eq(ray_t* a, ray_t* b);
 ray_t* list_to_typed_vec(ray_t* list, int8_t orig_vec_type);
 
 /* Collection builtins (formerly static in eval.c, now in collection.c) */
-ray_t* ray_map(ray_t** args, int64_t n);
-ray_t* ray_pmap(ray_t** args, int64_t n);
-ray_t* ray_fold(ray_t** args, int64_t n);
+ray_t* ray_map_fn(ray_t** args, int64_t n);
+ray_t* ray_pmap_fn(ray_t** args, int64_t n);
+ray_t* ray_fold_fn(ray_t** args, int64_t n);
 ray_t* ray_scan_fn(ray_t** args, int64_t n);
 ray_t* ray_filter_fn(ray_t* vec, ray_t* mask);
-ray_t* ray_apply(ray_t** args, int64_t n);
+ray_t* ray_apply_fn(ray_t** args, int64_t n);
 ray_t* ray_distinct_fn(ray_t* x);
-ray_t* ray_in(ray_t* val, ray_t* vec);
-ray_t* ray_except(ray_t* vec1, ray_t* vec2);
-ray_t* ray_union(ray_t* vec1, ray_t* vec2);
-ray_t* ray_sect(ray_t* vec1, ray_t* vec2);
-ray_t* ray_take(ray_t* vec, ray_t* n_obj);
-ray_t* ray_at(ray_t* vec, ray_t* idx);
-ray_t* ray_find(ray_t* vec, ray_t* val);
-ray_t* ray_til(ray_t* x);
-ray_t* ray_reverse(ray_t* x);
+ray_t* ray_in_fn(ray_t* val, ray_t* vec);
+ray_t* ray_except_fn(ray_t* vec1, ray_t* vec2);
+ray_t* ray_union_fn(ray_t* vec1, ray_t* vec2);
+ray_t* ray_sect_fn(ray_t* vec1, ray_t* vec2);
+ray_t* ray_take_fn(ray_t* vec, ray_t* n_obj);
+ray_t* ray_at_fn(ray_t* vec, ray_t* idx);
+ray_t* ray_find_fn(ray_t* vec, ray_t* val);
+ray_t* ray_til_fn(ray_t* x);
+ray_t* ray_reverse_fn(ray_t* x);
 ray_t* ray_rand_fn(ray_t* a, ray_t* b);
 ray_t* ray_bin_fn(ray_t* sorted, ray_t* val);
 ray_t* ray_binr_fn(ray_t* sorted, ray_t* val);
-ray_t* ray_map_left(ray_t** args, int64_t n);
-ray_t* ray_map_right(ray_t** args, int64_t n);
-ray_t* ray_fold_left(ray_t** args, int64_t n);
-ray_t* ray_fold_right(ray_t** args, int64_t n);
-ray_t* ray_scan_left(ray_t** args, int64_t n);
-ray_t* ray_scan_right(ray_t** args, int64_t n);
-ray_t* ray_enlist(ray_t** args, int64_t n);
+ray_t* ray_map_left_fn(ray_t** args, int64_t n);
+ray_t* ray_map_right_fn(ray_t** args, int64_t n);
+ray_t* ray_fold_left_fn(ray_t** args, int64_t n);
+ray_t* ray_fold_right_fn(ray_t** args, int64_t n);
+ray_t* ray_scan_left_fn(ray_t** args, int64_t n);
+ray_t* ray_scan_right_fn(ray_t** args, int64_t n);
+ray_t* ray_enlist_fn(ray_t** args, int64_t n);
 
 /* String builtins (formerly static in eval.c, now in str_builtin.c) */
 ray_t* ray_split_fn(ray_t* str, ray_t* delim);
@@ -378,9 +378,9 @@ ray_t* ray_unify_fn(ray_t* a, ray_t* b);
 ray_t* ray_concat_fn(ray_t* a, ray_t* b);
 
 /* Temporal builtins (formerly static in eval.c, now in temporal.c) */
-ray_t* ray_date_clock(ray_t* arg);
-ray_t* ray_time_clock(ray_t* arg);
-ray_t* ray_timestamp_clock(ray_t* arg);
+ray_t* ray_date_clock_fn(ray_t* arg);
+ray_t* ray_time_clock_fn(ray_t* arg);
+ray_t* ray_timestamp_clock_fn(ray_t* arg);
 
 /* Sort builtins (formerly static in eval.c, now in sort.c) */
 ray_t* ray_asc_fn(ray_t* x);
@@ -410,8 +410,8 @@ ray_t* ray_dl_provenance_fn(ray_t* prog_obj, ray_t* pred_obj);
 void   ray_dl_reset_rules(void);
 
 /* System builtins (formerly static in eval.c, now in system.c) */
-ray_t* ray_eval_builtin(ray_t* x);
-ray_t* ray_parse_builtin(ray_t* x);
+ray_t* ray_eval_builtin_fn(ray_t* x);
+ray_t* ray_parse_builtin_fn(ray_t* x);
 ray_t* ray_print_fn(ray_t* x);
 ray_t* ray_meta_fn(ray_t* x);
 ray_t* ray_gc_fn(ray_t* x);
@@ -444,8 +444,8 @@ ray_t* ray_guid_fn(ray_t* n_arg);
 ray_t* ray_group_fn(ray_t* x);
 
 /* I/O and formatting builtins (formerly in eval.c, now in ops/builtins.c) */
-ray_t* ray_println(ray_t** args, int64_t n);
-ray_t* ray_show(ray_t** args, int64_t n);
+ray_t* ray_println_fn(ray_t** args, int64_t n);
+ray_t* ray_show_fn(ray_t** args, int64_t n);
 ray_t* ray_format_fn(ray_t** args, int64_t n);
 ray_t* ray_resolve_fn(ray_t** args, int64_t n);
 ray_t* ray_timeit_fn(ray_t** args, int64_t n);
@@ -454,9 +454,9 @@ ray_t* ray_read_csv_fn(ray_t** args, int64_t n);
 ray_t* ray_write_csv_fn(ray_t** args, int64_t n);
 ray_t* ray_cast_fn(ray_t* type_sym, ray_t* val);
 ray_t* ray_type_fn(ray_t* val);
-ray_t* ray_read_file(ray_t* path_obj);
-ray_t* ray_load_file(ray_t* path_obj);
-ray_t* ray_write_file(ray_t* path_obj, ray_t* content);
+ray_t* ray_read_file_fn(ray_t* path_obj);
+ray_t* ray_load_file_fn(ray_t* path_obj);
+ray_t* ray_write_file_fn(ray_t* path_obj, ray_t* content);
 
 /* Misc builtins (formerly in eval.c, now in ops/builtins.c) */
 ray_t* ray_dict_fn(ray_t* keys, ray_t* vals);
@@ -468,14 +468,14 @@ ray_t* ray_fdiv_fn(ray_t* a, ray_t* b);
 
 /* Query bridge builtins (formerly in eval.c, now in ops/query.c) */
 ray_t* ray_select_fn(ray_t** args, int64_t n);
-ray_t* ray_update(ray_t** args, int64_t n);
-ray_t* ray_insert(ray_t** args, int64_t n);
-ray_t* ray_upsert(ray_t** args, int64_t n);
-ray_t* ray_xbar(ray_t* col, ray_t* bucket);
-ray_t* ray_left_join(ray_t** args, int64_t n);
-ray_t* ray_inner_join(ray_t** args, int64_t n);
-ray_t* ray_antijoin_fn(ray_t** args, int64_t n);
-ray_t* ray_window_join(ray_t** args, int64_t n);
+ray_t* ray_update_fn(ray_t** args, int64_t n);
+ray_t* ray_insert_fn(ray_t** args, int64_t n);
+ray_t* ray_upsert_fn(ray_t** args, int64_t n);
+ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket);
+ray_t* ray_left_join_fn(ray_t** args, int64_t n);
+ray_t* ray_inner_join_fn(ray_t** args, int64_t n);
+ray_t* ray_anti_join_fn(ray_t** args, int64_t n);
+ray_t* ray_window_join_fn(ray_t** args, int64_t n);
 ray_t* ray_asof_join_fn(ray_t** args, int64_t n);
 
 /* Convenience wrapper: atomic_map_binary with no DAG opcode */

@@ -83,7 +83,7 @@ static uint16_t resolve_agg_opcode(int64_t sym_id) {
 /* Apply sort (asc/desc) and take clauses to a materialized result table.
  * Used by eval-level paths that bypass the DAG (e.g., LIST/STR group keys).
  * Builds a temporary DAG for sorting (supports per-column direction flags)
- * and applies take via ray_head/ray_tail or ray_take. */
+ * and applies take via ray_head/ray_tail or ray_take_fn. */
 static ray_t* apply_sort_take(ray_t* result, ray_t** dict_elems, int64_t dict_n,
                               int64_t asc_id, int64_t desc_id, int64_t take_id) {
     if (!result || RAY_IS_ERR(result)) return result;
@@ -134,7 +134,7 @@ static ray_t* apply_sort_take(ray_t* result, ray_t** dict_elems, int64_t dict_n,
             root = ray_sort_op(g, root, sort_keys, sort_descs, NULL, n_sort);
     }
 
-    /* Take (atom → DAG head/tail, vector → post-execute ray_take) */
+    /* Take (atom → DAG head/tail, vector → post-execute ray_take_fn) */
     ray_t* take_range = NULL;
     if (take_val_expr) {
         ray_t* tv = ray_eval(take_val_expr);
@@ -158,7 +158,7 @@ static ray_t* apply_sort_take(ray_t* result, ray_t** dict_elems, int64_t dict_n,
     ray_release(result);
 
     if (take_range && sorted && !RAY_IS_ERR(sorted)) {
-        ray_t* sliced = ray_take(sorted, take_range);
+        ray_t* sliced = ray_take_fn(sorted, take_range);
         ray_release(sorted);
         ray_release(take_range);
         return sliced;
@@ -431,7 +431,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
                 ray_t** grp_items = (ray_t**)ray_data(groups);
                 for (int64_t gi = 0; gi < n_groups; gi++) {
                     ray_t* idx_list = grp_items[gi * 2 + 1];
-                    ray_t* subset = ray_at(src_col_val, idx_list);
+                    ray_t* subset = ray_at_fn(src_col_val, idx_list);
                     if (RAY_IS_ERR(subset)) continue;
                     ray_t* agg_val = NULL;
                     ray_t* fn_obj = ray_env_get(agg_fn_name->i64);
@@ -989,7 +989,7 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 
     /* Post-process: range take [start count] applied after execution */
     if (take_range && result && !RAY_IS_ERR(result)) {
-        ray_t* sliced = ray_take(result, take_range);
+        ray_t* sliced = ray_take_fn(result, take_range);
         ray_release(result);
         ray_release(take_range);
         result = sliced;
@@ -1087,10 +1087,10 @@ ray_t* ray_select_fn(ray_t** args, int64_t n) {
 }
 
 /* (xbar col bucket) — time/value bucketing: floor(col/bucket)*bucket */
-ray_t* ray_xbar(ray_t* col, ray_t* bucket) {
+ray_t* ray_xbar_fn(ray_t* col, ray_t* bucket) {
     /* Recursive unwrap for nested collections (list of vectors) */
     if (is_collection(col) || is_collection(bucket))
-        return atomic_map_binary(ray_xbar, col, bucket);
+        return atomic_map_binary(ray_xbar_fn, col, bucket);
     /* Both are integer types (i64, i32, i16) → integer xbar */
     if (is_numeric(col) && is_numeric(bucket) && !is_float_op(col, bucket)) {
         int64_t a = as_i64(col), b = as_i64(bucket);
@@ -1176,7 +1176,7 @@ static ray_t* append_atom_to_col(ray_t* col_vec, ray_t* atom) {
  * and replace those column values. Returns a new table. */
 /* Forward declarations */
 
-ray_t* ray_update(ray_t** args, int64_t n) {
+ray_t* ray_update_fn(ray_t** args, int64_t n) {
     if (n < 1) return ray_error("domain", NULL);
     ray_t* dict = args[0];
     if (!dict || dict->type != RAY_LIST || !(dict->attrs & RAY_ATTR_DICT))
@@ -1783,7 +1783,7 @@ no_where_add_col:
 }
 
 /* (insert table (list val1 val2 ...)) — append a row to a table */
-ray_t* ray_insert(ray_t** args, int64_t n) {
+ray_t* ray_insert_fn(ray_t** args, int64_t n) {
     if (n < 2) return ray_error("domain", NULL);
 
     /* Special form: detect 'sym (quoted symbol for in-place insert) */
@@ -1986,7 +1986,7 @@ ray_t* ray_insert(ray_t** args, int64_t n) {
 
 /* (upsert table key_col (list val1 val2 ...)) — update row if key matches, else insert.
  * Special form: first arg may be 'sym for in-place, other args are evaluated. */
-ray_t* ray_upsert(ray_t** args, int64_t n) {
+ray_t* ray_upsert_fn(ray_t** args, int64_t n) {
     if (n < 3) return ray_error("domain", NULL);
 
     /* Detect calling convention: already-evaluated args (from recursive call) vs raw parse tree */
@@ -2042,7 +2042,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
                 if (!alloc && sr[c]) ray_retain(sr[c]);
             }
             ray_t* upsert_args[3] = { cur_tbl, key_sym, single };
-            ray_t* new_tbl = ray_upsert(upsert_args, 3);
+            ray_t* new_tbl = ray_upsert_fn(upsert_args, 3);
             for (int64_t c = 0; c < ncols; c++) if (sr[c]) ray_release(sr[c]);
             single->len = 0;
             ray_free(single);
@@ -2138,7 +2138,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
             }
             /* Upsert single row into current table */
             ray_t* upsert_args[3] = { cur_tbl, key_sym, single_row };
-            ray_t* new_tbl = ray_upsert(upsert_args, 3);
+            ray_t* new_tbl = ray_upsert_fn(upsert_args, 3);
             /* Clean up single_row */
             for (int64_t c = 0; c < ncols; c++) if (sr[c]) ray_release(sr[c]);
             single_row->len = 0;
@@ -2210,7 +2210,7 @@ ray_t* ray_upsert(ray_t** args, int64_t n) {
     if (match_row < 0) {
         /* Key not found — insert: pass pre-evaluated args */
         ray_t* insert_args[2] = { tbl, row };
-        ray_t* result = ray_insert(insert_args, 2);
+        ray_t* result = ray_insert_fn(insert_args, 2);
         ray_release(tbl);
         ray_release(key_sym);
         ray_release(row);
@@ -2349,8 +2349,8 @@ static ray_t* join_impl(ray_t** args, int64_t n, uint8_t join_type) {
     return result;
 }
 
-ray_t* ray_left_join(ray_t** args, int64_t n)  { return join_impl(args, n, 1); }
-ray_t* ray_inner_join(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
+ray_t* ray_left_join_fn(ray_t** args, int64_t n)  { return join_impl(args, n, 1); }
+ray_t* ray_inner_join_fn(ray_t** args, int64_t n) { return join_impl(args, n, 0); }
 
 /* (antijoin left right [keys])
  * Anti-semi-join: keep rows from left that have NO match in right on keys. */
@@ -2410,12 +2410,12 @@ static ray_t* antijoin_impl(ray_t** args, int64_t n) {
     return result;
 }
 
-ray_t* ray_antijoin_fn(ray_t** args, int64_t n) { return antijoin_impl(args, n); }
+ray_t* ray_anti_join_fn(ray_t** args, int64_t n) { return antijoin_impl(args, n); }
 
 /* (window-join t1 t2 [eq-keys] time-col)
  * ASOF join: for each left row, find closest right row with time <= left.time
  * within the same equality partition. */
-ray_t* ray_window_join(ray_t** args, int64_t n) {
+ray_t* ray_window_join_fn(ray_t** args, int64_t n) {
     if (n < 4) return ray_error("domain", NULL);
 
     /* Special form: evaluate first 4 args, keep agg dict (args[4]) unevaluated */

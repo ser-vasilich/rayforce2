@@ -302,7 +302,7 @@ static time_t ray_epoch_offset(void) {
 }
 
 /* (date 'local) or (date 'global) — returns current date as DATE atom (days since 2000.01.01) */
-ray_t* ray_date_clock(ray_t* arg) {
+ray_t* ray_date_clock_fn(ray_t* arg) {
     bool local = !is_global_arg(arg);
     time_t now = time(NULL);
     struct tm* t = local ? localtime(&now) : gmtime(&now);
@@ -326,7 +326,7 @@ ray_t* ray_date_clock(ray_t* arg) {
 }
 
 /* (time 'local) or (time 'global) — returns current time as TIME atom (ms since midnight) */
-ray_t* ray_time_clock(ray_t* arg) {
+ray_t* ray_time_clock_fn(ray_t* arg) {
     bool local = !is_global_arg(arg);
     time_t now = time(NULL);
     struct tm* t = local ? localtime(&now) : gmtime(&now);
@@ -337,7 +337,7 @@ ray_t* ray_time_clock(ray_t* arg) {
 }
 
 /* (timestamp 'local) or (timestamp 'global) — returns current timestamp (ns since 2000.01.01) */
-ray_t* ray_timestamp_clock(ray_t* arg) {
+ray_t* ray_timestamp_clock_fn(ray_t* arg) {
     bool local = !is_global_arg(arg);
     time_t now = time(NULL);
     struct tm* t = local ? localtime(&now) : gmtime(&now);
