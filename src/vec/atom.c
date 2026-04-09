@@ -164,6 +164,7 @@ ray_t* ray_timestamp(int64_t val) {
 }
 
 ray_t* ray_typed_null(int8_t type) {
+    if (type >= 0) return ray_error("type", NULL);
     ray_t* v = ray_alloc(0);
     if (RAY_IS_ERR(v)) return v;
     v->type = type;

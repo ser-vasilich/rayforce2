@@ -822,51 +822,10 @@ typedef struct {
     ray_t*  vec;
 } agg_out_t;
 
-/* Thread-safe null bit set for parallel group-by execution.
- * Only touches nullmap bytes (atomically). Does NOT modify vec->attrs —
- * call grp_finalize_nulls after all threads have joined. */
-static inline void grp_set_null(ray_t* vec, int64_t idx) {
-    if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
-        if (idx >= 128) return; /* ext nullmap not allocated (OOM) — skip */
-        int byte_idx = (int)(idx / 8);
-        int bit_idx  = (int)(idx % 8);
-        __atomic_fetch_or(&vec->nullmap[byte_idx],
-                          (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
-        return;
-    }
-    ray_t* ext = vec->ext_nullmap;
-    uint8_t* bits = (uint8_t*)ray_data(ext);
-    int byte_idx = (int)(idx / 8);
-    int bit_idx  = (int)(idx % 8);
-    __atomic_fetch_or(&bits[byte_idx],
-                      (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
-}
-
-static ray_err_t grp_prepare_nullmap(ray_t* vec) {
-    if (vec->len <= 128) return RAY_OK;
-    ray_err_t err = ray_vec_set_null_checked(vec, 0, true);
-    if (err != RAY_OK) return err;
-    ray_vec_set_null_checked(vec, 0, false);
-    vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
-    return RAY_OK;
-}
-
-static void grp_finalize_nulls(ray_t* vec) {
-    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
-        ray_t* ext = vec->ext_nullmap;
-        uint8_t* bits = (uint8_t*)ray_data(ext);
-        int64_t nbytes = (vec->len + 7) / 8;
-        for (int64_t i = 0; i < nbytes; i++) {
-            if (bits[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
-        }
-    } else {
-        int64_t nbytes = (vec->len + 7) / 8;
-        if (nbytes > 16) nbytes = 16;
-        for (int64_t i = 0; i < nbytes; i++) {
-            if (vec->nullmap[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
-        }
-    }
-}
+/* Aliases for shared parallel null helpers from internal.h */
+#define grp_set_null       par_set_null
+#define grp_prepare_nullmap par_prepare_nullmap
+#define grp_finalize_nulls par_finalize_nulls
 
 typedef struct {
     group_ht_t*   part_hts;
@@ -3142,7 +3101,7 @@ ht_path:;
         }
 
         /* Fixup: if nullmap prep failed for any VAR/STDDEV agg, re-scan
-         * hash tables sequentially to set null bits that grp_set_null skipped */
+         * hash tables sequentially to ensure all null bits were set */
         for (uint8_t a = 0; a < n_aggs; a++) {
             if (nullmap_prep_ok[a] || !agg_cols[a]) continue;
             uint16_t op = agg_outs[a].agg_op;

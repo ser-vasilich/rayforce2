@@ -948,9 +948,60 @@ ray_t* expr_eval_full(const ray_expr_t* expr, int64_t nrows) {
  * Null bitmap propagation for element-wise ops
  * ============================================================================ */
 
-/* Copy null bitmap from src vector to dst vector (OR-merge).
- * ray_vec_is_null handles slices (delegates to parent with offset). */
+/* Resolve the raw null bitmap pointer and bit offset for a vector.
+ * Returns NULL if the vector has no null bits, or if the inline nullmap
+ * cannot cover the requested range (prevents overread). */
+static const uint8_t* nullmap_bits(ray_t* v, int64_t* bit_offset, int64_t len) {
+    ray_t* target = v;
+    int64_t off = 0;
+    if (v->attrs & RAY_ATTR_SLICE) {
+        target = v->slice_parent;
+        off = v->slice_offset;
+    }
+    if (!(target->attrs & RAY_ATTR_HAS_NULLS)) return NULL;
+    *bit_offset = off;
+    if (target->attrs & RAY_ATTR_NULLMAP_EXT)
+        return (const uint8_t*)ray_data(target->ext_nullmap);
+    if (target->type == RAY_STR) return NULL;
+    /* Inline nullmap is 16 bytes (128 bits) — reject if range exceeds it */
+    if (off + len > 128) return NULL;
+    return target->nullmap;
+}
+
+/* Writable null bitmap pointer for freshly allocated (non-slice) dst vector.
+ * Returns NULL if inline nullmap cannot cover dst->len (prevents overflow). */
+static uint8_t* nullmap_bits_mut(ray_t* dst) {
+    if (dst->attrs & RAY_ATTR_NULLMAP_EXT)
+        return (uint8_t*)ray_data(dst->ext_nullmap);
+    if (dst->type == RAY_STR) return NULL;
+    if (dst->len > 128) return NULL; /* inline can only cover 128 bits */
+    return dst->nullmap;
+}
+
+/* OR-merge null bitmap from src into dst. Fast byte-level path when possible,
+ * element-level fallback for misaligned slices or RAY_STR without ext nullmap. */
 static void propagate_nulls(ray_t* src, ray_t* dst, int64_t len) {
+    int64_t src_off = 0;
+    const uint8_t* sbits = nullmap_bits(src, &src_off, len);
+    if (!sbits) goto slow; /* no accessible bitmap — use element path */
+
+    /* Ensure dst has ext nullmap for large vectors */
+    if (len > 128 && !(dst->attrs & RAY_ATTR_NULLMAP_EXT))
+        ray_vec_set_null(dst, len - 1, false); /* force ext alloc */
+    uint8_t* dbits = nullmap_bits_mut(dst);
+    if (!dbits) goto slow; /* ext alloc failed or RAY_STR */
+
+    /* Bulk OR — both bitmaps are byte-accessible and src is byte-aligned */
+    if ((src_off % 8) == 0) {
+        int64_t byte_start = src_off / 8;
+        int64_t nbytes = (len + 7) / 8;
+        for (int64_t b = 0; b < nbytes; b++)
+            dbits[b] |= sbits[byte_start + b];
+        dst->attrs |= RAY_ATTR_HAS_NULLS;
+        return;
+    }
+
+slow:
     for (int64_t i = 0; i < len; i++) {
         if (ray_vec_is_null(src, i))
             ray_vec_set_null(dst, i, true);
@@ -1008,13 +1059,26 @@ static void clear_null_comparisons(ray_t* lhs, ray_t* rhs, ray_t* result,
     }
 }
 
+/* Set all elements in result as null (scalar null broadcast). */
+static void set_all_null(ray_t* result, int64_t len) {
+    if (len > 128 && !(result->attrs & RAY_ATTR_NULLMAP_EXT))
+        ray_vec_set_null(result, len - 1, false); /* force ext alloc */
+    uint8_t* dbits = nullmap_bits_mut(result);
+    if (dbits) {
+        memset(dbits, 0xFF, (size_t)((len + 7) / 8));
+        result->attrs |= RAY_ATTR_HAS_NULLS;
+    } else {
+        for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
+    }
+}
+
 /* Propagate null bitmaps for binary ops: null in either operand → null in result. */
 static void propagate_nulls_binary(ray_t* lhs, ray_t* rhs, ray_t* result,
                                    bool l_scalar, bool r_scalar, int64_t len) {
     if (l_scalar && scalar_is_null(lhs)) {
-        for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
+        set_all_null(result, len);
     } else if (r_scalar && scalar_is_null(rhs)) {
-        for (int64_t i = 0; i < len; i++) ray_vec_set_null(result, i, true);
+        set_all_null(result, len);
     } else {
         if (!l_scalar && vec_may_have_nulls(lhs)) propagate_nulls(lhs, result, len);
         if (!r_scalar && vec_may_have_nulls(rhs)) propagate_nulls(rhs, result, len);

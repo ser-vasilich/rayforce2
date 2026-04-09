@@ -38,8 +38,8 @@ static MunitResult test_rf_basic(const void* params, void* fixture) {
     ASSERT_EQ("\"\"", "\"\"");
     ASSERT_EQ("'asd", "'asd");
     ASSERT_EQ("'", "0Ns");
-    ASSERT_EQ("(as 'STR ')", "null");
-    ASSERT_EQ("(as 'STR ' )", "null");
+    ASSERT_EQ("(as 'STR ')", "\"\"");
+    ASSERT_EQ("(as 'STR ' )", "\"\"");
     ASSERT_EQ("\"asd\"", "\"asd\"");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3]}", "{a: \"asd\" b: 1 c: [1 2 3]}");
     ASSERT_EQ("{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}", "{a: \"asd\" b: 1 c: [1 2 3] d: {e: 1 f: 2}}");
@@ -4590,6 +4590,11 @@ static MunitResult test_rf_null(const void* params, void* fixture) {
         "(set t (table [a b] (list [1 0Nl 3] [4 5 6])))"
         "(at (at t 'a) 1)",
         "0Nl");
+
+    // ========== INT64_MIN IS A VALID VALUE (not a sentinel) ==========
+    ASSERT_EQ("(+ 0 -9223372036854775807)", "-9223372036854775807");
+    ASSERT_EQ("(- 0 9223372036854775807)", "-9223372036854775807");
+
     return MUNIT_OK;
 }
 

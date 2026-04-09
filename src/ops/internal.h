@@ -637,4 +637,58 @@ ray_t* materialize_mapcommon_filter(ray_t* mc, ray_t* pred, int64_t pass_count);
 ray_t* broadcast_scalar(ray_t* atom, int64_t nrows);
 ray_t* exec_node(ray_graph_t* g, ray_op_t* op);
 
+/* ══════════════════════════════════════════
+ * Thread-safe null bitmap helpers (parallel group/window)
+ * ══════════════════════════════════════════ */
+
+/* Atomically set a null bit. For idx >= 128 without ext nullmap, falls back
+ * to ray_vec_set_null (lazy alloc). Safe because OOM forces sequential path. */
+static inline void par_set_null(ray_t* vec, int64_t idx) {
+    if (!(vec->attrs & RAY_ATTR_NULLMAP_EXT)) {
+        if (idx >= 128) {
+            ray_vec_set_null(vec, idx, true);
+            return;
+        }
+        int byte_idx = (int)(idx / 8);
+        int bit_idx  = (int)(idx % 8);
+        __atomic_fetch_or(&vec->nullmap[byte_idx],
+                          (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+        return;
+    }
+    ray_t* ext = vec->ext_nullmap;
+    uint8_t* bits = (uint8_t*)ray_data(ext);
+    int byte_idx = (int)(idx / 8);
+    int bit_idx  = (int)(idx % 8);
+    __atomic_fetch_or(&bits[byte_idx],
+                      (uint8_t)(1u << bit_idx), __ATOMIC_RELAXED);
+}
+
+/* Pre-allocate external nullmap so parallel threads can set bits safely. */
+static inline ray_err_t par_prepare_nullmap(ray_t* vec) {
+    if (vec->len <= 128) return RAY_OK;
+    ray_err_t err = ray_vec_set_null_checked(vec, 0, true);
+    if (err != RAY_OK) return err;
+    ray_vec_set_null_checked(vec, 0, false);
+    vec->attrs &= (uint8_t)~RAY_ATTR_HAS_NULLS;
+    return RAY_OK;
+}
+
+/* Scan nullmap after parallel execution; set RAY_ATTR_HAS_NULLS if any bit set. */
+static inline void par_finalize_nulls(ray_t* vec) {
+    if (vec->attrs & RAY_ATTR_NULLMAP_EXT) {
+        ray_t* ext = vec->ext_nullmap;
+        uint8_t* bits = (uint8_t*)ray_data(ext);
+        int64_t nbytes = (vec->len + 7) / 8;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (bits[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    } else {
+        int64_t nbytes = (vec->len + 7) / 8;
+        if (nbytes > 16) nbytes = 16;
+        for (int64_t i = 0; i < nbytes; i++) {
+            if (vec->nullmap[i]) { vec->attrs |= RAY_ATTR_HAS_NULLS; return; }
+        }
+    }
+}
+
 #endif /* RAY_EXEC_INTERNAL_H */
