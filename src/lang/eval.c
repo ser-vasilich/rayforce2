@@ -616,6 +616,7 @@ ray_t* atomic_map_unary(ray_unary_fn fn, ray_t* arg) {
 /* Helper: call a function object with 1 arg, returning result.
  * Handles UNARY, BINARY, LAMBDA types. Does not release fn or arg. */
 ray_t* call_fn1(ray_t* fn, ray_t* arg) {
+    if (fn_is_restricted(fn)) return ray_error("access", "restricted");
     if (fn->type == RAY_UNARY) {
         ray_unary_fn f = (ray_unary_fn)(uintptr_t)fn->i64;
         return f(arg);
@@ -629,6 +630,7 @@ ray_t* call_fn1(ray_t* fn, ray_t* arg) {
 
 /* Helper: call a function object with 2 args. Does not release fn or args. */
 ray_t* call_fn2(ray_t* fn, ray_t* a, ray_t* b) {
+    if (fn_is_restricted(fn)) return ray_error("access", "restricted");
     if (fn->type == RAY_BINARY) {
         ray_binary_fn f = (ray_binary_fn)(uintptr_t)fn->i64;
         if ((fn->attrs & RAY_FN_ATOMIC) && (is_collection(a) || is_collection(b)))

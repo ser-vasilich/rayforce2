@@ -1959,6 +1959,14 @@ static MunitResult test_ipc_restricted(const void* params, void* fixture) {
     munit_assert_true(RAY_IS_ERR(r3));
     ray_release(r3);
 
+    /* restricted builtins via higher-order functions (map bypass) */
+    ray_t* msg4 = ray_str("(map system [\"echo pwned\"])", 27);
+    ray_t* r4 = ray_ipc_send(h, msg4);
+    ray_release(msg4);
+    munit_assert_ptr_not_null(r4);
+    munit_assert_true(RAY_IS_ERR(r4));
+    ray_release(r4);
+
     ray_ipc_close(h);
     srv.running = false;
     ray_thread_join(tid);
