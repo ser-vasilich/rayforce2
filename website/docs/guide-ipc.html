@@ -189,8 +189,8 @@
       </div>
 
       <!-- 4. Dynamic Queries -->
-      <h2 id="sending-objects">4. Dynamic Queries</h2>
-      <p><code>hsend</code> accepts any serializable value, not just strings. Since Rayfall is homoiconic &mdash; code is data &mdash; you can build queries as lists on the client and send them for server-side evaluation. This is the idiomatic way to parameterize queries without string concatenation.</p>
+      <h2 id="sending-objects">4. Dynamic Queries &amp; Expression Payloads</h2>
+      <p><code>hsend</code> accepts any serializable value, not just strings. The server behavior depends on what you send:</p>
 
       <table>
         <thead>
@@ -200,58 +200,54 @@
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>String</td>
-            <td>Parsed as Rayfall code and evaluated</td>
-          </tr>
-          <tr>
-            <td>List (expression)</td>
-            <td>Evaluated directly as code &mdash; no parsing step</td>
-          </tr>
+          <tr><td>String</td><td>Parsed as Rayfall code and evaluated</td></tr>
+          <tr><td>List with function head</td><td>Evaluated as a function call &mdash; no parsing needed</td></tr>
+          <tr><td>Data (vector, table, atom)</td><td>Evaluated as identity &mdash; returned as-is</td></tr>
         </tbody>
       </table>
 
-      <h3>The problem with strings</h3>
-      <p>String queries work fine for static expressions, but become fragile when you need to inject dynamic values:</p>
-      <pre><code><span class="hl-comment">;; Awkward: building a query string with dynamic parameters</span>
-(<span class="hl-kw">set</span> col <span class="hl-sym">'price</span>)
-(<span class="hl-kw">set</span> threshold <span class="hl-num">100</span>)
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">concat</span> <span class="hl-str">"(select {from: trades where: (&gt; "</span>
-                 (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> col) <span class="hl-str">" "</span>
-                 (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> threshold) <span class="hl-str">")})"</span>))</code></pre>
+      <h3>Parameterized string queries</h3>
+      <p>For <code>select</code>, <code>update</code>, and other special forms, use <code>format</code> to inject dynamic values into query strings:</p>
+      <pre><code><span class="hl-comment">;; Dynamic filter threshold</span>
+(<span class="hl-kw">set</span> threshold <span class="hl-num">200</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">format</span> <span class="hl-str">"(select {from: trades where: (&gt; price %d)})"</span> threshold))
+<span class="hl-comment">;; =&gt; trades where price &gt; 200</span>
+
+<span class="hl-comment">;; Dynamic grouping column</span>
+(<span class="hl-kw">set</span> group-col <span class="hl-str">"sym"</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">format</span> <span class="hl-str">"(select {from: trades by: %s total: (sum qty)})"</span> group-col))
+
+<span class="hl-comment">;; Dynamic symbol filter</span>
+(<span class="hl-kw">set</span> sym <span class="hl-sym">'AAPL</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">format</span> <span class="hl-str">"(select {from: trades where: (= sym '%s)})"</span> sym))</code></pre>
 
       <h3>Expression payloads</h3>
-      <p>Build the query as a list instead. The server evaluates it directly as code:</p>
-      <pre><code><span class="hl-comment">;; Clean: construct the expression as data</span>
-(<span class="hl-kw">set</span> col <span class="hl-sym">'price</span>)
-(<span class="hl-kw">set</span> threshold <span class="hl-num">100</span>)
+      <p>For regular (non-special-form) builtins, you can construct executable lists on the client. Use the builtin itself as the list head &mdash; it resolves to the function object, which serializes and evaluates on the server:</p>
+      <pre><code><span class="hl-comment">;; Arithmetic — + resolves to the builtin, not a symbol</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> + <span class="hl-num">1</span> <span class="hl-num">2</span>))
+<span class="hl-comment">;; =&gt; 3</span>
 
-(<span class="hl-kw">set</span> query (<span class="hl-fn">list</span> <span class="hl-sym">'select</span>
-  {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'&gt;</span> col threshold)}))
+<span class="hl-comment">;; Server-side map with a lambda</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> map (<span class="hl-kw">fn</span> [x] (* x <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> til <span class="hl-num">10</span>)))
+<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span>
 
-(<span class="hl-fn">hsend</span> h query)
-<span class="hl-comment">;; =&gt; trades where price &gt; 100</span></code></pre>
-
-      <h3>Parameterized patterns</h3>
-      <pre><code><span class="hl-comment">;; Change the grouping column at runtime</span>
-(<span class="hl-kw">set</span> group-by <span class="hl-sym">'sym</span>)
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'select</span>
-  {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">by:</span> group-by <span class="hl-sym">total:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'sum</span> <span class="hl-sym">'qty</span>)}))
-
-<span class="hl-comment">;; Build a filter from user input</span>
-(<span class="hl-kw">set</span> syms [<span class="hl-sym">AAPL</span> <span class="hl-sym">GOOG</span>])
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'select</span>
-  {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'in</span> <span class="hl-sym">'sym</span> syms)}))
-
-<span class="hl-comment">;; Send a function for server-side map</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'map</span>
-  (<span class="hl-fn">list</span> <span class="hl-sym">'fn</span> [<span class="hl-sym">'x</span>] (<span class="hl-fn">list</span> <span class="hl-sym">'*</span> <span class="hl-sym">'x</span> <span class="hl-num">2</span>))
-  (<span class="hl-fn">list</span> <span class="hl-sym">'til</span> <span class="hl-num">10</span>)))
-<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span></code></pre>
+<span class="hl-comment">;; Remote count</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> count (<span class="hl-fn">eval</span> <span class="hl-sym">'trades</span>)))
+<span class="hl-comment">;; =&gt; row count of server-side trades table</span></code></pre>
 
       <div class="info-box">
-        <strong>Why this works.</strong> Rayfall lists are executable &mdash; <code>(list '+ 1 2)</code> creates the expression <code>(+ 1 2)</code>. When the server receives a list, it calls <code>ray_eval</code> on it, executing it as code. Quoted symbols (<code>'select</code>, <code>'trades</code>) prevent client-side evaluation. See <a href="ipc.html">IPC &amp; Serialization</a> for the wire format.
+        <strong>Special forms.</strong> <code>select</code>, <code>update</code>, and <code>insert</code> are special forms that require unevaluated AST for column references. They cannot be sent as expression lists &mdash; use parameterized string queries for these.
       </div>
+
+      <h3>Sending data</h3>
+      <p>Data values round-trip through serialization:</p>
+      <pre><code><span class="hl-comment">;; Send a vector</span>
+(<span class="hl-fn">hsend</span> h [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>])
+<span class="hl-comment">;; =&gt; [1 2 3]</span>
+
+<span class="hl-comment">;; Send a table</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">table</span> [<span class="hl-sym">a</span> <span class="hl-sym">b</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span>] [<span class="hl-num">3</span> <span class="hl-num">4</span>])))
+<span class="hl-comment">;; =&gt; table round-tripped through serialization</span></code></pre>
 
       <!-- 5. Authentication -->
       <h2 id="authentication">5. Authentication</h2>

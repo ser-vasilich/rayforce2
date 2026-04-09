@@ -224,32 +224,34 @@
 (<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym total: (sum qty) avg_px: (avg price)})"</span>)
 <span class="hl-comment">;; =&gt; per-symbol totals</span></code></pre>
 
-      <h4>Expression payloads (dynamic queries)</h4>
-      <p>Non-string payloads are evaluated directly on the server. Since Rayfall is homoiconic &mdash; code is data &mdash; you can build queries as lists on the client and send them for server-side evaluation. This avoids fragile string concatenation.</p>
+      <h4>Expression payloads</h4>
+      <p>Non-string values are evaluated directly on the server via <code>ray_eval</code>. You can construct executable lists on the client by using builtin function objects (not symbols) as list heads. The arguments are evaluated client-side, so only concrete values travel over the wire:</p>
 
-      <pre><code><span class="hl-comment">;; Build a query dynamically on the client</span>
-(<span class="hl-kw">set</span> col <span class="hl-sym">'price</span>)
-(<span class="hl-kw">set</span> threshold <span class="hl-num">100</span>)
+      <pre><code><span class="hl-comment">;; Builtin references resolve to function objects — use them as list heads</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> + <span class="hl-num">1</span> <span class="hl-num">2</span>))
+<span class="hl-comment">;; =&gt; 3  (server evaluates the list [+fn 1 2])</span>
 
-<span class="hl-comment">;; Construct the expression as a list</span>
-(<span class="hl-kw">set</span> query (<span class="hl-fn">list</span> <span class="hl-sym">'select</span> {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'&gt;</span> col threshold)}))
+<span class="hl-comment">;; Dynamic map over server-side data</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> map (<span class="hl-kw">fn</span> [x] (* x <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> til <span class="hl-num">10</span>)))
+<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span>
 
-<span class="hl-comment">;; Send the list — server evaluates it as code</span>
-(<span class="hl-fn">hsend</span> h query)
-<span class="hl-comment">;; =&gt; trades where price &gt; 100</span></code></pre>
+<span class="hl-comment">;; Parameterized count</span>
+(<span class="hl-kw">set</span> tbl <span class="hl-sym">'trades</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> count (<span class="hl-fn">eval</span> tbl)))
+<span class="hl-comment">;; =&gt; row count of remote trades table</span></code></pre>
 
-      <p>Compare with the string equivalent, which requires manual interpolation:</p>
-      <pre><code><span class="hl-comment">;; String approach — awkward with dynamic values</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">concat</span> <span class="hl-str">"(select {from: trades where: (&gt; "</span> (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> col) <span class="hl-str">" "</span> (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> threshold) <span class="hl-str">")})"</span>))</code></pre>
+      <div class="info-box">
+        <strong>Special forms.</strong> <code>select</code>, <code>update</code>, <code>insert</code>, and other special forms cannot be sent as expression lists &mdash; they require unevaluated AST for column references. Use string queries for <code>select</code>:
+        <pre><code>(<span class="hl-fn">hsend</span> h (<span class="hl-fn">format</span> <span class="hl-str">"(select {from: trades where: (&gt; price %d)})"</span> threshold))</code></pre>
+      </div>
 
-      <p>Expression payloads are the idiomatic way to send parameterized queries:</p>
-      <pre><code><span class="hl-comment">;; Parameterized aggregation — change the grouping column at runtime</span>
-(<span class="hl-kw">set</span> group-by <span class="hl-sym">'sym</span>)
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'select</span> {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">by:</span> group-by <span class="hl-sym">total:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'sum</span> <span class="hl-sym">'qty</span>)}))
+      <h4>Sending data</h4>
+      <p>Data values (vectors, tables, atoms) can be sent directly and round-trip through serialization:</p>
+      <pre><code>(<span class="hl-fn">hsend</span> h [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>])
+<span class="hl-comment">;; =&gt; [1 2 3]</span>
 
-<span class="hl-comment">;; Send a function for server-side application</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'map</span> (<span class="hl-fn">list</span> <span class="hl-sym">'fn</span> [<span class="hl-sym">'x</span>] (<span class="hl-fn">list</span> <span class="hl-sym">'*</span> <span class="hl-sym">'x</span> <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> <span class="hl-sym">'til</span> <span class="hl-num">10</span>)))
-<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span></code></pre>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">table</span> [<span class="hl-sym">a</span> <span class="hl-sym">b</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span>] [<span class="hl-num">3</span> <span class="hl-num">4</span>])))
+<span class="hl-comment">;; =&gt; table round-tripped through serialization</span></code></pre>
 
       <h3>hclose</h3>
       <pre><code><span class="hl-comment">;; Close the connection</span>
