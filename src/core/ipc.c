@@ -158,7 +158,9 @@ static bool ct_eq(const void* a, const void* b, size_t len) {
 
 /* Validate credential buffer against secret. Returns true if password matches.
  * creds is "user:password\0" with length cred_len.
- * Uses fixed-size buffers so timing reveals nothing about the secret. */
+ * secret MUST point to a char[256] buffer (zero-padded beyond the password).
+ * Compares pw against the full 256-byte secret buffer in constant time.
+ * No strlen, no secret-length-dependent copies. */
 static bool validate_creds(const uint8_t* buf, uint8_t cred_len,
                            const char* secret) {
     if (cred_len == 0) return false;
@@ -167,20 +169,14 @@ static bool validate_creds(const uint8_t* buf, uint8_t cred_len,
     const char* pw = colon ? colon + 1 : creds;
     size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
     if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
-
-    /* Copy both into fixed 256-byte buffers, zero-padded.
-     * Always compare all 256 bytes — no timing leak on length. */
-    uint8_t pw_buf[256] = {0};
-    uint8_t secret_buf[256] = {0};
-    size_t secret_len = strlen(secret);
     if (pw_len > 255) pw_len = 255;
-    if (secret_len > 255) secret_len = 255;
-    memcpy(pw_buf, pw, pw_len);
-    memcpy(secret_buf, secret, secret_len);
 
-    /* Length must also match, but fold it into the constant-time result */
-    volatile uint8_t len_diff = (pw_len != secret_len) ? 1 : 0;
-    return ct_eq(pw_buf, secret_buf, 256) && !len_diff;
+    /* Zero-pad pw into a 256-byte buffer, then compare all 256 bytes
+     * against the secret buffer (also 256 bytes, zero-padded at init).
+     * Matching passwords produce identical 256-byte buffers. */
+    uint8_t pw_buf[256] = {0};
+    memcpy(pw_buf, pw, pw_len);
+    return ct_eq(pw_buf, secret, 256);
 }
 
 static void send_response(ray_sock_t fd, ray_t* result)
