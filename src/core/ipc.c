@@ -863,7 +863,8 @@ static int64_t client_send_msg(int64_t handle, ray_t* msg, uint8_t msgtype)
     return rc < 0 ? -1 : 0;
 }
 
-int64_t ray_ipc_connect(const char* host, uint16_t port)
+int64_t ray_ipc_connect(const char* host, uint16_t port,
+                         const char* user, const char* password)
 {
     client_init();
 
@@ -877,7 +878,40 @@ int64_t ray_ipc_connect(const char* host, uint16_t port)
     }
 
     uint8_t resp[2];
-    if (recv_full(fd, resp, 2) < 0 || resp[1] != 0x00) {
+    if (recv_full(fd, resp, 2) < 0) {
+        ray_sock_close(fd);
+        return -1;
+    }
+
+    /* Auth required? */
+    if (resp[1] == 0x01) {
+        if (!password) {
+            ray_sock_close(fd);
+            return -2; /* auth required but no creds */
+        }
+        char cred[256];
+        int cred_len;
+        if (user && user[0])
+            cred_len = snprintf(cred, sizeof(cred), "%s:%s", user, password);
+        else
+            cred_len = snprintf(cred, sizeof(cred), ":%s", password);
+        if (cred_len < 0 || cred_len >= (int)sizeof(cred)) {
+            ray_sock_close(fd);
+            return -1;
+        }
+        cred_len++; /* include null terminator */
+        uint8_t len_byte = (uint8_t)cred_len;
+        if (ray_sock_send(fd, &len_byte, 1) < 0 ||
+            ray_sock_send(fd, cred, cred_len) < 0) {
+            ray_sock_close(fd);
+            return -1;
+        }
+        uint8_t auth_result;
+        if (recv_full(fd, &auth_result, 1) < 0 || auth_result != 0x00) {
+            ray_sock_close(fd);
+            return -3; /* auth rejected */
+        }
+    } else if (resp[1] != 0x00) {
         ray_sock_close(fd);
         return -1;
     }

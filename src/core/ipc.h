@@ -79,7 +79,8 @@ int       ray_ipc_poll(ray_ipc_server_t* srv, int timeout_ms);
 
 /* ===== Client API (blocking, no poll needed) ===== */
 
-int64_t   ray_ipc_connect(const char* host, uint16_t port);
+int64_t   ray_ipc_connect(const char* host, uint16_t port,
+                           const char* user, const char* password);
 void      ray_ipc_close(int64_t handle);
 ray_t*    ray_ipc_send(int64_t handle, ray_t* msg);
 ray_err_t ray_ipc_send_async(int64_t handle, ray_t* msg);

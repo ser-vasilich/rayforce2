@@ -1714,7 +1714,7 @@ static MunitResult test_ipc_sync_roundtrip(const void* params, void* fixture) {
     ray_thread_create(&tid, server_thread_fn, &ctx);
 
     /* Client: connect */
-    int64_t h = ray_ipc_connect("127.0.0.1", port);
+    int64_t h = ray_ipc_connect("127.0.0.1", port, NULL, NULL);
     munit_assert_int(h, >=, 0);
 
     /* Client: send sync query "(+ 1 2)" — expects result 3 */
@@ -1766,7 +1766,7 @@ static MunitResult test_ipc_async_send(const void* params, void* fixture) {
     ray_thread_t tid;
     ray_thread_create(&tid, server_thread_fn, &ctx);
 
-    int64_t h = ray_ipc_connect("127.0.0.1", port);
+    int64_t h = ray_ipc_connect("127.0.0.1", port, NULL, NULL);
     munit_assert_int(h, >=, 0);
 
     /* Send async — should not block or error */
