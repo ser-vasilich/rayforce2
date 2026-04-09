@@ -225,27 +225,27 @@
 <span class="hl-comment">;; =&gt; per-symbol totals</span></code></pre>
 
       <h4>Expression payloads</h4>
-      <p>Non-string values are evaluated directly on the server via <code>ray_eval</code>. Construct executable expressions as lists with builtin function objects as heads. Use <code>quote</code> to prevent premature evaluation of arguments that should be evaluated server-side:</p>
+      <p>Non-string values are evaluated directly on the server via <code>ray_eval</code>. Construct executable expressions as lists with builtin function objects as heads. Dict literals are self-evaluating, so column references and expressions inside them are preserved unevaluated until the server processes them:</p>
 
-      <pre><code><span class="hl-comment">;; Arithmetic — builtins resolve to function objects</span>
+      <pre><code><span class="hl-comment">;; Arithmetic</span>
 (<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> + <span class="hl-num">1</span> <span class="hl-num">2</span>))
 <span class="hl-comment">;; =&gt; 3</span>
 
-<span class="hl-comment">;; Select — quote the dict so column refs are evaluated server-side</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select (<span class="hl-fn">quote</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (&gt; price <span class="hl-num">200</span>)})))
+<span class="hl-comment">;; Select with filter — dict stays unevaluated, select resolves columns</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (&gt; price <span class="hl-num">200</span>)}))
 <span class="hl-comment">;; =&gt; filtered trades table</span>
+
+<span class="hl-comment">;; Aggregation by group</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> sym <span class="hl-sym">total:</span> (sum qty)}))
 
 <span class="hl-comment">;; Map a lambda over server-side data</span>
 (<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> map (<span class="hl-kw">fn</span> [x] (* x <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> til <span class="hl-num">10</span>)))
-<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span>
+<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span></code></pre>
 
-<span class="hl-comment">;; Count rows in a remote table</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> count (<span class="hl-fn">list</span> eval (<span class="hl-fn">quote</span> trades))))
-<span class="hl-comment">;; =&gt; row count</span></code></pre>
-
-      <div class="info-box">
-        <strong>quote.</strong> Special forms like <code>select</code> need their arguments unevaluated (column names like <code>price</code> are resolved in the table context). Wrap the dict in <code>quote</code> so the client doesn&rsquo;t try to evaluate it &mdash; the server&rsquo;s <code>select</code> handles evaluation internally.
-      </div>
+      <p>For dynamic queries, substitute values into the dict at construction time:</p>
+      <pre><code>(<span class="hl-kw">set</span> threshold <span class="hl-num">200</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> &gt; (quote price) threshold)}))
+<span class="hl-comment">;; =&gt; trades where price &gt; 200</span></code></pre>
 
       <h3>hclose</h3>
       <pre><code><span class="hl-comment">;; Close the connection</span>

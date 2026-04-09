@@ -2122,31 +2122,11 @@ ray_t* ray_eval(ray_t* obj) {
     /* Empty list */
     if (ray_len(obj) == 0) { ray_retain(obj); ret = obj; goto out; }
 
-    /* Dict literal: evaluate values, keep keys */
+    /* Dict literal: self-evaluating (values stay unevaluated).
+     * Use the (dict ...) builtin for evaluated construction. */
     if (obj->attrs & RAY_ATTR_DICT) {
-        int64_t n2 = ray_len(obj);
-        ray_t* dict = ray_alloc(n2 * sizeof(ray_t*));
-        if (!dict) { ret = ray_error("oom", NULL); goto out; }
-        dict->type = RAY_LIST;
-        dict->attrs |= RAY_ATTR_DICT;
-        dict->len = n2;
-        ray_t** src = (ray_t**)ray_data(obj);
-        ray_t** dst = (ray_t**)ray_data(dict);
-        for (int64_t i = 0; i < n2; i += 2) {
-            /* key: retain as-is */
-            ray_retain(src[i]);
-            dst[i] = src[i];
-            /* value: evaluate */
-            ray_t* v = ray_eval(src[i + 1]);
-            if (v && RAY_IS_ERR(v)) {
-                for (int64_t j = 0; j < i; j++) ray_release(dst[j]);
-                ray_release(dst[i]);
-                ray_release(dict);
-                ret = v; goto out;
-            }
-            dst[i + 1] = v ? v : NULL;
-        }
-        ret = dict; goto out;
+        ray_retain(obj);
+        ret = obj; goto out;
     }
 
     /* List: evaluate first element, dispatch by type */

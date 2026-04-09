@@ -207,28 +207,34 @@
       </table>
 
       <h3>Expression payloads</h3>
-      <p>Instead of strings, construct the query as a list. Builtins resolve to function objects &mdash; use them directly as the list head. For special forms like <code>select</code>, <code>quote</code> the argument so column references are evaluated server-side in the table context:</p>
+      <p>Instead of strings, construct the query as a list. Builtins resolve to function objects &mdash; use them directly as the list head. Dict literals are self-evaluating, so column references inside them are preserved for server-side resolution:</p>
 
       <pre><code><span class="hl-comment">;; Arithmetic</span>
 (<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> + <span class="hl-num">1</span> <span class="hl-num">2</span>))
 <span class="hl-comment">;; =&gt; 3</span>
 
-<span class="hl-comment">;; Select — quote the dict so price resolves in the table context</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select (<span class="hl-fn">quote</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (&gt; price <span class="hl-num">200</span>)})))
+<span class="hl-comment">;; Select with filter — dict is self-evaluating, select resolves columns</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (&gt; price <span class="hl-num">200</span>)}))
 <span class="hl-comment">;; =&gt; filtered trades table</span>
 
 <span class="hl-comment">;; Aggregation by group</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select (<span class="hl-fn">quote</span> {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> sym <span class="hl-sym">total:</span> (sum qty)})))
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> sym <span class="hl-sym">total:</span> (sum qty)}))
 
 <span class="hl-comment">;; Map a lambda over server-side data</span>
 (<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> map (<span class="hl-kw">fn</span> [x] (* x <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> til <span class="hl-num">10</span>)))
-<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span>
+<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span></code></pre>
 
-<span class="hl-comment">;; Count rows in a remote table</span>
-(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> count (<span class="hl-fn">list</span> eval (<span class="hl-fn">quote</span> trades))))</code></pre>
+      <p>For dynamic queries, substitute runtime values into the expression:</p>
+      <pre><code><span class="hl-comment">;; Dynamic filter threshold</span>
+(<span class="hl-kw">set</span> threshold <span class="hl-num">200</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> &gt; (quote price) threshold)}))
+
+<span class="hl-comment">;; Dynamic grouping</span>
+(<span class="hl-kw">set</span> group-col <span class="hl-sym">'sym</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> select {<span class="hl-sym">from:</span> trades <span class="hl-sym">by:</span> group-col <span class="hl-sym">total:</span> (<span class="hl-fn">list</span> sum (quote qty))}))</code></pre>
 
       <div class="info-box">
-        <strong>quote.</strong> Special forms (<code>select</code>, <code>update</code>, <code>insert</code>) need unevaluated arguments so column names like <code>price</code> resolve in the table context. Wrap their arguments in <code>quote</code> &mdash; the server&rsquo;s special form handles evaluation internally.
+        <strong>How it works.</strong> Dict literals are self-evaluating &mdash; <code>{from: trades where: (&gt; price 200)}</code> preserves its contents as data. When the server evaluates the list, <code>select</code> resolves <code>trades</code> and <code>price</code> in the table context. Use <code>(list ...)</code> inside the dict when you need to splice runtime values into an expression.
       </div>
 
       <!-- 5. Authentication -->
