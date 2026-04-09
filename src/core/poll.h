@@ -89,6 +89,8 @@ struct ray_poll {
     ray_selector_t** sels;     /* selector array */
     uint32_t         n_sels;
     uint32_t         sel_cap;
+    char             auth_secret[256]; /* password from -u/-U, empty = no auth */
+    bool             restricted;       /* true if -U (read-only IPC mode) */
 };
 
 /* ===== API ===== */
