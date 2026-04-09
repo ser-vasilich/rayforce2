@@ -39,6 +39,8 @@ int main(int argc, char** argv) {
     int interactive = 0;
     const char* file = NULL;
     uint16_t port = 0;
+    const char* auth_pw = NULL;
+    bool auth_restricted = false;
 
     /* Parse args: [-i] [-p PORT] [file.rfl] */
     for (int i = 1; i < argc; i++) {
@@ -46,11 +48,28 @@ int main(int argc, char** argv) {
             interactive = 1;
         else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc)
             port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) {
+            auth_pw = argv[++i];
+            auth_restricted = false;
+        }
+        else if (strcmp(argv[i], "-U") == 0 && i + 1 < argc) {
+            auth_pw = argv[++i];
+            auth_restricted = true;
+        }
         else
             file = argv[i];
     }
 
     ray_poll_t* poll = ray_poll_create();
+
+    if (poll && auth_pw) {
+        size_t pw_len = strlen(auth_pw);
+        if (pw_len >= sizeof(poll->auth_secret))
+            pw_len = sizeof(poll->auth_secret) - 1;
+        memcpy(poll->auth_secret, auth_pw, pw_len);
+        poll->auth_secret[pw_len] = '\0';
+        poll->restricted = auth_restricted;
+    }
 
     /* Start IPC server if port specified */
     if (port > 0) {
