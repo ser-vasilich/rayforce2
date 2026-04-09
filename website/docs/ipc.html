@@ -195,17 +195,48 @@
       <p>The format is <code>"host:port"</code> for unauthenticated connections, or <code>"host:port:user:password"</code> when the server requires authentication. If the server requires auth and no credentials are provided, <code>hopen</code> returns an <code>"access"</code> error.</p>
 
       <h3>hsend</h3>
-      <pre><code><span class="hl-comment">;; Send a string query (evaluated on server)</span>
+      <p><code>hsend</code> sends any serializable value to the server and returns the result. The server&rsquo;s behavior depends on the payload type:</p>
+
+      <table>
+        <thead>
+          <tr><th>Payload type</th><th>Server behavior</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>String</td><td>Parsed as Rayfall code and evaluated; result returned</td></tr>
+          <tr><td>Any other value</td><td>Evaluated directly (identity for data, execution for expressions); result returned</td></tr>
+        </tbody>
+      </table>
+
+      <h4>String queries</h4>
+      <pre><code><span class="hl-comment">;; Arithmetic — server parses and evaluates the string</span>
 (<span class="hl-fn">hsend</span> h <span class="hl-str">"(+ 1 2)"</span>)
 <span class="hl-comment">;; =&gt; 3</span>
 
-<span class="hl-comment">;; Query a remote table</span>
+<span class="hl-comment">;; Look up a server-side variable</span>
 (<span class="hl-fn">hsend</span> h <span class="hl-str">"trades"</span>)
-<span class="hl-comment">;; =&gt; &lt;table 1000x3&gt;</span>
+<span class="hl-comment">;; =&gt; &lt;table&gt;</span>
 
-<span class="hl-comment">;; Remote select with filter</span>
+<span class="hl-comment">;; Remote select with filter, sort, limit</span>
 (<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades where: (&gt; price 100) desc: 'price take: 10})"</span>)
-<span class="hl-comment">;; =&gt; top 10 most expensive trades</span></code></pre>
+<span class="hl-comment">;; =&gt; top 10 most expensive trades</span>
+
+<span class="hl-comment">;; Aggregation by group</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym total: (sum qty) avg_px: (avg price)})"</span>)
+<span class="hl-comment">;; =&gt; per-symbol totals</span></code></pre>
+
+      <h4>Object payloads</h4>
+      <pre><code><span class="hl-comment">;; Send a vector — server evaluates it (identity) and returns it</span>
+(<span class="hl-fn">hsend</span> h [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>])
+<span class="hl-comment">;; =&gt; [1 2 3]</span>
+
+<span class="hl-comment">;; Send an atom</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-num">42</span>)
+<span class="hl-comment">;; =&gt; 42</span>
+
+<span class="hl-comment">;; Send a table</span>
+(<span class="hl-kw">set</span> local (<span class="hl-fn">table</span> [<span class="hl-sym">id</span> <span class="hl-sym">val</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span>] [<span class="hl-num">10</span> <span class="hl-num">20</span>])))
+(<span class="hl-fn">hsend</span> h local)
+<span class="hl-comment">;; =&gt; the table, round-tripped through serialization</span></code></pre>
 
       <h3>hclose</h3>
       <pre><code><span class="hl-comment">;; Close the connection</span>
