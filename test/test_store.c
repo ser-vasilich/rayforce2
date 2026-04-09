@@ -1788,6 +1788,187 @@ static MunitResult test_ipc_async_send(const void* params, void* fixture) {
     return MUNIT_OK;
 }
 
+/* ---- IPC auth success --------------------------------------------------- */
+
+static MunitResult test_ipc_auth_success(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_ipc_server_init(&srv, 0);
+    strcpy(srv.auth_secret, "secret123");
+
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    int64_t h = ray_ipc_connect("127.0.0.1", port, "admin", "secret123");
+    munit_assert_int(h, >=, 0);
+
+    ray_t* msg = ray_str("(+ 10 20)", 9);
+    ray_t* result = ray_ipc_send(h, msg);
+    ray_release(msg);
+
+    munit_assert_ptr_not_null(result);
+    munit_assert_false(RAY_IS_ERR(result));
+    munit_assert_int(result->i64, ==, 30);
+    ray_release(result);
+
+    ray_ipc_close(h);
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
+/* ---- IPC auth reject ---------------------------------------------------- */
+
+static MunitResult test_ipc_auth_reject(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_ipc_server_init(&srv, 0);
+    strcpy(srv.auth_secret, "secret123");
+
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    int64_t h = ray_ipc_connect("127.0.0.1", port, "admin", "wrong");
+    munit_assert_int(h, ==, -3);
+
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
+/* ---- IPC auth no creds -------------------------------------------------- */
+
+static MunitResult test_ipc_auth_no_creds(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_ipc_server_init(&srv, 0);
+    strcpy(srv.auth_secret, "secret123");
+
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    int64_t h = ray_ipc_connect("127.0.0.1", port, NULL, NULL);
+    munit_assert_int(h, ==, -2);
+
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
+/* ---- IPC restricted mode ------------------------------------------------ */
+
+static MunitResult test_ipc_restricted(const void* params, void* fixture) {
+    (void)params; (void)fixture;
+
+    ray_runtime_t* rt = ray_runtime_create(0, NULL);
+    munit_assert_ptr_not_null(rt);
+
+    ray_ipc_server_t srv;
+    ray_ipc_server_init(&srv, 0);
+    strcpy(srv.auth_secret, "secret123");
+    srv.restricted = true;
+
+    uint16_t port = get_listen_port(srv.listen_fd);
+    munit_assert_int(port, >, 0);
+
+    ray_vm_t* srv_vm = (ray_vm_t*)ray_sys_alloc(sizeof(ray_vm_t));
+    munit_assert_ptr_not_null(srv_vm);
+    memset(srv_vm, 0, sizeof(ray_vm_t));
+    srv_vm->id = 1;
+
+    ipc_thread_ctx_t ctx = { .srv = &srv, .vm = srv_vm };
+    ray_thread_t tid;
+    ray_thread_create(&tid, server_thread_fn, &ctx);
+
+    int64_t h = ray_ipc_connect("127.0.0.1", port, "admin", "secret123");
+    munit_assert_int(h, >=, 0);
+
+    /* Arithmetic should work */
+    ray_t* msg1 = ray_str("(+ 1 2)", 7);
+    ray_t* r1 = ray_ipc_send(h, msg1);
+    ray_release(msg1);
+    munit_assert_ptr_not_null(r1);
+    munit_assert_false(RAY_IS_ERR(r1));
+    munit_assert_int(r1->i64, ==, 3);
+    ray_release(r1);
+
+    /* set should be restricted */
+    ray_t* msg2 = ray_str("(set x 42)", 10);
+    ray_t* r2 = ray_ipc_send(h, msg2);
+    ray_release(msg2);
+    munit_assert_ptr_not_null(r2);
+    munit_assert_true(RAY_IS_ERR(r2));
+    ray_release(r2);
+
+    /* system should be restricted */
+    ray_t* msg3 = ray_str("(system \"echo hi\")", 18);
+    ray_t* r3 = ray_ipc_send(h, msg3);
+    ray_release(msg3);
+    munit_assert_ptr_not_null(r3);
+    munit_assert_true(RAY_IS_ERR(r3));
+    ray_release(r3);
+
+    ray_ipc_close(h);
+    srv.running = false;
+    ray_thread_join(tid);
+    ray_ipc_server_destroy(&srv);
+    ray_sys_free(srv_vm);
+    ray_runtime_destroy(rt);
+
+    return MUNIT_OK;
+}
+
 static MunitTest store_tests[] = {
     { "/col_mmap_i64",         test_col_mmap_i64,         store_setup, store_teardown, 0, NULL },
     { "/col_mmap_f64",         test_col_mmap_f64,         store_setup, store_teardown, 0, NULL },
@@ -1825,6 +2006,10 @@ static MunitTest store_tests[] = {
     { "/ipc/server_lifecycle",   test_ipc_server_lifecycle,    NULL, NULL, 0, NULL },
     { "/ipc/sync_roundtrip",     test_ipc_sync_roundtrip,      NULL, NULL, 0, NULL },
     { "/ipc/async_send",         test_ipc_async_send,          NULL, NULL, 0, NULL },
+    { "/ipc/auth_success",       test_ipc_auth_success,        NULL, NULL, 0, NULL },
+    { "/ipc/auth_reject",        test_ipc_auth_reject,         NULL, NULL, 0, NULL },
+    { "/ipc/auth_no_creds",      test_ipc_auth_no_creds,       NULL, NULL, 0, NULL },
+    { "/ipc/restricted",         test_ipc_restricted,          NULL, NULL, 0, NULL },
     { NULL, NULL, NULL, NULL, 0, NULL },
 };
 
