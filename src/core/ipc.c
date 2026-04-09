@@ -548,9 +548,15 @@ static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 static void conn_on_creds(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
     if (c->rx_len == 1) {
-        /* Got length byte — now need the credential bytes */
+        /* Got length byte — reallocate buffer for full credential */
         uint8_t cred_len = c->rx_buf[0];
-        c->rx_need = 1 + cred_len;
+        size_t need = 1 + (size_t)cred_len;
+        uint8_t* newbuf = (uint8_t*)ray_sys_alloc(need);
+        if (!newbuf) { conn_close(srv, c); return; }
+        newbuf[0] = cred_len;
+        ray_sys_free(c->rx_buf);
+        c->rx_buf  = newbuf;
+        c->rx_need = need;
         return;
     }
 

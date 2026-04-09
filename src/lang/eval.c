@@ -1910,7 +1910,7 @@ static void ray_register_builtins(void) {
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
     register_unary("read",      RAY_FN_RESTRICTED, ray_read_file_fn);
     register_binary("write",    RAY_FN_RESTRICTED, ray_write_file_fn);
-    register_unary("load",      RAY_FN_NONE, ray_load_file_fn);
+    register_unary("load",      RAY_FN_RESTRICTED, ray_load_file_fn);
     register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
     register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
     register_vary("timeit",     RAY_FN_SPECIAL_FORM, ray_timeit_fn);
@@ -1939,7 +1939,7 @@ static void ray_register_builtins(void) {
     register_unary("de",         RAY_FN_NONE, ray_de_fn);
 
     /* Splayed / partitioned table I/O */
-    register_vary("set-splayed", RAY_FN_NONE, ray_set_splayed_fn);
+    register_vary("set-splayed", RAY_FN_RESTRICTED, ray_set_splayed_fn);
     register_vary("get-splayed", RAY_FN_NONE, ray_get_splayed_fn);
     register_vary("get-parted",  RAY_FN_NONE, ray_get_parted_fn);
 
@@ -1967,9 +1967,9 @@ static void ray_register_builtins(void) {
     register_unary("gc",         RAY_FN_NONE, ray_gc_fn);
     register_unary("system",     RAY_FN_RESTRICTED, ray_system_fn);
     register_unary("getenv",     RAY_FN_RESTRICTED, ray_getenv_fn);
-    register_binary("setenv",    RAY_FN_NONE, ray_setenv_fn);
-    register_unary("os-get-var", RAY_FN_NONE, ray_getenv_fn);
-    register_binary("os-set-var", RAY_FN_NONE, ray_setenv_fn);
+    register_binary("setenv",    RAY_FN_RESTRICTED, ray_setenv_fn);
+    register_unary("os-get-var", RAY_FN_RESTRICTED, ray_getenv_fn);
+    register_binary("os-set-var", RAY_FN_RESTRICTED, ray_setenv_fn);
 
     /* IPC builtins */
     register_unary("hopen",     RAY_FN_RESTRICTED, ray_hopen_fn);
@@ -2016,7 +2016,7 @@ static void ray_register_builtins(void) {
     register_vary("del",          RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_del_fn);
     register_unary("internals",   RAY_FN_NONE, ray_internals_fn);
     register_unary("memstat",     RAY_FN_NONE, ray_memstat_fn);
-    register_vary("modify",      RAY_FN_NONE, ray_modify_fn);
+    register_vary("modify",      RAY_FN_RESTRICTED, ray_modify_fn);
     register_vary("pivot",       RAY_FN_NONE, ray_pivot_fn);
     register_unary("sysinfo",    RAY_FN_NONE, ray_sysinfo_fn);
     register_unary("sym-name",   RAY_FN_NONE, ray_sym_name_fn);
