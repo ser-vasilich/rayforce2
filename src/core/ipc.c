@@ -144,6 +144,7 @@ size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
 #define RAY_IPC_PHASE_HANDSHAKE 0
 #define RAY_IPC_PHASE_HEADER    1
 #define RAY_IPC_PHASE_PAYLOAD   2
+#define RAY_IPC_PHASE_CREDS     3
 
 static void send_response(ray_sock_t fd, ray_t* result)
 {
@@ -254,9 +255,12 @@ typedef struct {
     ray_ipc_header_t hdr;
     uint8_t          phase;
     int64_t          listener_id;  /* id of the listener selector */
+    bool             auth_required;  /* server has -u/-U */
+    bool             restricted;     /* server has -U */
 } ray_ipc_conn_data_t;
 
 static ray_t* ipc_read_handshake(ray_poll_t* poll, ray_selector_t* sel);
+static ray_t* ipc_read_creds(ray_poll_t* poll, ray_selector_t* sel);
 static ray_t* ipc_read_header(ray_poll_t* poll, ray_selector_t* sel);
 static ray_t* ipc_read_payload(ray_poll_t* poll, ray_selector_t* sel);
 static ray_t* ipc_on_data(ray_poll_t* poll, ray_selector_t* sel, void* data);
@@ -283,6 +287,8 @@ static ray_t* ipc_accept(ray_poll_t* poll, ray_selector_t* sel)
     memset(cd, 0, sizeof(*cd));
     cd->phase = RAY_IPC_PHASE_HANDSHAKE;
     cd->listener_id = sel->id;
+    cd->auth_required = (poll->auth_secret[0] != '\0');
+    cd->restricted    = poll->restricted;
 
     ray_poll_reg_t reg = {0};
     reg.fd       = (int64_t)new_fd;
@@ -311,18 +317,57 @@ static ray_t* ipc_accept(ray_poll_t* poll, ray_selector_t* sel)
 static ray_t* ipc_read_handshake(ray_poll_t* poll, ray_selector_t* sel)
 {
     if (!sel->rx.buf || sel->rx.buf->offset < 2) return NULL;
-
     ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
 
-    /* Send handshake response */
-    uint8_t resp[2] = { RAY_VERSION_MAJOR, 0x00 };
+    /* Send handshake response: version + auth_required flag */
+    uint8_t resp[2] = { RAY_VERSION_MAJOR, cd->auth_required ? 0x01 : 0x00 };
     ray_sock_send((ray_sock_t)sel->fd, resp, 2);
 
-    /* Switch to header phase */
+    if (cd->auth_required) {
+        cd->phase = RAY_IPC_PHASE_HANDSHAKE;
+        sel->rx.read_fn = ipc_read_creds;
+        ray_poll_rx_request(poll, sel, 1);  /* length byte first */
+        return NULL;
+    }
+
     cd->phase = RAY_IPC_PHASE_HEADER;
     sel->rx.read_fn = ipc_read_header;
     ray_poll_rx_request(poll, sel, sizeof(ray_ipc_header_t));
+    return NULL;
+}
 
+static ray_t* ipc_read_creds(ray_poll_t* poll, ray_selector_t* sel)
+{
+    if (!sel->rx.buf || sel->rx.buf->offset < 1) return NULL;
+    uint8_t cred_len = sel->rx.buf->data[0];
+
+    if (sel->rx.buf->offset < 1 + cred_len) {
+        ray_poll_rx_request(poll, sel, 1 + cred_len);
+        return NULL;
+    }
+
+    ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
+
+    const char* creds = (const char*)(sel->rx.buf->data + 1);
+    const char* colon = memchr(creds, ':', cred_len);
+    const char* pw = colon ? colon + 1 : creds;
+    size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
+    if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
+
+    bool ok = (pw_len == strlen(poll->auth_secret) &&
+               memcmp(pw, poll->auth_secret, pw_len) == 0);
+
+    uint8_t result = ok ? 0x00 : 0x01;
+    ray_sock_send((ray_sock_t)sel->fd, &result, 1);
+
+    if (!ok) {
+        ray_poll_deregister(poll, sel->id);
+        return NULL;
+    }
+
+    cd->phase = RAY_IPC_PHASE_HEADER;
+    sel->rx.read_fn = ipc_read_header;
+    ray_poll_rx_request(poll, sel, sizeof(ray_ipc_header_t));
     return NULL;
 }
 
@@ -441,13 +486,20 @@ static void conn_close(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
 static void conn_on_handshake(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
-    (void)srv;
-    uint8_t resp[2] = { RAY_VERSION_MAJOR, 0x00 };
+    bool auth_req = (srv->auth_secret[0] != '\0');
+    uint8_t resp[2] = { RAY_VERSION_MAJOR, auth_req ? 0x01 : 0x00 };
     ray_sock_send(c->fd, resp, 2);
 
     ray_sys_free(c->rx_buf);
     c->rx_buf  = NULL;
     c->rx_len  = 0;
+
+    if (auth_req) {
+        c->rx_need = 1; /* length byte */
+        c->phase   = RAY_IPC_PHASE_CREDS;
+        return;
+    }
+
     c->rx_need = sizeof(ray_ipc_header_t);
     c->phase   = RAY_IPC_PHASE_HEADER;
 }
@@ -483,6 +535,40 @@ static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
     c->phase   = RAY_IPC_PHASE_HEADER;
 }
 
+static void conn_on_creds(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
+{
+    if (c->rx_len == 1) {
+        /* Got length byte — now need the credential bytes */
+        uint8_t cred_len = c->rx_buf[0];
+        c->rx_need = 1 + cred_len;
+        return;
+    }
+
+    uint8_t cred_len = c->rx_buf[0];
+    const char* creds = (const char*)(c->rx_buf + 1);
+    const char* colon = memchr(creds, ':', cred_len);
+    const char* pw = colon ? colon + 1 : creds;
+    size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
+    if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
+
+    bool ok = (pw_len == strlen(srv->auth_secret) &&
+               memcmp(pw, srv->auth_secret, pw_len) == 0);
+
+    uint8_t result = ok ? 0x00 : 0x01;
+    ray_sock_send(c->fd, &result, 1);
+
+    if (!ok) {
+        conn_close(srv, c);
+        return;
+    }
+
+    ray_sys_free(c->rx_buf);
+    c->rx_buf  = NULL;
+    c->rx_len  = 0;
+    c->rx_need = sizeof(ray_ipc_header_t);
+    c->phase   = RAY_IPC_PHASE_HEADER;
+}
+
 static void conn_on_readable(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
     if (!c->rx_buf) {
@@ -499,6 +585,7 @@ static void conn_on_readable(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
     switch (c->phase) {
     case RAY_IPC_PHASE_HANDSHAKE: conn_on_handshake(srv, c); break;
+    case RAY_IPC_PHASE_CREDS:     conn_on_creds(srv, c);     break;
     case RAY_IPC_PHASE_HEADER:    conn_on_header(srv, c);    break;
     case RAY_IPC_PHASE_PAYLOAD:   conn_on_payload(srv, c);   break;
     }

@@ -69,6 +69,8 @@ typedef struct ray_ipc_server {
     ray_ipc_conn_t    conns[RAY_IPC_MAX_CONNS];
     uint32_t          n_conns;
     bool              running;
+    char              auth_secret[256]; /* password from -u/-U */
+    bool              restricted;       /* -U mode */
 } ray_ipc_server_t;
 
 ray_err_t ray_ipc_server_init(ray_ipc_server_t* srv, uint16_t port);
