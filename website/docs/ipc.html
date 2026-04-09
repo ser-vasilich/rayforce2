@@ -145,7 +145,7 @@
       <pre><code><span class="hl-comment"># Server: require password, restrict IPC to read-only</span>
 ./rayforce -p 5000 -U secret123</code></pre>
 
-      <p>In restricted mode, IPC clients can run queries but cannot mutate server state or access the filesystem. The following operations are blocked for IPC connections:</p>
+      <p>In restricted mode, specific builtins that write files, mutate state, or control the server process are blocked for IPC connections. Queries, aggregations, and read-only operations are allowed. The following builtins are blocked:</p>
 
       <table>
         <thead>
@@ -153,11 +153,16 @@
         </thead>
         <tbody>
           <tr><td>Mutation</td><td><code>set</code>, <code>del</code>, <code>update</code>, <code>insert</code>, <code>upsert</code>, <code>modify</code></td></tr>
-          <tr><td>File I/O</td><td><code>read</code>, <code>write</code>, <code>read-csv</code>, <code>write-csv</code>, <code>load</code>, <code>set-splayed</code></td></tr>
-          <tr><td>System</td><td><code>system</code>, <code>getenv</code>, <code>setenv</code>, <code>os-get-var</code>, <code>os-set-var</code></td></tr>
+          <tr><td>File writes</td><td><code>write</code>, <code>write-csv</code>, <code>load</code>, <code>set-splayed</code></td></tr>
+          <tr><td>File reads</td><td><code>read</code>, <code>read-csv</code></td></tr>
+          <tr><td>System</td><td><code>system</code>, <code>getenv</code>, <code>setenv</code>, <code>os-get-var</code>, <code>os-set-var</code>, <code>exit</code></td></tr>
           <tr><td>IPC chaining</td><td><code>hopen</code>, <code>hclose</code>, <code>hsend</code></td></tr>
         </tbody>
       </table>
+
+      <div class="info-box">
+        <strong>Scope.</strong> Restricted mode blocks the builtins listed above. It does not provide full sandboxing &mdash; <code>select</code>, <code>get-splayed</code>, <code>get-parted</code>, and other read operations on already-loaded data or splayed tables remain available.
+      </div>
 
       <p>Attempting a restricted operation returns an <code>"access"</code> error:</p>
       <pre><code><span class="hl-comment">;; On a -U server:</span>

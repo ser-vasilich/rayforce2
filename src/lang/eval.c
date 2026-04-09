@@ -1913,7 +1913,7 @@ static void ray_register_builtins(void) {
     register_unary("read",      RAY_FN_RESTRICTED, ray_read_file_fn);
     register_binary("write",    RAY_FN_RESTRICTED, ray_write_file_fn);
     register_unary("load",      RAY_FN_RESTRICTED, ray_load_file_fn);
-    register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
+    register_unary("exit",      RAY_FN_RESTRICTED, ray_exit_fn);
     register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
     register_vary("timeit",     RAY_FN_SPECIAL_FORM, ray_timeit_fn);
 
