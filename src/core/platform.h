@@ -88,7 +88,7 @@
 #else
   #include <stdatomic.h>
   #define ray_atomic_inc(p)   __atomic_fetch_add(p, 1, __ATOMIC_RELAXED)
-  #define ray_atomic_dec(p)   __atomic_fetch_sub(p, 1, __ATOMIC_ACQ_REL)
+  #define ray_atomic_dec(p)   __atomic_fetch_sub(p, 1, __ATOMIC_RELEASE)
   #define ray_atomic_load(p)  __atomic_load_n(p, __ATOMIC_ACQUIRE)
   #define ray_atomic_store(p, v) __atomic_store_n(p, v, __ATOMIC_RELEASE)
   #define ray_atomic_cas(p, expected, desired) \
