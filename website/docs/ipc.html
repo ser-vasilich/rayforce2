@@ -224,19 +224,32 @@
 (<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym total: (sum qty) avg_px: (avg price)})"</span>)
 <span class="hl-comment">;; =&gt; per-symbol totals</span></code></pre>
 
-      <h4>Object payloads</h4>
-      <pre><code><span class="hl-comment">;; Send a vector — server evaluates it (identity) and returns it</span>
-(<span class="hl-fn">hsend</span> h [<span class="hl-num">1</span> <span class="hl-num">2</span> <span class="hl-num">3</span>])
-<span class="hl-comment">;; =&gt; [1 2 3]</span>
+      <h4>Expression payloads (dynamic queries)</h4>
+      <p>Non-string payloads are evaluated directly on the server. Since Rayfall is homoiconic &mdash; code is data &mdash; you can build queries as lists on the client and send them for server-side evaluation. This avoids fragile string concatenation.</p>
 
-<span class="hl-comment">;; Send an atom</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-num">42</span>)
-<span class="hl-comment">;; =&gt; 42</span>
+      <pre><code><span class="hl-comment">;; Build a query dynamically on the client</span>
+(<span class="hl-kw">set</span> col <span class="hl-sym">'price</span>)
+(<span class="hl-kw">set</span> threshold <span class="hl-num">100</span>)
 
-<span class="hl-comment">;; Send a table</span>
-(<span class="hl-kw">set</span> local (<span class="hl-fn">table</span> [<span class="hl-sym">id</span> <span class="hl-sym">val</span>] (<span class="hl-fn">list</span> [<span class="hl-num">1</span> <span class="hl-num">2</span>] [<span class="hl-num">10</span> <span class="hl-num">20</span>])))
-(<span class="hl-fn">hsend</span> h local)
-<span class="hl-comment">;; =&gt; the table, round-tripped through serialization</span></code></pre>
+<span class="hl-comment">;; Construct the expression as a list</span>
+(<span class="hl-kw">set</span> query (<span class="hl-fn">list</span> <span class="hl-sym">'select</span> {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">where:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'&gt;</span> col threshold)}))
+
+<span class="hl-comment">;; Send the list — server evaluates it as code</span>
+(<span class="hl-fn">hsend</span> h query)
+<span class="hl-comment">;; =&gt; trades where price &gt; 100</span></code></pre>
+
+      <p>Compare with the string equivalent, which requires manual interpolation:</p>
+      <pre><code><span class="hl-comment">;; String approach — awkward with dynamic values</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">concat</span> <span class="hl-str">"(select {from: trades where: (&gt; "</span> (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> col) <span class="hl-str">" "</span> (<span class="hl-fn">as</span> <span class="hl-sym">'STR</span> threshold) <span class="hl-str">")})"</span>))</code></pre>
+
+      <p>Expression payloads are the idiomatic way to send parameterized queries:</p>
+      <pre><code><span class="hl-comment">;; Parameterized aggregation — change the grouping column at runtime</span>
+(<span class="hl-kw">set</span> group-by <span class="hl-sym">'sym</span>)
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'select</span> {<span class="hl-sym">from:</span> <span class="hl-sym">'trades</span> <span class="hl-sym">by:</span> group-by <span class="hl-sym">total:</span> (<span class="hl-fn">list</span> <span class="hl-sym">'sum</span> <span class="hl-sym">'qty</span>)}))
+
+<span class="hl-comment">;; Send a function for server-side application</span>
+(<span class="hl-fn">hsend</span> h (<span class="hl-fn">list</span> <span class="hl-sym">'map</span> (<span class="hl-fn">list</span> <span class="hl-sym">'fn</span> [<span class="hl-sym">'x</span>] (<span class="hl-fn">list</span> <span class="hl-sym">'*</span> <span class="hl-sym">'x</span> <span class="hl-num">2</span>)) (<span class="hl-fn">list</span> <span class="hl-sym">'til</span> <span class="hl-num">10</span>)))
+<span class="hl-comment">;; =&gt; [0 2 4 6 8 10 12 14 16 18]</span></code></pre>
 
       <h3>hclose</h3>
       <pre><code><span class="hl-comment">;; Close the connection</span>
