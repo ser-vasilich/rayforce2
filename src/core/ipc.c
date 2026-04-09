@@ -146,6 +146,35 @@ size_t ray_ipc_decompress(const uint8_t* src, size_t clen,
 #define RAY_IPC_PHASE_PAYLOAD   2
 #define RAY_IPC_PHASE_CREDS     3
 
+/* Constant-time comparison — prevents timing side-channel on password. */
+static bool ct_eq(const void* a, const void* b, size_t len) {
+    const volatile uint8_t* x = a;
+    const volatile uint8_t* y = b;
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < len; i++)
+        diff |= x[i] ^ y[i];
+    return diff == 0;
+}
+
+/* Validate credential buffer against secret. Returns true if password matches.
+ * creds is "user:password\0" with length cred_len. */
+static bool validate_creds(const uint8_t* buf, uint8_t cred_len,
+                           const char* secret) {
+    if (cred_len == 0) return false;
+    const char* creds = (const char*)buf;
+    const char* colon = memchr(creds, ':', cred_len);
+    const char* pw = colon ? colon + 1 : creds;
+    size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
+    if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
+    size_t secret_len = strlen(secret);
+    if (pw_len != secret_len) {
+        /* Still do a comparison to avoid leaking length via timing */
+        ct_eq(pw, secret, pw_len < secret_len ? pw_len : secret_len);
+        return false;
+    }
+    return ct_eq(pw, secret, pw_len);
+}
+
 static void send_response(ray_sock_t fd, ray_t* result)
 {
     int64_t ser_size = ray_serde_size(result);
@@ -348,15 +377,8 @@ static ray_t* ipc_read_creds(ray_poll_t* poll, ray_selector_t* sel)
 
     ray_ipc_conn_data_t* cd = (ray_ipc_conn_data_t*)sel->data;
 
-    const char* creds = (const char*)(sel->rx.buf->data + 1);
-    const char* colon = memchr(creds, ':', cred_len);
-    const char* pw = colon ? colon + 1 : creds;
-    size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
-    if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
-
-    bool ok = (pw_len == strlen(poll->auth_secret) &&
-               memcmp(pw, poll->auth_secret, pw_len) == 0);
-
+    bool ok = validate_creds(sel->rx.buf->data + 1, cred_len,
+                             poll->auth_secret);
     uint8_t result = ok ? 0x00 : 0x01;
     ray_sock_send((ray_sock_t)sel->fd, &result, 1);
 
@@ -561,14 +583,7 @@ static void conn_on_creds(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
     }
 
     uint8_t cred_len = c->rx_buf[0];
-    const char* creds = (const char*)(c->rx_buf + 1);
-    const char* colon = memchr(creds, ':', cred_len);
-    const char* pw = colon ? colon + 1 : creds;
-    size_t pw_len = colon ? (size_t)(cred_len - (pw - creds)) : cred_len;
-    if (pw_len > 0 && pw[pw_len - 1] == '\0') pw_len--;
-
-    bool ok = (pw_len == strlen(srv->auth_secret) &&
-               memcmp(pw, srv->auth_secret, pw_len) == 0);
+    bool ok = validate_creds(c->rx_buf + 1, cred_len, srv->auth_secret);
 
     uint8_t result = ok ? 0x00 : 0x01;
     ray_sock_send(c->fd, &result, 1);
