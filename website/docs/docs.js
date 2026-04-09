@@ -191,6 +191,17 @@ document.addEventListener('DOMContentLoaded', () => {
       {id: "compression", title: "Compression", text: "Delta RLE compression, 2000 byte threshold, automatic transparent"},
       {id: "limitations", title: "Limitations", text: "Single-threaded server, plaintext transport, shared secret only, no streaming"}
     ]},
+    {title: "IPC Guide", url: "guide-ipc.html", sections: [
+      {id: "", title: "IPC Guide", text: "Client-server IPC tutorial, remote queries, authentication, multi-process architecture"},
+      {id: "getting-started", title: "Getting Started", text: "Start server -p PORT, hopen connect, hsend query, hclose disconnect"},
+      {id: "loading-data", title: "Loading Data on the Server", text: "Init script, set tables, serve pre-loaded data"},
+      {id: "remote-queries", title: "Remote Queries", text: "Select filter aggregate join remote tables via hsend string queries"},
+      {id: "sending-objects", title: "Sending Objects", text: "Send vectors tables atoms, string payload parsed evaluated, object payload evaluated directly"},
+      {id: "authentication", title: "Authentication", text: "-u password -U restricted mode, hopen host:port:user:password credentials"},
+      {id: "multi-process", title: "Multi-Process Architecture", text: "Data server query clients, single-threaded sequential, multiple terminals"},
+      {id: "error-handling", title: "Error Handling", text: "Connection refused, auth errors, restricted mode errors, network errors"},
+      {id: "c-api", title: "C API", text: "ray_ipc_connect ray_ipc_send ray_ipc_send_async ray_ipc_close ray_ipc_listen"}
+    ]},
     {title: "Core API", url: "c-api-core.html", sections: [
       {id: "", title: "C API Core", text: "ray_t abstraction, vectors, tables, atoms, memory management"},
       {id: "lifecycle", title: "Lifecycle", text: "ray_heap_init, ray_heap_destroy, ray_sym_init, ray_sym_destroy"},

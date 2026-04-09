@@ -81,6 +81,7 @@
         <a href="guide-datalog.html" class="sidebar-link">Datalog Guide</a>
         <a href="datalog.html" class="sidebar-link">Datalog Reference</a>
         <a href="guide-storage.html" class="sidebar-link">Storage Guide</a>
+        <a href="guide-ipc.html" class="sidebar-link">IPC Guide</a>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-label">ARCHITECTURE</div>
@@ -107,6 +108,10 @@
 
       <h1>IPC &amp; Serialization</h1>
       <p class="page-subtitle">TCP client-server IPC with binary serialization, delta compression, and sync/async messaging.</p>
+
+      <div class="info-box">
+        <strong>New to IPC?</strong> Start with the <a href="guide-ipc.html">IPC Guide</a> for a hands-on walkthrough of server setup, remote queries, authentication, and multi-process patterns. This page is a technical reference.
+      </div>
 
       <h2>Overview</h2>
       <p>Rayforce provides a complete IPC system for client-server communication. A server listens on a TCP port, accepts connections, and evaluates queries sent by clients. The wire format uses the same compact binary serialization for all Rayforce types, with automatic delta/RLE compression for large payloads.</p>
