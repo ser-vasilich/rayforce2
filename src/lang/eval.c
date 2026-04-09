@@ -72,6 +72,19 @@ void   ray_clear_error_trace(void) {
 }
 
 /* ══════════════════════════════════════════
+ * Restricted-mode check
+ * ══════════════════════════════════════════ */
+
+static _Thread_local bool g_eval_restricted = false;
+
+void ray_eval_set_restricted(bool on) { g_eval_restricted = on; }
+bool ray_eval_get_restricted(void)    { return g_eval_restricted; }
+
+static inline bool fn_is_restricted(ray_t* fn_obj) {
+    return g_eval_restricted && (fn_obj->attrs & RAY_FN_RESTRICTED);
+}
+
+/* ══════════════════════════════════════════
  * Error handling: try / raise
  * ══════════════════════════════════════════ */
 
@@ -1493,17 +1506,20 @@ op_callf: {
         ray_t *result;
         switch (fn_obj->type) {
         case RAY_UNARY:
+            if (fn_is_restricted(fn_obj)) { for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]); result = ray_error("access", "restricted"); break; }
             result = ((ray_unary_fn)(uintptr_t)fn_obj->i64)(fn_args[0]);
             ray_release(fn_args[0]);
             for (int32_t i = 1; i < n; i++) ray_release(fn_args[i]);
             break;
         case RAY_BINARY:
+            if (fn_is_restricted(fn_obj)) { for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]); result = ray_error("access", "restricted"); break; }
             result = ((ray_binary_fn)(uintptr_t)fn_obj->i64)(fn_args[0], fn_args[1]);
             ray_release(fn_args[0]);
             ray_release(fn_args[1]);
             for (int32_t i = 2; i < n; i++) ray_release(fn_args[i]);
             break;
         case RAY_VARY:
+            if (fn_is_restricted(fn_obj)) { for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]); result = ray_error("access", "restricted"); break; }
             result = ((ray_vary_fn)(uintptr_t)fn_obj->i64)(fn_args, n);
             for (int32_t i = 0; i < n; i++) ray_release(fn_args[i]);
             break;
@@ -1811,7 +1827,7 @@ static void ray_register_builtins(void) {
     register_unary_op("exp",   RAY_FN_ATOMIC, ray_exp_fn,  OP_EXP);
 
     /* Special forms */
-    register_binary("set", RAY_FN_SPECIAL_FORM, ray_set_fn);
+    register_binary("set", RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_set_fn);
     register_binary("let", RAY_FN_SPECIAL_FORM, ray_let_fn);
     register_vary("if",    RAY_FN_SPECIAL_FORM, ray_cond_fn);
     register_vary("do",    RAY_FN_SPECIAL_FORM, ray_do_fn);
@@ -1871,9 +1887,9 @@ static void ray_register_builtins(void) {
 
     /* Query operations */
     register_vary("select",    RAY_FN_SPECIAL_FORM, ray_select_fn);
-    register_vary("update",    RAY_FN_SPECIAL_FORM, ray_update_fn);
-    register_vary("insert",    RAY_FN_SPECIAL_FORM, ray_insert_fn);
-    register_vary("upsert",    RAY_FN_SPECIAL_FORM, ray_upsert_fn);
+    register_vary("update",    RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_update_fn);
+    register_vary("insert",    RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_insert_fn);
+    register_vary("upsert",    RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_upsert_fn);
     register_binary("xbar",    RAY_FN_ATOMIC, ray_xbar_fn);
 
     /* Join operations */
@@ -1888,12 +1904,12 @@ static void ray_register_builtins(void) {
     register_vary("println",    RAY_FN_NONE, ray_println_fn);
     register_vary("show",       RAY_FN_NONE, ray_show_fn);
     register_vary("format",     RAY_FN_NONE, ray_format_fn);
-    register_vary("read-csv",   RAY_FN_NONE, ray_read_csv_fn);
-    register_vary("write-csv",  RAY_FN_NONE, ray_write_csv_fn);
+    register_vary("read-csv",   RAY_FN_RESTRICTED, ray_read_csv_fn);
+    register_vary("write-csv",  RAY_FN_RESTRICTED, ray_write_csv_fn);
     register_binary("as",       RAY_FN_NONE, ray_cast_fn);
     register_unary("type",      RAY_FN_NONE, ray_type_fn);
-    register_unary("read",      RAY_FN_NONE, ray_read_file_fn);
-    register_binary("write",    RAY_FN_NONE, ray_write_file_fn);
+    register_unary("read",      RAY_FN_RESTRICTED, ray_read_file_fn);
+    register_binary("write",    RAY_FN_RESTRICTED, ray_write_file_fn);
     register_unary("load",      RAY_FN_NONE, ray_load_file_fn);
     register_unary("exit",      RAY_FN_NONE, ray_exit_fn);
     register_vary("resolve",    RAY_FN_SPECIAL_FORM, ray_resolve_fn);
@@ -1949,16 +1965,16 @@ static void ray_register_builtins(void) {
 
     /* System builtins */
     register_unary("gc",         RAY_FN_NONE, ray_gc_fn);
-    register_unary("system",     RAY_FN_NONE, ray_system_fn);
-    register_unary("getenv",     RAY_FN_NONE, ray_getenv_fn);
+    register_unary("system",     RAY_FN_RESTRICTED, ray_system_fn);
+    register_unary("getenv",     RAY_FN_RESTRICTED, ray_getenv_fn);
     register_binary("setenv",    RAY_FN_NONE, ray_setenv_fn);
     register_unary("os-get-var", RAY_FN_NONE, ray_getenv_fn);
     register_binary("os-set-var", RAY_FN_NONE, ray_setenv_fn);
 
     /* IPC builtins */
-    register_unary("hopen",     RAY_FN_NONE, ray_hopen_fn);
-    register_unary("hclose",    RAY_FN_NONE, ray_hclose_fn);
-    register_binary("hsend",    RAY_FN_NONE, ray_hsend_fn);
+    register_unary("hopen",     RAY_FN_RESTRICTED, ray_hopen_fn);
+    register_unary("hclose",    RAY_FN_RESTRICTED, ray_hclose_fn);
+    register_binary("hsend",    RAY_FN_RESTRICTED, ray_hsend_fn);
 
     /* quote — special form (unevaluated argument) */
     register_vary("quote",       RAY_FN_SPECIAL_FORM, ray_quote_fn);
@@ -1997,7 +2013,7 @@ static void ray_register_builtins(void) {
     register_vary("scan-right",  RAY_FN_NONE, ray_scan_right_fn);
 
     /* del, internals, memstat, modify, pivot, sysinfo, unify, xrank */
-    register_vary("del",          RAY_FN_SPECIAL_FORM, ray_del_fn);
+    register_vary("del",          RAY_FN_SPECIAL_FORM | RAY_FN_RESTRICTED, ray_del_fn);
     register_unary("internals",   RAY_FN_NONE, ray_internals_fn);
     register_unary("memstat",     RAY_FN_NONE, ray_memstat_fn);
     register_vary("modify",      RAY_FN_NONE, ray_modify_fn);
@@ -2141,6 +2157,7 @@ ray_t* ray_eval(ray_t* obj) {
     switch (head->type) {
         case RAY_UNARY: {
             if (n < 2) { ray_release(head); ret = ray_error("domain", NULL); goto out; }
+            if (fn_is_restricted(head)) { ray_release(head); ret = ray_error("access", "restricted"); goto out; }
             ray_unary_fn fn = (ray_unary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
             ray_t* arg = ray_eval(elems[1]);
@@ -2160,6 +2177,7 @@ ray_t* ray_eval(ray_t* obj) {
         }
         case RAY_BINARY: {
             if (n < 3) { ray_release(head); ret = ray_error("domain", NULL); goto out; }
+            if (fn_is_restricted(head)) { ray_release(head); ret = ray_error("access", "restricted"); goto out; }
             ray_binary_fn fn = (ray_binary_fn)(uintptr_t)head->i64;
             uint8_t fn_attrs = head->attrs;
             if (fn_attrs & RAY_FN_SPECIAL_FORM) {
@@ -2202,6 +2220,7 @@ ray_t* ray_eval(ray_t* obj) {
             ret = result; goto out;
         }
         case RAY_VARY: {
+            if (fn_is_restricted(head)) { ray_release(head); ret = ray_error("access", "restricted"); goto out; }
             ray_vary_fn fn = (ray_vary_fn)(uintptr_t)head->i64;
             if (head->attrs & RAY_FN_SPECIAL_FORM) {
                 ray_release(head);

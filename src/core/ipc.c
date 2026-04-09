@@ -400,9 +400,14 @@ static ray_t* ipc_read_payload(ray_poll_t* poll, ray_selector_t* sel)
     if (!sel->rx.buf || sel->rx.buf->offset < cd->hdr.size)
         return NULL;
 
+    bool prev_restricted = ray_eval_get_restricted();
+    ray_eval_set_restricted(cd->restricted);
+
     /* Eval and produce result */
     ray_t* result = eval_payload(sel->rx.buf->data,
                                  (size_t)sel->rx.buf->offset, &cd->hdr);
+
+    ray_eval_set_restricted(prev_restricted);
 
     /* Send response for sync messages */
     if (cd->hdr.msgtype == RAY_IPC_MSG_SYNC)
@@ -522,7 +527,12 @@ static void conn_on_header(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 
 static void conn_on_payload(ray_ipc_server_t* srv, ray_ipc_conn_t* c)
 {
+    bool prev = ray_eval_get_restricted();
+    ray_eval_set_restricted(srv->restricted);
+
     ray_t* result = eval_payload(c->rx_buf, c->rx_len, &c->hdr);
+
+    ray_eval_set_restricted(prev);
 
     if (c->hdr.msgtype == RAY_IPC_MSG_SYNC)
         send_response(c->fd, result);

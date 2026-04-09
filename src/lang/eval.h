@@ -180,6 +180,10 @@ void   ray_eval_set_nfo(ray_t* nfo);
 ray_t* ray_get_error_trace(void);
 void   ray_clear_error_trace(void);
 
+/* Restricted mode: when true, builtins with RAY_FN_RESTRICTED are blocked. */
+void ray_eval_set_restricted(bool on);
+bool ray_eval_get_restricted(void);
+
 /* ===== Rayfall Builtin Functions ===== */
 
 /* Arithmetic */
