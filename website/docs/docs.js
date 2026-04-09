@@ -185,10 +185,11 @@ document.addEventListener('DOMContentLoaded', () => {
     ]},
     {title: "IPC & Serialization", url: "ipc.html", sections: [
       {id: "", title: "IPC & Serialization", text: "TCP client-server IPC, binary serialization, delta compression, sync async messaging"},
-      {id: "server-mode", title: "Server Mode", text: "Start server with -p PORT flag, REPL integration, piped input"},
-      {id: "client-builtins", title: "Client Builtins", text: "hopen hclose hsend, connect to server, send queries, get results"},
+      {id: "server-mode", title: "Server Mode", text: "Start server with -p PORT flag, -u password, -U restricted mode"},
+      {id: "authentication", title: "Authentication", text: "-u password authentication, -U restricted read-only mode, hopen host:port:user:password credentials"},
+      {id: "client-builtins", title: "Client Builtins", text: "hopen hclose hsend, connect to server, send queries, get results, host:port:user:password"},
       {id: "compression", title: "Compression", text: "Delta RLE compression, 2000 byte threshold, automatic transparent"},
-      {id: "limitations", title: "Limitations", text: "Single-threaded server, no authentication, no streaming"}
+      {id: "limitations", title: "Limitations", text: "Single-threaded server, plaintext transport, shared secret only, no streaming"}
     ]},
     {title: "Core API", url: "c-api-core.html", sections: [
       {id: "", title: "C API Core", text: "ray_t abstraction, vectors, tables, atoms, memory management"},

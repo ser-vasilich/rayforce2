@@ -119,18 +119,70 @@
 <span class="hl-comment"># Run a script first, then serve</span>
 ./rayforce -p 5000 init.rfl
 
-<span class="hl-comment"># Interactive REPL + server</span>
-./rayforce -p 5000</code></pre>
+<span class="hl-comment"># Server with authentication required</span>
+./rayforce -p 5000 -u mypassword
+
+<span class="hl-comment"># Server with authentication + read-only restriction</span>
+./rayforce -p 5000 -U mypassword</code></pre>
 
       <p>The server runs in the same thread as the REPL. IPC connections are processed between REPL inputs. When piped input is exhausted, the server continues running until interrupted.</p>
+
+      <h2 id="authentication">Authentication</h2>
+      <p>The <code>-u</code> and <code>-U</code> flags enable password authentication for IPC connections. Clients must provide valid credentials during the handshake or the connection is rejected.</p>
+
+      <h3>-u (password required)</h3>
+      <pre><code><span class="hl-comment"># Server: require password</span>
+./rayforce -p 5000 -u secret123
+
+<span class="hl-comment"># Client: connect with credentials</span>
+(<span class="hl-kw">set</span> h (<span class="hl-fn">hopen</span> <span class="hl-str">"127.0.0.1:5000:admin:secret123"</span>))
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(+ 1 2)"</span>)
+<span class="hl-comment">;; =&gt; 3</span></code></pre>
+
+      <p>All clients must authenticate. The username field is transmitted but not validated &mdash; only the password is checked. This matches kdb+ behavior.</p>
+
+      <h3>-U (password + restricted mode)</h3>
+      <pre><code><span class="hl-comment"># Server: require password, restrict IPC to read-only</span>
+./rayforce -p 5000 -U secret123</code></pre>
+
+      <p>In restricted mode, IPC clients can run queries but cannot mutate server state or access the filesystem. The following operations are blocked for IPC connections:</p>
+
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Blocked Builtins</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Mutation</td><td><code>set</code>, <code>del</code>, <code>update</code>, <code>insert</code>, <code>upsert</code>, <code>modify</code></td></tr>
+          <tr><td>File I/O</td><td><code>read</code>, <code>write</code>, <code>read-csv</code>, <code>write-csv</code>, <code>load</code>, <code>set-splayed</code></td></tr>
+          <tr><td>System</td><td><code>system</code>, <code>getenv</code>, <code>setenv</code>, <code>os-get-var</code>, <code>os-set-var</code></td></tr>
+          <tr><td>IPC chaining</td><td><code>hopen</code>, <code>hclose</code>, <code>hsend</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>Attempting a restricted operation returns an <code>"access"</code> error:</p>
+      <pre><code><span class="hl-comment">;; On a -U server:</span>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(set x 42)"</span>)
+<span class="hl-comment">;; =&gt; error: access — restricted</span>
+
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(+ 1 2)"</span>)
+<span class="hl-comment">;; =&gt; 3  (queries still work)</span></code></pre>
+
+      <div class="info-box">
+        <strong>Security note.</strong> Restriction applies to all dispatch paths including higher-order functions. <code>(map system ["echo hi"])</code> is also blocked in restricted mode.
+      </div>
 
       <h2 id="client-builtins">Client Builtins</h2>
       <p>Connect to a running server and send queries from Rayfall:</p>
 
       <h3>hopen</h3>
-      <pre><code><span class="hl-comment">;; Connect to a server</span>
+      <pre><code><span class="hl-comment">;; Connect to a server (no auth)</span>
 (<span class="hl-kw">set</span> h (<span class="hl-fn">hopen</span> <span class="hl-str">"127.0.0.1:5000"</span>))
+<span class="hl-comment">;; =&gt; 0  (connection handle)</span>
+
+<span class="hl-comment">;; Connect with credentials (when server uses -u or -U)</span>
+(<span class="hl-kw">set</span> h (<span class="hl-fn">hopen</span> <span class="hl-str">"127.0.0.1:5000:admin:secret123"</span>))
 <span class="hl-comment">;; =&gt; 0  (connection handle)</span></code></pre>
+      <p>The format is <code>"host:port"</code> for unauthenticated connections, or <code>"host:port:user:password"</code> when the server requires authentication. If the server requires auth and no credentials are provided, <code>hopen</code> returns an <code>"access"</code> error.</p>
 
       <h3>hsend</h3>
       <pre><code><span class="hl-comment">;; Send a string query (evaluated on server)</span>
@@ -300,7 +352,8 @@
       <ul>
         <li><strong>No streaming</strong> &mdash; the entire object is serialized at once; there is no chunked or incremental mode</li>
         <li><strong>Single-threaded server</strong> &mdash; the server processes queries sequentially on the main thread. Long-running queries block other clients.</li>
-        <li><strong>No authentication</strong> &mdash; connections are accepted without credentials. The handshake only validates protocol version compatibility.</li>
+        <li><strong>Plaintext transport</strong> &mdash; data travels unencrypted over TCP. Use on trusted networks or tunnel through SSH for security.</li>
+        <li><strong>Shared secret only</strong> &mdash; authentication uses a single password for all clients (<code>-u</code>/<code>-U</code>). There is no per-user access control.</li>
       </ul>
 
       <!-- Prev/Next -->
