@@ -63,7 +63,6 @@ typedef struct {
     /* scope */
     ray_scope_frame_t scope_stack[RAY_SCOPE_CAP];
     int32_t          scope_depth;
-    bool             restricted;   /* IPC -U mode: reject RAY_FN_RESTRICTED builtins */
 } ray_vm_t;
 
 /* ===== Runtime ===== */
