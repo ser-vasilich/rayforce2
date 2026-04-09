@@ -175,14 +175,14 @@
 
       <h3>Aggregations</h3>
       <pre><code><span class="hl-comment">;; Total quantity traded</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades agg: {total: (sum qty)}})"</span>)
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades total: (sum qty)})"</span>)
 
 <span class="hl-comment">;; Volume-weighted average price by symbol</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym agg: {vwap: (% (sum (* price qty)) (sum qty))}})"</span>)</code></pre>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym vwap: (% (sum (* price qty)) (sum qty))})"</span>)</code></pre>
 
       <h3>Joins</h3>
       <pre><code><span class="hl-comment">;; Join trades with quotes on sym</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: (lj trades quotes `sym) cols: [sym price bid ask]})"</span>)</code></pre>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: (left-join trades quotes 'sym)})"</span>)</code></pre>
 
       <div class="info-box">
         <strong>Tip:</strong> The query string is parsed and evaluated entirely on the server. Only the final result is serialized and sent back to the client. This means large intermediate results never cross the network.
@@ -269,10 +269,10 @@
 (<span class="hl-kw">set</span> h (<span class="hl-fn">hopen</span> <span class="hl-str">"127.0.0.1:5000"</span>))
 
 <span class="hl-comment">;; Run aggregations</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym agg: {avg_price: (avg price) total_qty: (sum qty)}})"</span>)
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym avg_price: (avg price) total_qty: (sum qty)})"</span>)
 
 <span class="hl-comment">;; Find the most active symbol</span>
-(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym agg: {n: (count)} sort: (desc n) take: 1})"</span>)</code></pre>
+(<span class="hl-fn">hsend</span> h <span class="hl-str">"(select {from: trades by: sym n: (count) desc: 'n take: 1})"</span>)</code></pre>
 
       <p><strong>Terminal 3 &mdash; Monitoring client:</strong></p>
       <pre><code>./rayforce
@@ -316,11 +316,10 @@
 <span class="hl-comment">;; => error: restricted in read-only mode</span></code></pre>
 
       <h3>Network Errors</h3>
-      <p>If the server shuts down or the network drops while a query is in flight, <code>hsend</code> returns an error. Always check for error results in production code:</p>
-      <pre><code>(<span class="hl-kw">set</span> result (<span class="hl-fn">hsend</span> h <span class="hl-str">"(count trades)"</span>))
-(<span class="hl-kw">if</span> (<span class="hl-fn">err?</span> result)
-  (<span class="hl-fn">println</span> <span class="hl-str">"Query failed:"</span> result)
-  (<span class="hl-fn">println</span> <span class="hl-str">"Trade count:"</span> result))</code></pre>
+      <p>If the server shuts down or the network drops while a query is in flight, <code>hsend</code> returns an error. Use <code>try</code> to handle errors gracefully:</p>
+      <pre><code>(<span class="hl-fn">try</span>
+  (<span class="hl-fn">println</span> <span class="hl-str">"Trade count:"</span> (<span class="hl-fn">hsend</span> h <span class="hl-str">"(count trades)"</span>))
+  (<span class="hl-kw">fn</span> [e] (<span class="hl-fn">println</span> <span class="hl-str">"Query failed:"</span> e)))</code></pre>
 
       <!-- 8. C API -->
       <h2 id="c-api">8. C API</h2>
