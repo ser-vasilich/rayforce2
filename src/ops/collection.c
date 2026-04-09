@@ -59,7 +59,7 @@ ray_t* ray_map_fn(ray_t** args, int64_t n) {
             out[i] = call_fn1(fn, elems[i]);
             if (RAY_IS_ERR(out[i])) {
                 for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-                ray_release(result); if (_bx) ray_release(_bx);
+                result->len = 0; ray_release(result); if (_bx) ray_release(_bx);
                 return out[i];
             }
         }
@@ -87,7 +87,7 @@ ray_t* ray_map_fn(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, val, elems[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result); if (_bx) ray_release(_bx);
+            result->len = 0; ray_release(result); if (_bx) ray_release(_bx);
             return out[i];
         }
     }
@@ -182,7 +182,7 @@ ray_t* ray_scan_fn(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, out[i - 1], elems[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result); if (_bx) ray_release(_bx);
+            result->len = 0; ray_release(result); if (_bx) ray_release(_bx);
             return out[i];
         }
     }
@@ -338,7 +338,7 @@ ray_t* ray_apply_fn(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, e1[i], e2[i]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-            ray_release(result); if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2);
+            result->len = 0; ray_release(result); if (_bx1) ray_release(_bx1); if (_bx2) ray_release(_bx2);
             return out[i];
         }
     }
@@ -1147,7 +1147,7 @@ ray_t* ray_at_fn(ray_t* vec, ray_t* idx) {
             }
             if (RAY_IS_ERR(out[i])) {
                 for (int64_t j = 0; j < i; j++) ray_release(out[j]);
-                ray_release(result);
+                result->len = 0; ray_release(result);
                 return out[i];
             }
         }
@@ -1653,7 +1653,7 @@ ray_t* ray_scan_right_fn(ray_t** args, int64_t n) {
         out[i] = call_fn2(fn, elems[i], out[i + 1]);
         if (RAY_IS_ERR(out[i])) {
             for (int64_t j = i + 1; j < len; j++) ray_release(out[j]);
-            ray_release(result); if (_bx) ray_release(_bx);
+            result->len = 0; ray_release(result); if (_bx) ray_release(_bx);
             return out[i];
         }
     }
